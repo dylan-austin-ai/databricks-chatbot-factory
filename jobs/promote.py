@@ -10,7 +10,7 @@ Triggered by the app when the Reviewer approves. Steps:
 """
 import time
 
-from _bootstrap import args, context, vector_client
+from _bootstrap import ROOT, args, context, vector_client
 
 from factory.lifecycle import State
 from factory.provisioning import sync_index
@@ -65,10 +65,9 @@ cp.publish(cfg.bot_id)
 # Smoke test (REL-11): evaluate the live channel on a subset of questions.
 import subprocess  # noqa: E402
 import sys  # noqa: E402
-from pathlib import Path  # noqa: E402
 
 smoke = subprocess.run(
-    [sys.executable, str(Path(__file__).with_name("run_evals.py")), f"--catalog={settings.catalog}",
+    [sys.executable, str(ROOT / "jobs" / "run_evals.py"), f"--catalog={settings.catalog}",
      f"--bot_id={cfg.bot_id}", "--channel=live", "--trigger=smoke", f"--environment={a.environment or 'dev'}",
      f"--limit={settings.get('quality.smoke_questions', 5)}"], capture_output=True, text=True)
 passed = smoke.returncode == 0

@@ -25,7 +25,24 @@ from mlflow.models.auth_policy import AuthPolicy, SystemAuthPolicy, UserAuthPoli
 from mlflow.models.resources import (DatabricksServingEndpoint, DatabricksSQLWarehouse,
                                      DatabricksVectorSearchIndex)
 
-ROOT = Path(__file__).resolve().parents[1]
+
+
+def _root() -> Path:
+    """Repository root. A serverless python-file task runs this file without __file__, so fall
+    back to where Databricks exposes the script's folder: argv, the working directory and the
+    import path."""
+    try:
+        return Path(__file__).resolve().parents[1]
+    except NameError:
+        pass
+    for folder in [Path(sys.argv[0]).parent, Path.cwd(), *map(Path, sys.path)]:
+        root = folder.resolve().parent
+        if (root / "agent" / "agent.py").is_file() and (root / "src" / "factory").is_dir():
+            return root
+    raise RuntimeError("Cannot find the chatbot-factory source root from argv, cwd or sys.path.")
+
+
+ROOT = _root()
 sys.path.insert(0, str(ROOT / "src"))
 from factory import PLATFORM_VERSION  # noqa: E402
 from factory.answering import SYSTEM_PROMPT  # noqa: E402
