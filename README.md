@@ -1,4 +1,4 @@
-# Chatbot Factory (v2)
+# Chatbot Factory
 
 A Databricks App that lets non-technical people build governed RAG chatbots from their own
 documents through a guided wizard. Everything is Databricks-native, runs on shared
