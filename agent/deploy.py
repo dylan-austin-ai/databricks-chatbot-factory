@@ -73,7 +73,10 @@ os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] = a.warehouse_id
 EXPERIMENT = f"/Shared/chatbot-factory/{a.environment}/traces"
 experiment = mlflow.get_experiment_by_name(EXPERIMENT)
 if experiment is None:
+    from databricks.sdk import WorkspaceClient
     from mlflow.entities.trace_location import UnityCatalog
+    # MLflow doesn't create the workspace folder the experiment lives in.
+    WorkspaceClient().workspace.mkdirs(EXPERIMENT.rsplit("/", 1)[0])
     mlflow.create_experiment(EXPERIMENT, trace_location=UnityCatalog(
         catalog_name=a.catalog, schema_name=s.platform_schema, table_prefix="traces"))
     experiment = mlflow.get_experiment_by_name(EXPERIMENT)
