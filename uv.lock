@@ -477,6 +477,7 @@ dependencies = [
     { name = "databricks-sdk" },
     { name = "openai" },
     { name = "pyyaml" },
+    { name = "tzdata" },
 ]
 
 [package.optional-dependencies]
@@ -526,6 +527,7 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "streamlit", marker = "extra == 'app'", specifier = ">=1.45" },
+    { name = "tzdata", specifier = ">=2024.1" },
 ]
 provides-extras = ["dev", "app"]
 

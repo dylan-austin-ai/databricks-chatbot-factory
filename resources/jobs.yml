@@ -504,6 +504,7 @@ resources:
           - openai>=1.40
           - mlflow[databricks]>=3.14
           - pypdf>=4
+          - tzdata>=2024.1
       name: '[factory] monitor (business hours, every 15 min)'
       usage_policy_id: ${var.usage_policy_id}
       max_concurrent_runs: 1
@@ -533,6 +534,7 @@ resources:
           - openai>=1.40
           - mlflow[databricks]>=3.14
           - pypdf>=4
+          - tzdata>=2024.1
       name: '[factory] monitor (after hours, hourly)'
       usage_policy_id: ${var.usage_policy_id}
       max_concurrent_runs: 1
@@ -562,6 +564,7 @@ resources:
           - openai>=1.40
           - mlflow[databricks]>=3.14
           - pypdf>=4
+          - tzdata>=2024.1
       name: '[factory] monitor (weekends, hourly)'
       usage_policy_id: ${var.usage_policy_id}
       max_concurrent_runs: 1

@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "Governed, self-service RAG chatbots on Databricks"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["pyyaml>=6", "databricks-sdk>=0.60", "openai>=1.40"]
+dependencies = ["pyyaml>=6", "databricks-sdk>=0.60", "openai>=1.40", "tzdata>=2024.1"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pypdf>=4", "numpy>=1.26"]
