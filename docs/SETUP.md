@@ -90,7 +90,18 @@ URL. This is `<warehouse_id>`.
 3. Open the catalog › **Permissions**, or click the owner name next to **Owner**. Make the deploy
    identity the **Owner** of the catalog. Jobs create schemas, AI Search indexes, model services
    and views inside it, and later hand the platform schema to the app.
-4. Write down the deploy identity:
+4. Create the platform schema, as the deploy identity, before the first deploy **[CLI]** (or
+   **Catalog** › `chatbots_dev` › **Create schema**, name `_platform`):
+
+   ```bash
+   databricks schemas create _platform chatbots_dev
+   ```
+
+   The app sends its own telemetry to tables in this schema, and Databricks creates those tables
+   when the app is deployed. The schema has to exist by then, and the deploy identity needs
+   **MANAGE** on the catalog and schema plus **CREATE TABLE** on the schema; it has all three as
+   the catalog owner. `setup_platform` (B2) fills in the rest of the schema.
+5. Write down the deploy identity:
    - For a user, their email.
    - For a service principal, its **Application ID**.
 
@@ -211,6 +222,10 @@ databricks bundle deploy -t dev --var warehouse_id=<warehouse_id> \
 The first deploy may stop with an error that serving endpoint `chatbot-agent` doesn't exist,
 because the app is bound to it and it's created in B3. The jobs are created before that point.
 Carry on with B2 and B3, then deploy again in B4.
+
+An error that mentions the app's telemetry tables or `_platform` is a different problem: the
+platform schema from A5 step 4 doesn't exist yet, or the deploy identity lacks the permissions
+listed there. Fix that and deploy again.
 
 ### B2. Create the platform tables [CLI]
 

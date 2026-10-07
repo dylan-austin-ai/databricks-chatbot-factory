@@ -58,7 +58,9 @@ Summary:
    `guardrail_evaluator`; rate limits, inference tables, EXECUTE grants and guardrail policies
    are set in the Unity Gateway UI (docs/SETUP.md, Part C). Judges use the pay-per-token
    `databricks-claude-haiku-4-5` endpoint; test-question writing uses Sonnet 4.5.
-4. App service principal with `USE CATALOG`, `CREATE SCHEMA`, `MANAGE` on the catalog.
+4. App service principal with `USE CATALOG`, `CREATE SCHEMA`, `MANAGE` on the catalog. The
+   `_platform` schema must exist before the first deploy (the app's telemetry tables are created
+   in it): `databricks schemas create _platform <catalog>`.
 5. **Agent service principal** (writes logs, reads runtime config): secret scope
    `chatbot-factory` with `agent-sp-client-id` and `agent-sp-client-secret`. Pass its
    application ID as `--var agent_principal=...`.

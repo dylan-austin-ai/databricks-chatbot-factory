@@ -39,7 +39,10 @@ resources:
             value_from: maintenance-job
       usage_policy_id: ${var.usage_policy_id}
       compute_size: MEDIUM            # Medium/Large/XLarge; instance count (1-5, horizontal scaling) is set in the Apps UI
-      telemetry_export_destinations:  # OpenTelemetry from the app itself into Unity Catalog (APP-2)
+      # OpenTelemetry from the app itself into Unity Catalog (APP-2). The _platform schema must
+      # exist before the first deploy and the deploy identity needs MANAGE on the catalog and
+      # schema plus CREATE TABLE on the schema (docs/SETUP.md, A5).
+      telemetry_export_destinations:
         - unity_catalog:
             logs_table: ${var.catalog}._platform.app_otel_logs
             metrics_table: ${var.catalog}._platform.app_otel_metrics
