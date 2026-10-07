@@ -18,7 +18,7 @@ resources:
           - name: FACTORY_ENV               # picks the traces experiment
             value: ${bundle.target}
           - name: FACTORY_APP_VERSION
-            value: "2.0.0"
+            value: "1.0.0"
           - name: FACTORY_WAREHOUSE_ID
             value_from: sql-warehouse
           - name: MLFLOW_TRACING_SQL_WAREHOUSE_ID     # user feedback onto UC-stored traces (OBS-10)
