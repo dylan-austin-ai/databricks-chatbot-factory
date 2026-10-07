@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Documents</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;font-family:'Instrument Sans',system-ui,sans-serif;color:#111827;background:#F6F7F9}
+a{color:#1D4ED8}a:hover{color:#1E3A8A}
+.nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#374151;text-decoration:none;font-size:14px}
+.nav a:hover{background:#EEF0F3;color:#111827}
+.nav a.on{background:#E8EEFC;color:#1D4ED8;font-weight:600}
+.card{background:#fff;border:1px solid #E5E7EB;border-radius:10px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.g{background:#DCFCE7;color:#14532D}.a{background:#FEF3C7;color:#78350F}.r{background:#FEE2E2;color:#7F1D1D}.n{background:#F3F4F6;color:#374151}.b{background:#E8EEFC;color:#1E3A8A}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:8px;font:600 14px 'Instrument Sans',sans-serif;border:1px solid #D1D5DB;background:#fff;color:#111827;cursor:pointer;text-decoration:none;box-sizing:border-box}
+.btn:hover{background:#F3F4F6;color:#111827}
+.btn.p{background:#1D4ED8;border-color:#1D4ED8;color:#fff}.btn.p:hover{background:#1E40AF}
+.muted{color:#4B5563}.mono{font-family:'JetBrains Mono',monospace}
+table{border-collapse:collapse;width:100%;min-width:820px}th,td{text-align:left;padding:12px 14px;border-bottom:1px solid #EEF0F3;font-size:14px;vertical-align:middle}
+th{font-size:12px;color:#4B5563;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+tr.sel td{background:#F5F8FF}
+.rowbtn{border:0;background:none;font:inherit;font-weight:600;color:#1D4ED8;cursor:pointer;padding:0;text-align:left}
+.tab{border:0;background:none;font:600 14px 'Instrument Sans',sans-serif;padding:10px 2px;cursor:pointer;color:#4B5563;border-bottom:2px solid transparent}
+.tab.on{color:#111827;border-bottom-color:#1D4ED8}
+.info{position:relative;display:inline-flex;vertical-align:middle;margin-left:6px}
+.info>button{width:22px;height:22px;border-radius:50%;border:1.5px solid #6B7280;background:#fff;color:#374151;font:italic 700 12px Georgia,serif;cursor:help;padding:0;display:inline-flex;align-items:center;justify-content:center}
+.info>button:hover,.info>button:focus{border-color:#1D4ED8;color:#1D4ED8;outline:none}
+.info .tip{display:none;position:absolute;left:30px;top:-10px;z-index:50;width:330px;background:#111827;color:#F3F4F6;padding:12px 14px;border-radius:10px;font:400 13px/1.5 'Instrument Sans',sans-serif;text-transform:none;letter-spacing:0;box-shadow:0 8px 24px rgba(17,24,39,.25);text-align:left;white-space:normal}
+.info:hover .tip,.info:focus-within .tip{display:block}
+.info .tip .feat{display:block;margin-top:8px;padding-top:8px;border-top:1px solid #374151;color:#D1D5DB}
+.info .tip .feat b{color:#fff}
+.info .tip a{color:#93C5FD}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+<nav aria-label="Main" class="nav" style="flex: 1 1 220px; box-sizing: border-box; padding: 20px 14px; background: #fff; border-right: 1px solid #E5E7EB; display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px"><svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#1D4ED8"></rect><path d="M8 10h12M8 14h8M8 18h10" stroke="#fff" stroke-width="2" stroke-linecap="round"></path></svg><strong style="font-size: 15px">Chatbot Factory</strong></div>
+<a href="Main.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10l7-6 7 6v7H3z"></path></svg>Home</a>
+<a href="Wizard.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4v12M4 10h12"></path></svg>Create chatbot</a>
+<div style="font-size: 12px; color: #4B5563; padding: 16px 12px 6px">Claims Chatbot</div>
+<a href="Documents.dc.html" class="on"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5zM12 2v4h4"></path></svg>Documents</a>
+<a href="TestQuestions.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5l2 2 3-3M3 13l2 2 3-3M11 6h6M11 14h6"></path></svg>Test questions</a>
+<a href="Launch.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 16l4-1 8-8a2.1 2.1 0 0 0-3-3l-8 8z"></path></svg>Launch</a>
+<a href="Monitoring.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 16h14M5 13l3-4 3 2 4-6"></path></svg>Monitoring</a>
+<a href="Traces.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5v4H4zM11 9h5v4h-5zM4 14h5v3H4zM9 6h2v5M9 15h2v-2"></path></svg>Traces</a>
+<a href="Chat.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h14v10H8l-4 3v-3H3z"></path></svg>Chat</a>
+<div style="flex-grow: 1; min-height: 24px"></div>
+<div style="font-size: 12px; color: #4B5563; padding: 6px 12px">MLOps</div>
+<a href="Overview.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h6v6H3zM11 3h6v6h-6zM3 11h6v6H3zM11 11h6v6h-6z"></path></svg>All chatbots</a>
+<a href="Admin.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="3"></circle><path d="M10 2v3M10 15v3M2 10h3M15 10h3"></path></svg>Admin</a>
+</nav>
+<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 36px 40px 56px; display: flex; flex-direction: column; gap: 22px">
+<header style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px">
+<div><h1 style="margin: 0; font-size: 28px; display: flex; align-items: center">Documents<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">We read each file (including tables, scans and slides), split it into sections and index it for search. Uploading a new file starts this automatically.<span class="feat"><b>Databricks:</b> ai_parse_document, AI Search and file arrival triggers · <a href="https://docs.databricks.com/aws/en/sql/language-manual/functions/ai_parse_document">Learn more</a></span></span></span></h1><p class="muted" style="margin: 6px 0 0; font-size: 14px">Check that each document was read correctly, then approve it.</p></div>
+<div style="display: flex; gap: 10px; flex-wrap: wrap"><button type="button" class="btn">Upload new version</button><button type="button" class="btn p">Upload documents</button></div>
+</header>
+<div role="status" style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-radius: 10px; background: #FEF3C7; color: #78350F; font-size: 14px">
+<span><strong>You have changes in the test version.</strong> 2 documents approved since the live version.</span>
+<a href="Launch.dc.html" style="color: #78350F; font-weight: 600">Check and send for approval</a>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<sc-for list="{{filters}}" as="f" hint-placeholder-count="5"><button type="button" onClick="{{f.pick}}" style="min-height: 36px; padding: 0 14px; border-radius: 999px; font: 500 13px 'Instrument Sans', sans-serif; cursor: pointer; border: 1px solid {{f.border}}; background: {{f.bg}}; color: {{f.fg}}">{{f.label}}</button></sc-for>
+</div>
+<div class="card" style="overflow-x: auto">
+<table>
+<thead><tr><th>Document</th><th>Readable</th><th>Status</th><th>Expires</th><th>Test</th><th>Live</th></tr></thead>
+<tbody>
+<sc-for list="{{rows}}" as="d" hint-placeholder-count="5">
+<tr class="{{d.cls}}">
+<td><button type="button" class="rowbtn" onClick="{{d.pick}}">{{d.name}}</button><div class="muted" style="font-size: 12px; margin-top: 2px">v{{d.v}} · {{d.pages}} · {{d.owner}}</div></td>
+<td><span class="pill {{d.rtone}}">{{d.read}}</span></td>
+<td><span class="pill {{d.stone}}">{{d.status}}</span></td>
+<td style="font-size: 13px">{{d.expires}}</td>
+<td style="font-size: 13px">{{d.test}}</td>
+<td style="font-size: 13px">{{d.live}}</td>
+</tr>
+</sc-for>
+</tbody>
+</table>
+</div>
+<section class="card" aria-labelledby="rv" style="padding: 22px; display: flex; flex-direction: column; gap: 16px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px">
+<div><h2 id="rv" style="margin: 0; font-size: 18px">{{sel.name}}</h2><p class="muted" style="margin: 4px 0 0; font-size: 13px">Version {{sel.v}} · page 2 of 14</p></div>
+<div style="display: flex; gap: 10px; flex-wrap: wrap"><button type="button" class="btn">Re-read with other settings</button><button type="button" class="btn">Flag a passage</button><button type="button" class="btn p">Approve</button></div>
+</div>
+<div role="tablist" style="display: flex; gap: 24px; border-bottom: 1px solid #E5E7EB"><button type="button" role="tab" aria-selected="true" class="tab on">Review</button><button type="button" role="tab" class="tab">Details</button><button type="button" role="tab" class="tab">History</button></div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px"><span class="pill a">Check it</span><span style="font-size: 14px">A table on page 2 may be scrambled. Compare the text with the page.</span></div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px">
+<figure style="margin: 0; border: 1px solid #E5E7EB; border-radius: 8px; background: #FAFAFA; padding: 28px; display: flex; flex-direction: column; gap: 10px; min-height: 380px">
+<div style="height: 12px; width: 60%; background: #D1D5DB; border-radius: 3px"></div>
+<div style="height: 8px; width: 92%; background: #E5E7EB; border-radius: 3px"></div>
+<div style="height: 8px; width: 85%; background: #E5E7EB; border-radius: 3px"></div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; margin: 10px 0; outline: 2px solid #B45309; outline-offset: 4px">
+<div style="height: 18px; background: #D1D5DB"></div><div style="height: 18px; background: #D1D5DB"></div><div style="height: 18px; background: #D1D5DB"></div>
+<div style="height: 14px; background: #EEF0F3"></div><div style="height: 14px; background: #EEF0F3"></div><div style="height: 14px; background: #EEF0F3"></div>
+<div style="height: 14px; background: #EEF0F3"></div><div style="height: 14px; background: #EEF0F3"></div><div style="height: 14px; background: #EEF0F3"></div>
+</div>
+<div style="height: 8px; width: 88%; background: #E5E7EB; border-radius: 3px"></div>
+<div style="height: 8px; width: 70%; background: #E5E7EB; border-radius: 3px"></div>
+<figcaption class="muted" style="margin-top: auto; font-size: 12px">Page 2 image</figcaption>
+</figure>
+<div style="display: flex; flex-direction: column; gap: 10px">
+<div style="font-size: 12px; font-weight: 600; color: #4B5563; text-transform: uppercase; letter-spacing: .04em">What the chatbot will read</div>
+<div style="padding: 14px; border: 1px solid #E5E7EB; border-radius: 8px; font-size: 14px; line-height: 1.55"><strong style="font-size: 12px; color: #4B5563">Section: Approval limits</strong><br>Claims up to $10,000 may be approved by the assigned adjuster. Claims over $10,000 require supervisor approval.</div>
+<div style="padding: 14px; border: 1px solid #FCD34D; background: #FFFBEB; border-radius: 8px; font-size: 14px; line-height: 1.55"><strong style="font-size: 12px; color: #78350F">Table</strong><br><span class="mono" style="font-size: 13px">| Claim type | Limit | Approver |<br>| Auto | $10,000 | Adjuster |<br>| Property | Supervisor | $25,000 |</span></div>
+<div style="display: flex; gap: 8px; align-items: center"><button type="button" class="btn" style="min-height: 38px" aria-label="Previous page">‹</button><span class="muted" style="font-size: 13px">Page 2 of 14</span><button type="button" class="btn" style="min-height: 38px" aria-label="Next page">›</button></div>
+</div>
+</div>
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1180}}'>
+class Component extends DCLogic {
+constructor(p) { super(p); this.state = { sel: 1, filter: 'All' }; }
+renderVals() {
+const docs = [
+{ name: 'Auto Claims Manual 2025', v: 3, pages: '42 pages', owner: 'Ana Ruiz', read: 'Good', rtone: 'g', status: 'Approved', stone: 'g', expires: 'Nov 1, 2026', test: 'Yes', live: 'Yes' },
+{ name: 'Property Claims Limits', v: 1, pages: '14 pages', owner: 'Ana Ruiz', read: 'Check it', rtone: 'a', status: 'Needs review', stone: 'b', expires: 'Until replaced', test: 'No', live: 'No' },
+{ name: 'Fraud Indicators.pptx', v: 2, pages: '18 slides', owner: 'Sam Lee', read: 'Good', rtone: 'g', status: 'Approved', stone: 'g', expires: 'Mar 31, 2027', test: 'Yes', live: 'No' },
+{ name: 'Adjuster FAQ.md', v: 5, pages: 'text', owner: 'Ana Ruiz', read: 'n/a', rtone: 'n', status: 'Approved', stone: 'g', expires: 'Until replaced', test: 'Yes', live: 'Yes' },
+{ name: 'Claimant Records Sample.pdf', v: 1, pages: '3 pages', owner: 'Sam Lee', read: 'Good', rtone: 'g', status: 'Blocked: sensitive data', stone: 'r', expires: '—', test: 'No', live: 'No' }];
+const st = this.state;
+const filters = ['All', 'Needs review', 'Approved', 'Blocked', 'Archived'].map(label => { const on = st.filter === label; return { label, border: on ? '#1D4ED8' : '#D1D5DB', bg: on ? '#E8EEFC' : '#fff', fg: on ? '#1E3A8A' : '#374151', pick: () => this.setState({ filter: label }) }; });
+const shown = docs.map((d, i) => ({ ...d, i })).filter(d => st.filter === 'All' || d.status.startsWith(st.filter));
+const rows = shown.map(d => ({ ...d, cls: d.i === st.sel ? 'sel' : '', pick: () => this.setState({ sel: d.i }) }));
+return { filters, rows, sel: docs[st.sel] };
+}
+}
+</script>
+</body>
+</html>

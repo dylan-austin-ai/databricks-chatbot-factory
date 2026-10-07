@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Monitoring</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;font-family:'Instrument Sans',system-ui,sans-serif;color:#111827;background:#F6F7F9}
+a{color:#1D4ED8}a:hover{color:#1E3A8A}
+.nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#374151;text-decoration:none;font-size:14px}
+.nav a:hover{background:#EEF0F3;color:#111827}
+.nav a.on{background:#E8EEFC;color:#1D4ED8;font-weight:600}
+.card{background:#fff;border:1px solid #E5E7EB;border-radius:10px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.g{background:#DCFCE7;color:#14532D}.a{background:#FEF3C7;color:#78350F}.r{background:#FEE2E2;color:#7F1D1D}.n{background:#F3F4F6;color:#374151}.b{background:#E8EEFC;color:#1E3A8A}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:8px;font:600 14px 'Instrument Sans',sans-serif;border:1px solid #D1D5DB;background:#fff;color:#111827;cursor:pointer;text-decoration:none;box-sizing:border-box}
+.btn:hover{background:#F3F4F6;color:#111827}
+.muted{color:#4B5563}.mono{font-family:'JetBrains Mono',monospace}
+.tab{border:0;background:none;font:600 14px 'Instrument Sans',sans-serif;padding:12px 2px;cursor:pointer;color:#4B5563;border-bottom:2px solid transparent;min-height:44px}
+.tab.on{color:#111827;border-bottom-color:#1D4ED8}
+.seg{display:inline-flex;border:1px solid #D1D5DB;border-radius:8px;overflow:hidden}
+.seg button{border:0;background:#fff;font:600 13px 'Instrument Sans',sans-serif;padding:0 14px;min-height:36px;cursor:pointer;color:#374151}
+.seg button.on{background:#111827;color:#fff}
+.tile{background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:2px}
+.tile b{font-size:24px}
+.cap{margin:0;font-size:13px;color:#4B5563}
+.chart{display:grid;grid-template-columns:44px 1fr;gap:6px 8px}
+.ylab{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:#4B5563;text-align:right;height:200px}
+.plot{position:relative;height:200px;border-left:1px solid #D1D5DB;border-bottom:1px solid #D1D5DB;background:repeating-linear-gradient(to bottom,#fff 0,#fff 49px,#EEF0F3 49px,#EEF0F3 50px)}
+.xlab{grid-column:2;display:flex;justify-content:space-between;font-size:11px;color:#4B5563}
+.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:14px;height:3px;border-radius:2px;display:inline-block}
+table{border-collapse:collapse;width:100%;min-width:640px}th,td{text-align:left;padding:10px 14px;border-bottom:1px solid #EEF0F3;font-size:14px}
+th{font-size:12px;color:#4B5563;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.info{position:relative;display:inline-flex;vertical-align:middle;margin-left:6px}
+.info>button{width:22px;height:22px;border-radius:50%;border:1.5px solid #6B7280;background:#fff;color:#374151;font:italic 700 12px Georgia,serif;cursor:help;padding:0;display:inline-flex;align-items:center;justify-content:center}
+.info>button:hover,.info>button:focus{border-color:#1D4ED8;color:#1D4ED8;outline:none}
+.info .tip{display:none;position:absolute;left:30px;top:-10px;z-index:50;width:330px;background:#111827;color:#F3F4F6;padding:12px 14px;border-radius:10px;font:400 13px/1.5 'Instrument Sans',sans-serif;text-transform:none;letter-spacing:0;box-shadow:0 8px 24px rgba(17,24,39,.25);text-align:left;white-space:normal}
+.info:hover .tip,.info:focus-within .tip{display:block}
+.info .tip .feat{display:block;margin-top:8px;padding-top:8px;border-top:1px solid #374151;color:#D1D5DB}
+.info .tip .feat b{color:#fff}
+.info .tip a{color:#93C5FD}
+.hov{position:absolute;inset:0;display:flex}
+.hov .col{flex:1 1 0;position:relative}
+.hov .col:hover{background:rgba(29,78,216,.07);box-shadow:inset 1px 0 0 #6B7280}
+.tt{display:none;position:absolute;top:-6px;left:50%;transform:translate(-50%,-100%);background:#111827;color:#fff;font:12px/1.5 'Instrument Sans',sans-serif;padding:6px 9px;border-radius:6px;white-space:pre;z-index:40;pointer-events:none;text-align:left}
+.hv{position:relative}
+.hov .col:hover .tt,.hv:hover .tt,.hv:focus .tt{display:block}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+<nav aria-label="Main" class="nav" style="flex: 1 1 220px; box-sizing: border-box; padding: 20px 14px; background: #fff; border-right: 1px solid #E5E7EB; display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px"><svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#1D4ED8"></rect><path d="M8 10h12M8 14h8M8 18h10" stroke="#fff" stroke-width="2" stroke-linecap="round"></path></svg><strong style="font-size: 15px">Chatbot Factory</strong></div>
+<a href="Main.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10l7-6 7 6v7H3z"></path></svg>Home</a>
+<a href="Wizard.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4v12M4 10h12"></path></svg>Create chatbot</a>
+<div style="font-size: 12px; color: #4B5563; padding: 16px 12px 6px">Claims Chatbot</div>
+<a href="Documents.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5zM12 2v4h4"></path></svg>Documents</a>
+<a href="TestQuestions.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5l2 2 3-3M3 13l2 2 3-3M11 6h6M11 14h6"></path></svg>Test questions</a>
+<a href="Launch.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 16l4-1 8-8a2.1 2.1 0 0 0-3-3l-8 8z"></path></svg>Launch</a>
+<a href="Monitoring.dc.html" class="on"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 16h14M5 13l3-4 3 2 4-6"></path></svg>Monitoring</a>
+<a href="Traces.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5v4H4zM11 9h5v4h-5zM4 14h5v3H4zM9 6h2v5M9 15h2v-2"></path></svg>Traces</a>
+<a href="Chat.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h14v10H8l-4 3v-3H3z"></path></svg>Chat</a>
+<div style="flex-grow: 1; min-height: 24px"></div>
+<div style="font-size: 12px; color: #4B5563; padding: 6px 12px">MLOps</div>
+<a href="Overview.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h6v6H3zM11 3h6v6h-6zM3 11h6v6H3zM11 11h6v6h-6z"></path></svg>All chatbots</a>
+<a href="Admin.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="3"></circle><path d="M10 2v3M10 15v3M2 10h3M15 10h3"></path></svg>Admin</a>
+</nav>
+<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 36px 40px 56px; display: flex; flex-direction: column; gap: 20px">
+<header style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px">
+<div><h1 style="margin: 0; font-size: 28px; display: flex; align-items: center">Monitoring<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Live answers are sampled and scored by the same judges used before launch, and alerts fire when quality, speed or cost drift.<span class="feat"><b>Databricks:</b> MLflow production monitoring · <a href="https://docs.databricks.com/aws/en/mlflow3/genai/eval-monitor/production-monitoring">Learn more</a></span></span></span></h1><p class="muted" style="margin: 6px 0 0; font-size: 14px">Claims Chatbot · live version 7 · speed, cost, quality, guardrails and drift</p></div>
+<div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap"><span class="muted" style="font-size: 13px">Period</span><div class="seg" role="group" aria-label="Period"><sc-for list="{{periods}}" as="p" hint-placeholder-count="3"><button type="button" class="{{p.cls}}" onClick="{{p.pick}}">{{p.label}}</button></sc-for></div></div>
+</header>
+<div style="display: flex; flex-wrap: wrap; gap: 8px 20px; font-size: 14px">
+<a href="Traces.dc.html">Traces and flow</a><span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Every question is recorded step by step: what was searched, what the AI was sent, what came back, how long each step took and what it cost.<span class="feat"><b>Databricks:</b> MLflow Tracing (stored in Unity Catalog) · <a href="https://docs.databricks.com/aws/en/mlflow3/genai/tracing/trace-unity-catalog">Learn more</a></span></span></span><a href="Monitoring.dc.html">Ask Genie about usage, quality and cost</a><span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Ask questions about usage, quality and cost in plain English and get charts back.<span class="feat"><b>Databricks:</b> Genie · <a href="https://docs.databricks.com/aws/en/genie/">Learn more</a></span></span></span><a href="Monitoring.dc.html">Review queue (4 waiting)</a><span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Answers that failed a judge or got a thumbs down are queued for a person to check. Confirmed problems become new test questions.<span class="feat"><b>Databricks:</b> MLflow Review Queues · <a href="https://docs.databricks.com/aws/en/mlflow3/genai/human-feedback/expert-feedback/review-queues">Learn more</a></span></span></span>
+<button type="button" onClick="{{toggleDash}}" aria-expanded="{{dashOpen}}" style="border: 0; background: none; padding: 0; font: 600 14px 'Instrument Sans', sans-serif; color: #1D4ED8; cursor: pointer">{{dashLabel}}</button>
+</div>
+<sc-if value="{{dash}}" hint-placeholder-val="{{false}}">
+<div class="card" style="height: 220px; display: flex; align-items: center; justify-content: center; background: #FAFAFA; border-style: dashed"><span class="muted" style="font-size: 14px">Databricks drift dashboard, embedded here</span></div>
+</sc-if>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px">
+<sc-for list="{{tiles}}" as="t" hint-placeholder-count="6"><div class="tile"><b>{{t.v}}</b><span style="font-size: 13px">{{t.label}}</span><span class="muted" style="font-size: 12px">{{t.note}}</span></div></sc-for>
+</div>
+<div role="tablist" style="display: flex; gap: 26px; border-bottom: 1px solid #E5E7EB; flex-wrap: wrap">
+<sc-for list="{{tabs}}" as="t" hint-placeholder-count="6"><button type="button" role="tab" aria-selected="{{t.on}}" class="tab {{t.cls}}" onClick="{{t.pick}}">{{t.label}}</button></sc-for>
+</div>
+
+<sc-if value="{{isSpeed}}" hint-placeholder-val="{{true}}">
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<p class="cap">Answer time and time to first token from the answer model, in seconds. Dashed line: the 12 s slow-answer target; red markers: days over it.</p>
+<div class="legend"><span><i class="sw" style="background: #1D4ED8"></i>Answer (typical)</span><span><i class="sw" style="background: #C2410C"></i>Answer (p95)</span><span><i class="sw" style="background: #0F766E"></i>First token (p95)</span></div>
+<div class="chart"><div class="ylab"><span>16 s</span><span>12</span><span>8</span><span>4</span><span>0</span></div>
+<div class="plot"><svg viewBox="0 0 600 200" preserveAspectRatio="none" style="position: absolute; inset: 0; width: 100%; height: 100%" aria-label="Answer time chart" role="img">
+<polyline points="0,50 600,50" fill="none" stroke="#9CA3AF" stroke-width="1" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"></polyline>
+<polyline points="{{speed.a}}" fill="none" stroke="#1D4ED8" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+<polyline points="{{speed.b}}" fill="none" stroke="#C2410C" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+<polyline points="{{speed.c}}" fill="none" stroke="#0F766E" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+</svg><div class="hov"><sc-for list="{{tips.speed}}" as="t" hint-placeholder-count="30"><div class="col"><span class="tt">{{t.text}}</span></div></sc-for></div></div>
+<div class="xlab"><span>{{from}}</span><span>Oct 6</span></div></div>
+<p class="cap">Share of answers the safety checks sent back for a rewrite: <strong style="color: #111827">3.1%</strong> this period (2.4% the period before).</p>
+</section>
+</sc-if>
+
+<sc-if value="{{isCost}}" hint-placeholder-val="{{false}}">
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<p class="cap">Cost per day, in dollars: answer model, judges and parsing.</p>
+<div class="chart"><div class="ylab"><span>$40</span><span>$30</span><span>$20</span><span>$10</span><span>$0</span></div>
+<div class="plot" style="display: flex; align-items: flex-end; gap: 2px; padding: 0 2px"><sc-for list="{{costBars}}" as="c" hint-placeholder-count="30"><div class="hv" style="flex: 1 1 0; height: 100%; display: flex; align-items: flex-end"><div style="width: 100%; height: {{c.h}}; background: #1D4ED8; border-radius: 2px 2px 0 0"></div><span class="tt">{{c.t}}</span></div></sc-for></div>
+<div class="xlab"><span>{{from}}</span><span>Oct 6</span></div></div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px">
+<div class="tile"><b>2,140</b><span style="font-size: 13px">Input tokens per question</span></div>
+<div class="tile"><b>310</b><span style="font-size: 13px">Output tokens per question</span></div>
+<div class="tile"><b>$718</b><span style="font-size: 13px">This month, of a $1,000 budget</span></div>
+</div>
+</section>
+</sc-if>
+
+<sc-if value="{{isQuality}}" hint-placeholder-val="{{false}}">
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<p class="cap" style="display: flex; align-items: center"><span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">AI judges grade answers for correctness, sticking to sources, relevance and safety, on test questions and on a sample of live answers.<span class="feat"><b>Databricks:</b> MLflow built-in LLM judges · <a href="https://docs.databricks.com/aws/en/mlflow3/genai/eval-monitor/concepts/judges/">Learn more</a></span></span></span>&nbsp;Judge pass rates on sampled live answers (20%; 100% for critical chatbots), and thumbs up.</p>
+<div class="legend"><span><i class="sw" style="background: #1D4ED8"></i>Sticks to sources</span><span><i class="sw" style="background: #C2410C"></i>Answers the question</span><span><i class="sw" style="background: #0F766E"></i>Thumbs up</span></div>
+<div class="chart"><div class="ylab"><span>100%</span><span>90%</span><span>80%</span><span>70%</span><span>60%</span></div>
+<div class="plot"><svg viewBox="0 0 600 200" preserveAspectRatio="none" style="position: absolute; inset: 0; width: 100%; height: 100%" aria-label="Judge pass rate chart" role="img">
+<polyline points="{{qual.a}}" fill="none" stroke="#1D4ED8" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+<polyline points="{{qual.b}}" fill="none" stroke="#C2410C" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+<polyline points="{{qual.c}}" fill="none" stroke="#0F766E" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+</svg><div class="hov"><sc-for list="{{tips.qual}}" as="t" hint-placeholder-count="30"><div class="col"><span class="tt">{{t.text}}</span></div></sc-for></div></div>
+<div class="xlab"><span>{{from}}</span><span>Oct 6</span></div></div>
+<div><strong style="font-size: 14px; display: flex; align-items: center">Recurring problems<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Answers the judges failed, grouped by which judge failed them and what the question was about, so a pattern (one topic failing again and again) stands out. Fix it with a document, a test question or a rule.<span class="feat"><b>Databricks:</b> MLflow production monitoring · <a href="https://docs.databricks.com/aws/en/mlflow3/genai/eval-monitor/production-monitoring">Learn more</a></span></span></span></strong><table style="min-width: 0; margin-top: 6px"><thead><tr><th>Judge</th><th>Topic</th><th>Failures</th><th>Last 7 days</th><th>Trend</th></tr></thead><tbody><tr><td>Sticks to sources</td><td>Hail damage on fleet vehicles</td><td>23</td><td>19</td><td><span class="pill r">New</span></td></tr><tr><td>Answers the question</td><td>Supervisor approval limits</td><td>6</td><td>2</td><td><span class="pill g">-50%</span></td></tr></tbody></table></div>
+<div style="display: flex; flex-wrap: wrap; gap: 8px; font-size: 13px"><span class="pill g">Answered 86%</span><span class="pill n">Not in documents 8%</span><span class="pill a">Refused or blocked 5%</span><span class="pill r">Couldn't verify or error 1%</span></div>
+</section>
+</sc-if>
+
+<sc-if value="{{isGuard}}" hint-placeholder-val="{{false}}">
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<p class="cap">Unity Gateway policies in Log mode (the hallucination check): they flag answers without blocking them, so they're counted here.</p>
+<div class="legend"><span><i class="sw" style="background: #6B7280"></i>Policy checks</span><span><i class="sw" style="background: #C2410C"></i>Flagged</span></div>
+<div class="chart"><div class="ylab"><span>240</span><span>180</span><span>120</span><span>60</span><span>0</span></div>
+<div class="plot"><svg viewBox="0 0 600 200" preserveAspectRatio="none" style="position: absolute; inset: 0; width: 100%; height: 100%" aria-label="Policy checks chart" role="img">
+<polyline points="{{guard.a}}" fill="none" stroke="#6B7280" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+<polyline points="{{guard.b}}" fill="none" stroke="#C2410C" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+</svg><div class="hov"><sc-for list="{{tips.guard}}" as="t" hint-placeholder-count="30"><div class="col"><span class="tt">{{t.text}}</span></div></sc-for></div></div>
+<div class="xlab"><span>{{from}}</span><span>Oct 6</span></div></div>
+</section>
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-size: 16px">Every guardrail that fired this period</h2>
+<p class="cap">Unity Gateway blocks and the factory's own checks. People asking only see a generic message.</p>
+<div style="display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{rules}}" as="r" hint-placeholder-count="7"><button type="button" onClick="{{r.open}}" aria-label="See events: {{r.label}}" style="display: grid; grid-template-columns: minmax(180px, 280px) 1fr 48px; gap: 12px; align-items: center; font: inherit; font-size: 14px; border: 0; background: none; padding: 6px 4px; cursor: pointer; text-align: left; border-radius: 6px; width: 100%"><span>{{r.label}}</span><span style="display: block; height: 14px; background: #EEF0F3; border-radius: 3px"><span style="display: block; height: 14px; width: {{r.w}}; background: {{r.c}}; border-radius: 3px"></span></span><span style="text-align: right; font-weight: 600">{{r.n}}</span></button></sc-for>
+<p class="cap">Click a bar to see and download every event behind it.</p>
+</div>
+</section>
+<section class="card" style="overflow-x: auto">
+<h2 style="margin: 0; padding: 18px 20px 6px; font-size: 16px">Recent events</h2>
+<table><thead><tr><th>When</th><th>Guardrail</th><th>Action</th><th>Reason</th><th>Trace</th></tr></thead>
+<tbody>
+<tr><td>Oct 6, 3:42 PM</td><td>Unity Gateway policy blocked</td><td><span class="pill r">Blocked</span></td><td>block_jailbreak: prompt injection attempt</td><td class="mono" style="font-size: 12px"><a href="Monitoring.dc.html">tr-8f2a…</a></td></tr>
+<tr><td>Oct 6, 2:15 PM</td><td>Off-topic refused</td><td><span class="pill n">Refused</span></td><td>Model judged question out of scope</td><td class="mono" style="font-size: 12px"><a href="Monitoring.dc.html">tr-31cd…</a></td></tr>
+<tr><td>Oct 6, 11:08 AM</td><td>Excerpt not in source, rewritten</td><td><span class="pill a">Rewritten</span></td><td>Quote 2 not found in source 3</td><td class="mono" style="font-size: 12px"><a href="Monitoring.dc.html">tr-a07e…</a></td></tr>
+<tr><td>Oct 5, 4:51 PM</td><td>Sensitive data redacted</td><td><span class="pill b">Redacted</span></td><td>SSN</td><td class="mono" style="font-size: 12px"><a href="Monitoring.dc.html">tr-5be1…</a></td></tr>
+</tbody></table>
+</section>
+</sc-if>
+
+<sc-if value="{{isRetrieval}}" hint-placeholder-val="{{false}}">
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<p class="cap">Best search score per question. A falling line means documents match questions less well.</p>
+<div class="chart"><div class="ylab"><span>1.0</span><span>0.9</span><span>0.8</span><span>0.7</span><span>0.6</span></div>
+<div class="plot"><svg viewBox="0 0 600 200" preserveAspectRatio="none" style="position: absolute; inset: 0; width: 100%; height: 100%" aria-label="Search score chart" role="img">
+<polyline points="{{ret}}" fill="none" stroke="#1D4ED8" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+</svg><div class="hov"><sc-for list="{{tips.ret}}" as="t" hint-placeholder-count="30"><div class="col"><span class="tt">{{t.text}}</span></div></sc-for></div></div>
+<div class="xlab"><span>{{from}}</span><span>Oct 6</span></div></div>
+</section>
+<section class="card" style="overflow-x: auto">
+<h2 style="margin: 0; padding: 18px 20px 6px; font-size: 16px">Day-over-day drift per field</h2>
+<p class="cap" style="padding: 0 20px">From the Databricks data quality monitor. A shift score (PSI) above 0.2 is meaningful.</p>
+<table><thead><tr><th>Field</th><th>Shift score (PSI)</th><th>Distance</th><th></th></tr></thead>
+<tbody>
+<tr><td>Best search score</td><td>0.06</td><td>0.04</td><td><span class="pill g">Stable</span></td></tr>
+<tr><td>Question length</td><td>0.24</td><td>0.11</td><td><span class="pill a">Shifted</span></td></tr>
+<tr><td>Answer time</td><td>0.03</td><td>0.02</td><td><span class="pill g">Stable</span></td></tr>
+<tr><td>Results moved by reranker</td><td>0.09</td><td>0.05</td><td><span class="pill g">Stable</span></td></tr>
+</tbody></table>
+</section>
+</sc-if>
+
+<sc-if value="{{isDrift}}" hint-placeholder-val="{{false}}">
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center"><span class="pill a">Shifted from launch</span><span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Shows whether the questions people ask are changing compared with launch. Big shifts usually mean new topics your documents don&#x27;t cover.<span class="feat"><b>Databricks:</b> Data quality monitoring · <a href="https://docs.databricks.com/aws/en/lakehouse-monitoring/">Learn more</a></span></span></span><span class="cap">How different today's questions are from the first two weeks live (0 = same topics). Alert above 0.15.</span></div>
+<div class="legend"><span><i class="sw" style="background: #1D4ED8"></i>vs launch</span><span><i class="sw" style="background: #0F766E"></i>vs last week</span></div>
+<div class="chart"><div class="ylab"><span>0.25</span><span>0.19</span><span>0.13</span><span>0.06</span><span>0</span></div>
+<div class="plot"><svg viewBox="0 0 600 200" preserveAspectRatio="none" style="position: absolute; inset: 0; width: 100%; height: 100%" aria-label="Question drift chart" role="img">
+<polyline points="0,80 600,80" fill="none" stroke="#9CA3AF" stroke-width="1" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"></polyline>
+<polyline points="{{drift.a}}" fill="none" stroke="#1D4ED8" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+<polyline points="{{drift.b}}" fill="none" stroke="#0F766E" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+</svg><div class="hov"><sc-for list="{{tips.drift}}" as="t" hint-placeholder-count="30"><div class="col"><span class="tt">{{t.text}}</span></div></sc-for></div></div>
+<div class="xlab"><span>{{from}}</span><span>Oct 6</span></div></div>
+</section>
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; align-items: center"><h2 style="margin: 0; font-size: 16px">Question map, last 4 weeks</h2>
+<div class="seg" role="group" aria-label="Color by"><button type="button" class="{{byWeekCls}}" onClick="{{byWeek}}">Week</button><button type="button" class="{{byOutcomeCls}}" onClick="{{byOutcome}}">Outcome</button></div></div>
+<div style="display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; border-radius: 8px; background: #F6F7F9; font-size: 13px; line-height: 1.5"><strong style="display: flex; align-items: center">How to read this<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Each dot is one question someone asked, placed so similar questions sit close together. Groups of dots are topics. Look for clusters colored &quot;not in documents&quot; (add a document that covers them) and for new clusters that appear in recent weeks (new topics people care about). The map never shows question text.<span class="feat"><b>Databricks:</b> Data quality monitoring · <a href="https://docs.databricks.com/aws/en/lakehouse-monitoring/">Learn more</a></span></span></span></strong><span>Each dot is one question someone asked. Questions about similar things sit close together, so a group of dots is a topic. Position has no units; only closeness matters. Hover a dot to see its topic, week and what happened.</span><span><strong>What to do:</strong> a group colored "Not in documents" means people ask about something your documents don't cover, so add a document. A group that only appears in recent weeks is a new topic; check the answers are good.</span></div>
+<div style="position: relative; height: 320px; border: 1px solid #E5E7EB; border-radius: 8px; background: #FAFAFA; overflow: hidden" role="img" aria-label="Question map">
+<sc-for list="{{dots}}" as="d" hint-placeholder-count="20"><span class="hv" tabindex="0" aria-label="{{d.tip}}" style="position: absolute; left: {{d.x}}; top: {{d.y}}; width: 10px; height: 10px; border-radius: 50%; background: {{d.c}}; opacity: .85"><span class="tt">{{d.tip}}</span></span></sc-for>
+</div>
+<div class="legend"><sc-for list="{{dotLegend}}" as="l" hint-placeholder-count="4"><span><i style="width: 10px; height: 10px; border-radius: 50%; display: inline-block; background: {{l.c}}"></i>{{l.label}}</span></sc-for></div>
+</section>
+</sc-if>
+<sc-if value="{{drillOpen}}" hint-placeholder-val="{{false}}">
+<div role="dialog" aria-modal="true" aria-label="Guardrail events" style="position: fixed; inset: 0; background: rgba(17,24,39,.45); display: flex; align-items: flex-start; justify-content: center; padding: 80px 16px; z-index: 60">
+<div class="card" style="width: min(960px, 100%); padding: 22px; display: flex; flex-direction: column; gap: 14px; box-shadow: 0 20px 50px rgba(17,24,39,.3)">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 12px"><div><h2 style="margin: 0; font-size: 18px">{{drillTitle}}</h2><p class="cap" style="margin-top: 4px">Claims Chatbot · last 30 days · {{drillCount}} events</p></div><button type="button" onClick="{{closeDrill}}" aria-label="Close" class="btn" style="min-height: 36px; padding: 0 12px">Close</button></div>
+<div style="display: flex; gap: 8px; flex-wrap: wrap"><input aria-label="Filter events" placeholder="Filter by reason" style="flex: 1 1 240px; min-height: 38px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 0 10px; font: inherit; font-size: 14px"><button type="button" class="btn p" style="min-height: 38px">Download CSV</button></div>
+<div style="overflow-x: auto"><table style="min-width: 640px"><thead><tr><th>When</th><th>Action</th><th>Reason</th><th>Trace</th></tr></thead><tbody>
+<sc-for list="{{drillRows}}" as="e" hint-placeholder-count="6"><tr><td>{{e.when}}</td><td><span class="pill n">{{e.action}}</span></td><td>{{e.reason}}</td><td class="mono" style="font-size: 12px"><a href="Traces.dc.html">{{e.trace}}</a></td></tr></sc-for>
+</tbody></table></div>
+</div></div>
+</sc-if>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1240}}'>
+class Component extends DCLogic {
+constructor(p) { super(p); this.state = { tab: 'Speed', days: 30, dash: false, color: 'week', drill: null }; }
+renderVals() {
+const st = this.state, n = st.days;
+const wave = (i, base, amp, k, trend) => base + amp * Math.sin(i * k) + amp * 0.5 * Math.sin(i * k * 3.7 + 1) + trend * i / n;
+const day = i => new Date(2026, 9, 6 - (n - 1 - i)).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+const tips = series => Array.from({ length: n }, (_, i) => ({ text: day(i) + '\n' + series.map(([f, label, fmt]) => label + ': ' + fmt(f(i))).join('\n') }));
+const sec = v => v.toFixed(1) + ' s', pct = v => v.toFixed(0) + '%', num = v => Math.round(v).toString(), two = v => v.toFixed(2);
+const S1 = [[i => wave(i, 3.1, 0.3, 0.7, 0), 'Answer (typical)', sec], [i => wave(i, 8.4, 1.2, 0.5, 0.6), 'Answer (p95)', sec], [i => wave(i, 1.2, 0.15, 0.9, 0), 'First token (p95)', sec]];
+const S2 = [[i => wave(i, 96, 1.2, 0.6, 0), 'Sticks to sources', pct], [i => wave(i, 93, 1.5, 0.4, 0), 'Answers the question', pct], [i => wave(i, 89, 2.5, 0.5, -2), 'Thumbs up', pct]];
+const S3 = [[i => (i % 7 === 5 || i % 7 === 6) ? 60 : wave(i, 175, 15, 0.8, 0), 'Policy checks', num], [i => wave(i, 9, 3, 1.1, 0), 'Flagged', num]];
+const S4 = [[i => wave(i, 0.86, 0.015, 0.7, -0.03), 'Best search score', two]];
+const S5 = [[i => 0.06 + 0.12 * i / n + 0.01 * Math.sin(i), 'vs launch', two], [i => wave(i, 0.05, 0.01, 0.9, 0.02), 'vs last week', two]];
+const pts = (f, lo, hi) => Array.from({ length: n }, (_, i) => {
+const x = (i / (n - 1)) * 600, y = 200 - ((f(i) - lo) / (hi - lo)) * 200;
+return x.toFixed(1) + ',' + Math.max(0, Math.min(200, y)).toFixed(1);
+}).join(' ');
+const tabs = ['Speed', 'Quality', 'Guardrails', 'Retrieval', 'Question drift', 'Cost (MLOps only)'].map(label => ({ label, on: String(st.tab === label), cls: st.tab === label ? 'on' : '', pick: () => this.setState({ tab: label }) }));
+const periods = [7, 30, 90].map(d => ({ label: d + ' days', cls: st.days === d ? 'on' : '', pick: () => this.setState({ days: d }) }));
+const from = { 7: 'Sep 30', 30: 'Sep 7', 90: 'Jul 9' }[n];
+const costBars = Array.from({ length: n }, (_, i) => { const v = wave(i, 22, 6, 0.9, 4); const wk = (i % 7 === 5 || i % 7 === 6) ? 0.35 : 1; return { h: Math.round(v * wk / 40 * 100) + '%', t: day(i) + '\n$' + (v * wk).toFixed(2) }; });
+const ruleData = [['Excerpt not in source, rewritten', 41, '#B45309'], ['Off-topic refused', 33, '#6B7280'], ['Unity Gateway policy blocked', 12, '#B91C1C'], ['Sensitive data redacted', 9, '#1D4ED8'], ['Instructions removed from documents', 4, '#0F766E'], ["Answer couldn't be verified", 3, '#B45309'], ['Too much quoted, rewritten', 2, '#B45309']];
+const rules = ruleData.map(([label, v, c]) => ({ label, n: Math.round(v * n / 30), w: Math.round(v / 41 * 100) + '%', c, open: () => this.setState({ drill: label }) }));
+const reasons = { 'Off-topic refused': 'Model judged question out of scope', 'Unity Gateway policy blocked': 'block_jailbreak: prompt injection attempt', 'Sensitive data redacted': 'SSN', 'Excerpt not in source, rewritten': 'Quote 2 not found in source 3' };
+const actions = { 'Off-topic refused': 'Refused', 'Unity Gateway policy blocked': 'Blocked', 'Sensitive data redacted': 'Redacted' };
+const drillRows = st.drill ? Array.from({ length: 6 }, (_, i) => ({ when: 'Oct ' + (6 - Math.floor(i / 2)) + ', ' + (3 - i % 3) + ':' + (10 + i * 7) + ' PM', action: actions[st.drill] || 'Rewritten', reason: reasons[st.drill] || 'Check failed; answer rewritten', trace: 'tr-' + (8237 + i * 911).toString(16) + 'c9e0' })) : [];
+const wk = ['#1D4ED8', '#0F766E', '#B45309', '#7C3AED'], oc = { a: '#15803D', ns: '#B91C1C', r: '#6B7280' };
+const topicNames = ['Supervisor approval limits', 'Property claim limits', 'Fraud warning signs', 'Deadlines and footnotes', 'Hail damage on fleet vehicles'];
+const weekNames = ['Sep 8', 'Sep 15', 'Sep 22', 'Sep 29'], outName = { a: 'Answered', ns: 'Not in documents', r: 'Refused' };
+const dots = Array.from({ length: 140 }, (_, i) => {
+const cl = i % 5, cx = [22, 48, 70, 35, 78][cl], cy = [30, 55, 28, 72, 70][cl];
+const x = cx + 9 * Math.sin(i * 12.9898), y = cy + 9 * Math.cos(i * 78.233);
+const week = cl === 4 ? 3 : i % 4, outcome = cl === 4 ? 'ns' : (i % 9 === 0 ? 'r' : 'a');
+return { x: x.toFixed(1) + '%', y: y.toFixed(1) + '%', c: st.color === 'week' ? wk[week] : oc[outcome], tip: 'Topic: ' + topicNames[cl] + '\nWeek of ' + weekNames[week] + '\n' + outName[outcome] };
+});
+const dotLegend = st.color === 'week'
+? ['Sep 8', 'Sep 15', 'Sep 22', 'Sep 29'].map((label, i) => ({ label: 'Week of ' + label, c: wk[i] }))
+: [{ label: 'Answered', c: oc.a }, { label: 'Not in documents', c: oc.ns }, { label: 'Refused', c: oc.r }];
+return {
+tabs, periods, from, costBars, rules, dots, dotLegend, drillRows, drillOpen: !!st.drill, drillTitle: st.drill || '', drillCount: st.drill ? (rules.find(r => r.label === st.drill) || {}).n : 0, closeDrill: () => this.setState({ drill: null }),
+dash: st.dash, dashOpen: String(st.dash), dashLabel: st.dash ? 'Hide Databricks drift dashboard' : 'Show Databricks drift dashboard',
+toggleDash: () => this.setState({ dash: !st.dash }),
+isSpeed: st.tab === 'Speed', isCost: st.tab === 'Cost (MLOps only)', isQuality: st.tab === 'Quality', isGuard: st.tab === 'Guardrails', isRetrieval: st.tab === 'Retrieval', isDrift: st.tab === 'Question drift',
+tiles: [
+{ v: '1,284', label: 'Questions (7 days)', note: '+6% vs prior week' },
+{ v: '3.1 s', label: 'Typical answer time', note: 'target 5 s' },
+{ v: '8.4 s', label: 'Slow answers (p95)', note: 'target 12 s' },
+{ v: '1.2 s', label: 'First token (p95)', note: 'target 4 s' },
+{ v: '86%', label: 'Answered', note: '8% not in documents' }],
+speed: { a: pts(S1[0][0], 0, 16), b: pts(S1[1][0], 0, 16), c: pts(S1[2][0], 0, 16) },
+qual: { a: pts(S2[0][0], 60, 100), b: pts(S2[1][0], 60, 100), c: pts(S2[2][0], 60, 100) },
+guard: { a: pts(S3[0][0], 0, 240), b: pts(S3[1][0], 0, 240) },
+ret: pts(S4[0][0], 0.6, 1.0),
+tips: { speed: tips(S1), qual: tips(S2), guard: tips(S3), ret: tips(S4), drift: tips(S5) },
+drift: { a: pts(i => 0.06 + 0.12 * i / n + 0.01 * Math.sin(i), 0, 0.25), b: pts(i => wave(i, 0.05, 0.01, 0.9, 0.02), 0, 0.25) },
+byWeekCls: st.color === 'week' ? 'on' : '', byOutcomeCls: st.color === 'outcome' ? 'on' : '',
+byWeek: () => this.setState({ color: 'week' }), byOutcome: () => this.setState({ color: 'outcome' })
+};
+}
+}
+</script>
+</body>
+</html>

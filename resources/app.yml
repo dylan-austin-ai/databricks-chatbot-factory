@@ -1,0 +1,53 @@
+resources:
+  apps:
+    chatbot_factory:
+      name: chatbot-factory
+      description: "Build governed chatbots from your documents, no code required."
+      source_code_path: ../
+      usage_policy_id: ${var.usage_policy_id}
+      compute_size: MEDIUM            # Medium/Large/XLarge; instance count (1-5, horizontal scaling) is set in the Apps UI
+      telemetry_export_destinations:  # OpenTelemetry from the app itself into Unity Catalog (APP-2)
+        - unity_catalog:
+            logs_table: ${var.catalog}._platform.app_otel_logs
+            metrics_table: ${var.catalog}._platform.app_otel_metrics
+            traces_table: ${var.catalog}._platform.app_otel_spans
+      user_api_scopes:          # user authorization: chat calls run as the signed-in user (GOV-4)
+        - serving.serving-endpoints
+        - sql
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+        - name: agent-endpoint
+          serving_endpoint:
+            name: ${var.agent_endpoint}
+            permission: CAN_QUERY
+        - name: provision-job
+          job:
+            id: ${resources.jobs.provision_bot.id}
+            permission: CAN_MANAGE_RUN
+        - name: ingest-job
+          job:
+            id: ${resources.jobs.ingest_bot.id}
+            permission: CAN_MANAGE_RUN
+        - name: evals-job
+          job:
+            id: ${resources.jobs.run_evals.id}
+            permission: CAN_MANAGE_RUN
+        - name: reindex-job
+          job:
+            id: ${resources.jobs.reindex.id}
+            permission: CAN_MANAGE_RUN
+        - name: promote-job
+          job:
+            id: ${resources.jobs.promote_release.id}
+            permission: CAN_MANAGE_RUN
+        - name: optimize-job
+          job:
+            id: ${resources.jobs.optimize_prompt.id}
+            permission: CAN_MANAGE_RUN
+        - name: maintenance-job
+          job:
+            id: ${resources.jobs.maintenance.id}
+            permission: CAN_MANAGE_RUN

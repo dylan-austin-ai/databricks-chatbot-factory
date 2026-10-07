@@ -1,0 +1,218 @@
+{
+  "v": 3,
+  "attachments": {},
+  "boards": {
+    "Main.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 1440,
+      "h": 1040,
+      "title": "1 \u00b7 Home",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Wizard.dc.html": {
+      "x": 1520,
+      "y": 0,
+      "w": 1440,
+      "h": 900,
+      "title": "2 \u00b7 Create: choose fast path or advanced",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "WizardFast.dc.html": {
+      "x": 3040,
+      "y": 0,
+      "w": 1440,
+      "h": 1700,
+      "title": "2a \u00b7 Fast path (one page)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Wizard1.dc.html": {
+      "x": 4560,
+      "y": 0,
+      "w": 1440,
+      "h": 1000,
+      "title": "2b \u00b7 Advanced 1: Name and purpose",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Wizard2.dc.html": {
+      "x": 6080,
+      "y": 0,
+      "w": 1440,
+      "h": 1300,
+      "title": "2b \u00b7 Advanced 2: People",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Wizard3.dc.html": {
+      "x": 7600,
+      "y": 0,
+      "w": 1440,
+      "h": 1200,
+      "title": "2b \u00b7 Advanced 3: Who can use it",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Wizard4.dc.html": {
+      "x": 9120,
+      "y": 0,
+      "w": 1440,
+      "h": 1500,
+      "title": "2b \u00b7 Advanced 4: Documents",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Wizard5.dc.html": {
+      "x": 10640,
+      "y": 0,
+      "w": 1440,
+      "h": 1500,
+      "title": "2b \u00b7 Advanced 5: Answers and safety",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Wizard6.dc.html": {
+      "x": 12160,
+      "y": 0,
+      "w": 1440,
+      "h": 1100,
+      "title": "2b \u00b7 Advanced 6: Alerts and review",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Documents.dc.html": {
+      "x": 0,
+      "y": 2400,
+      "w": 1440,
+      "h": 1180,
+      "title": "3 \u00b7 Documents + review",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "TestQuestions.dc.html": {
+      "x": 1520,
+      "y": 2400,
+      "w": 1440,
+      "h": 960,
+      "title": "4 \u00b7 Test questions",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Launch.dc.html": {
+      "x": 3040,
+      "y": 2400,
+      "w": 1440,
+      "h": 1640,
+      "title": "5 \u00b7 Launch (test vs live, approval)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Chat.dc.html": {
+      "x": 4560,
+      "y": 2400,
+      "w": 1440,
+      "h": 1100,
+      "title": "6 \u00b7 Chat with sources",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Monitoring.dc.html": {
+      "x": 0,
+      "y": 4540,
+      "w": 1440,
+      "h": 1400,
+      "title": "7 \u00b7 Monitoring (one chatbot)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Traces.dc.html": {
+      "x": 1520,
+      "y": 4540,
+      "w": 1440,
+      "h": 1500,
+      "title": "8 \u00b7 Traces: flow and single trace",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Overview.dc.html": {
+      "x": 3040,
+      "y": 4540,
+      "w": 1440,
+      "h": 2800,
+      "title": "9 \u00b7 All chatbots (MLOps)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Admin.dc.html": {
+      "x": 4560,
+      "y": 4540,
+      "w": 1440,
+      "h": 1240,
+      "title": "10 \u00b7 Admin (MLOps)",
+      "expand": "fill",
+      "is_interactive": true
+    }
+  },
+  "createdOnFiles": {
+    "at": "2026-10-04T18:00:00Z",
+    "v": 1
+  },
+  "designSystems": [],
+  "launch": {
+    "view": "canvas"
+  },
+  "notes": {
+    "t1": {
+      "x": 0,
+      "y": -320,
+      "text": "Home and creating a chatbot (fast path or advanced)",
+      "kind": "title1",
+      "maxW": 13600
+    },
+    "t2": {
+      "x": 0,
+      "y": 2100,
+      "text": "Documents, testing, release and chat",
+      "kind": "title1",
+      "maxW": 5900
+    },
+    "t3": {
+      "x": 0,
+      "y": 4240,
+      "text": "Monitoring, traces, all chatbots and admin",
+      "kind": "title1",
+      "maxW": 5900
+    },
+    "s1": {
+      "x": -560,
+      "y": 0,
+      "text": "Hover or tab to any (i) icon for a plain-English explainer naming the Databricks feature, with a docs link. Press Play on an artboard to click through; the step bar in advanced mode jumps between steps.",
+      "w": 420,
+      "fill": "blue"
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Wizard.dc.html",
+    "WizardFast.dc.html",
+    "Wizard1.dc.html",
+    "Wizard2.dc.html",
+    "Wizard3.dc.html",
+    "Wizard4.dc.html",
+    "Wizard5.dc.html",
+    "Wizard6.dc.html",
+    "Documents.dc.html",
+    "TestQuestions.dc.html",
+    "Launch.dc.html",
+    "Chat.dc.html",
+    "Monitoring.dc.html",
+    "Traces.dc.html",
+    "Overview.dc.html",
+    "Admin.dc.html"
+  ],
+  "pages": [],
+  "title": "Chatbot Factory UI"
+}

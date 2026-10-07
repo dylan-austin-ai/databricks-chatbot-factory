@@ -1,0 +1,578 @@
+# All jobs are shared platform infrastructure, tagged as such (CST-4). Per-bot
+# usage is attributed through the bot_id job parameter and request_log.
+resources:
+  jobs:
+    setup_platform:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'   # serverless environment 4+: Unity Catalog secrets
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - openai>=1.40
+          - mlflow[databricks]>=3.14
+          - pypdf>=4
+      name: '[factory] setup platform'
+      usage_policy_id: ${var.usage_policy_id}
+      tasks:
+      - task_key: setup
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/setup_platform.py
+          parameters:
+          - --catalog=${var.catalog}
+          - --agent_principal=${var.agent_principal}
+          - --usage_policy_id=${var.usage_policy_id}
+          - --git_commit=${bundle.git.commit}
+    provision_bot:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - openai>=1.40
+          - mlflow[databricks]>=3.14
+          - pypdf>=4
+      name: '[factory] provision bot'
+      usage_policy_id: ${var.usage_policy_id}
+      max_concurrent_runs: 10
+      parameters:
+      - name: catalog
+        default: ${var.catalog}
+      - name: bot_id
+        default: ''
+      - name: actor
+        default: system:job
+      tasks:
+      - task_key: provision
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/provision_bot.py
+          parameters:
+          - --catalog={{job.parameters.catalog}}
+          - --bot_id={{job.parameters.bot_id}}
+          - --actor={{job.parameters.actor}}
+          - --ingest_job_id=${resources.jobs.ingest_bot.id}
+          - --agent_principal=${var.agent_principal}
+          - --git_commit=${bundle.git.commit}
+      - task_key: compare_strategies
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/compare_strategies.py
+          parameters:
+          - --catalog={{job.parameters.catalog}}
+          - --bot_id={{job.parameters.bot_id}}
+          - --git_commit=${bundle.git.commit}
+        depends_on:
+        - task_key: provision
+      - task_key: first_eval
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/run_evals.py
+          parameters:
+          - --catalog={{job.parameters.catalog}}
+          - --bot_id={{job.parameters.bot_id}}
+          - --trigger=provisioned
+          - --environment=${bundle.target}
+          - --git_commit=${bundle.git.commit}
+        depends_on:
+        - task_key: compare_strategies
+    ingest_bot:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - openai>=1.40
+          - mlflow[databricks]>=3.14
+          - pypdf>=4
+      name: '[factory] ingest bot'
+      usage_policy_id: ${var.usage_policy_id}
+      max_concurrent_runs: 1
+      queue:
+        enabled: true
+      parameters:
+      - name: catalog
+        default: ${var.catalog}
+      - name: bot_id
+        default: ''
+      - name: doc_ids
+        default: ''
+      - name: reparse
+        default: 'false'
+      - name: rechunk_only
+        default: 'false'
+      - name: publish_only
+        default: 'false'
+      - name: golden_only
+        default: 'false'
+      - name: generate_golden
+        default: ''
+      tasks:
+      - task_key: ingest
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/ingest_bot.py
+          parameters:
+          - --catalog={{job.parameters.catalog}}
+          - --bot_id={{job.parameters.bot_id}}
+          - --doc_ids={{job.parameters.doc_ids}}
+          - --reparse={{job.parameters.reparse}}
+          - --rechunk_only={{job.parameters.rechunk_only}}
+          - --publish_only={{job.parameters.publish_only}}
+          - --golden_only={{job.parameters.golden_only}}
+          - --generate_golden={{job.parameters.generate_golden}}
+          - --git_commit=${bundle.git.commit}
+      - task_key: compare_strategies
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/compare_strategies.py
+          parameters:
+          - --catalog={{job.parameters.catalog}}
+          - --bot_id={{job.parameters.bot_id}}
+          - --git_commit=${bundle.git.commit}
+        depends_on:
+        - task_key: ingest
+      - task_key: evals
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/run_evals.py
+          parameters:
+          - --catalog={{job.parameters.catalog}}
+          - --bot_id={{job.parameters.bot_id}}
+          - --trigger=docs_changed
+          - --environment=${bundle.target}
+          - --git_commit=${bundle.git.commit}
+        depends_on:
+        - task_key: compare_strategies
+    run_evals:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - openai>=1.40
+          - mlflow[databricks]>=3.14
+          - pypdf>=4
+      name: '[factory] run evals'
+      usage_policy_id: ${var.usage_policy_id}
+      parameters:
+      - name: catalog
+        default: ${var.catalog}
+      - name: bot_id
+        default: all
+      - name: trigger
+        default: manual
+      - name: channel
+        default: ''
+      tasks:
+      - task_key: evals
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/run_evals.py
+          parameters:
+          - --catalog={{job.parameters.catalog}}
+          - --bot_id={{job.parameters.bot_id}}
+          - --trigger={{job.parameters.trigger}}
+          - --channel={{job.parameters.channel}}
+          - --environment=${bundle.target}
+          - --git_commit=${bundle.git.commit}
+    reindex:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - openai>=1.40
+          - mlflow[databricks]>=3.14
+          - pypdf>=4
+      name: '[factory] re-index affected docs'
+      usage_policy_id: ${var.usage_policy_id}
+      parameters:
+      - name: catalog
+        default: ${var.catalog}
+      - name: parser
+        default: all
+      - name: extensions
+        default: ''
+      tasks:
+      - task_key: reindex
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/reindex.py
+          parameters:
+          - --catalog={{job.parameters.catalog}}
+          - --parser={{job.parameters.parser}}
+          - --extensions={{job.parameters.extensions}}
+          - --git_commit=${bundle.git.commit}
+      - task_key: evals
+        depends_on:
+        - task_key: reindex
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/run_evals.py
+          parameters:
+          - --catalog={{job.parameters.catalog}}
+          - --bot_id=all
+          - --trigger=reindex
+          - --environment=${bundle.target}
+          - --git_commit=${bundle.git.commit}
+    prod_judging:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - openai>=1.40
+          - mlflow[databricks]>=3.14
+          - pypdf>=4
+      name: '[factory] production judging'
+      usage_policy_id: ${var.usage_policy_id}
+      schedule:
+        quartz_cron_expression: 0 15 6 * * ?
+        timezone_id: America/Chicago
+      tasks:
+      - task_key: judge
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/prod_judging.py
+          parameters:
+          - --catalog=${var.catalog}
+          - --git_commit=${bundle.git.commit}
+          - --environment=${bundle.target}
+    maintenance:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - openai>=1.40
+          - mlflow[databricks]>=3.14
+          - pypdf>=4
+      name: '[factory] nightly maintenance'
+      parameters:
+      - name: catalog
+        default: ${var.catalog}
+      - name: purge_bot_id
+        default: ''
+      - name: actor
+        default: system:maintenance
+      usage_policy_id: ${var.usage_policy_id}
+      schedule:
+        quartz_cron_expression: 0 30 2 * * ?
+        timezone_id: America/Chicago
+      tasks:
+      - task_key: maintenance
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/maintenance.py
+          parameters:
+          - --catalog={{job.parameters.catalog}}
+          - --purge_bot_id={{job.parameters.purge_bot_id}}
+          - --actor={{job.parameters.actor}}
+          - --git_commit=${bundle.git.commit}
+    drift:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - numpy>=1.26
+      name: '[factory] daily drift'
+      usage_policy_id: ${var.usage_policy_id}
+      schedule:
+        quartz_cron_expression: 0 45 5 * * ?
+        timezone_id: America/Chicago
+      tasks:
+      - task_key: drift
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/drift.py
+          parameters:
+          - --catalog=${var.catalog}
+          - --git_commit=${bundle.git.commit}
+    git_sync:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - openai>=1.40
+          - mlflow[databricks]>=3.14
+          - pypdf>=4
+      name: '[factory] git repo sync'
+      usage_policy_id: ${var.usage_policy_id}
+      schedule:
+        quartz_cron_expression: 0 0 * * * ?
+        timezone_id: America/Chicago
+      tasks:
+      - task_key: sync
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/git_sync.py
+          parameters:
+          - --catalog=${var.catalog}
+          - --git_commit=${bundle.git.commit}
+    deploy_agent:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: agent
+        spec:
+          client: '4'
+          dependencies:
+          - mlflow[databricks]>=3.14
+          - databricks-agents>=1.0
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - databricks-ai-bridge>=0.6
+          - openai>=1.40
+          - pyyaml>=6
+      name: '[factory] deploy shared agent'
+      usage_policy_id: ${var.usage_policy_id}
+      tasks:
+      - task_key: deploy
+        environment_key: agent
+        spark_python_task:
+          python_file: ../agent/deploy.py
+          parameters:
+          - --catalog=${var.catalog}
+          - --warehouse_id=${var.warehouse_id}
+          - --endpoint=${var.agent_endpoint}
+          - --require_gate=${var.release_gate}
+          - --dev_catalog=${var.dev_catalog}
+          - --git_commit=${bundle.git.commit}
+          - --environment=${bundle.target}
+          - --agent_sp_scope=chatbot-factory
+          - --identity_scope=chatbot-factory-identity
+          - --agent_principal=${var.agent_principal}
+          - --usage_policy_id=${var.usage_policy_id}
+      - task_key: observability
+        depends_on:
+        - task_key: deploy
+        environment_key: agent
+        spark_python_task:
+          python_file: ../jobs/setup_observability.py
+          parameters:
+          - --catalog=${var.catalog}
+          - --environment=${bundle.target}
+          - --warehouse_id=${var.warehouse_id}
+          - --git_commit=${bundle.git.commit}
+    optimize_prompt:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - openai>=1.40
+          - httpx>=0.27
+          - mlflow[databricks]>=3.14
+      name: '[factory] optimize answer prompt'
+      usage_policy_id: ${var.usage_policy_id}
+      max_concurrent_runs: 1
+      parameters:
+      - name: catalog
+        default: ${var.catalog}
+      - name: action
+        default: optimize
+      - name: actor
+        default: system:job
+      tasks:
+      - task_key: optimize
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/optimize_prompt.py
+          parameters:
+          - --catalog={{job.parameters.catalog}}
+          - --action={{job.parameters.action}}
+          - --actor={{job.parameters.actor}}
+          - --environment=${bundle.target}
+          - --evals_job_id=${resources.jobs.run_evals.id}
+    promote_release:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - openai>=1.40
+          - mlflow[databricks]>=3.14
+          - pypdf>=4
+      name: '[factory] promote or roll back release'
+      usage_policy_id: ${var.usage_policy_id}
+      max_concurrent_runs: 5
+      parameters:
+      - name: catalog
+        default: ${var.catalog}
+      - name: bot_id
+        default: ''
+      - name: actor
+        default: system:job
+      - name: action
+        default: promote
+      - name: reason
+        default: ''
+      tasks:
+      - task_key: promote
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/promote.py
+          parameters:
+          - --catalog={{job.parameters.catalog}}
+          - --bot_id={{job.parameters.bot_id}}
+          - --actor={{job.parameters.actor}}
+          - --action={{job.parameters.action}}
+          - --reason={{job.parameters.reason}}
+          - --environment=${bundle.target}
+          - --git_commit=${bundle.git.commit}
+    monitor_business_hours:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - openai>=1.40
+          - mlflow[databricks]>=3.14
+          - pypdf>=4
+      name: '[factory] monitor (business hours, every 15 min)'
+      usage_policy_id: ${var.usage_policy_id}
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: 0 0/15 7-20 ? * MON-FRI
+        timezone_id: America/Chicago
+      tasks:
+      - task_key: monitor
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/monitor.py
+          parameters:
+          - --catalog=${var.catalog}
+          - --git_commit=${bundle.git.commit}
+    monitor_after_hours:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - openai>=1.40
+          - mlflow[databricks]>=3.14
+          - pypdf>=4
+      name: '[factory] monitor (after hours, hourly)'
+      usage_policy_id: ${var.usage_policy_id}
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: 0 7 0-6,21-23 ? * MON-FRI
+        timezone_id: America/Chicago
+      tasks:
+      - task_key: monitor
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/monitor.py
+          parameters:
+          - --catalog=${var.catalog}
+          - --git_commit=${bundle.git.commit}
+    monitor_weekend:
+      tags:
+        chatbot_name: shared-platform
+        component: chatbot-factory
+      environments:
+      - environment_key: default
+        spec:
+          client: '4'
+          dependencies:
+          - pyyaml>=6
+          - databricks-sdk>=0.60
+          - databricks-vectorsearch>=0.57
+          - openai>=1.40
+          - mlflow[databricks]>=3.14
+          - pypdf>=4
+      name: '[factory] monitor (weekends, hourly)'
+      usage_policy_id: ${var.usage_policy_id}
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: 0 7 * ? * SAT,SUN
+        timezone_id: America/Chicago
+      tasks:
+      - task_key: monitor
+        environment_key: default
+        spark_python_task:
+          python_file: ../jobs/monitor.py
+          parameters:
+          - --catalog=${var.catalog}
+          - --git_commit=${bundle.git.commit}

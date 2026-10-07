@@ -1,0 +1,189 @@
+"""SQL for the two-stage ingestion pipeline (PRV-4, PRV-8, PRV-9, ING-3/4/9/10).
+
+    volume files --ai_parse_document / text reader--> parsed_elements
+    parsed_elements --ai_prep_search--> chunked
+    chunked (approved + active docs, unflagged chunks) --> index source --> AI Search
+
+`ai_prep_search` accepts both ai_parse_document VARIANT output and plain
+text/markdown strings, so one chunker handles both paths (ING-9). Its `schema`
+option extracts document metadata onto every chunk (ING-10).
+
+All builders return SQL text. Paths and identifiers are built from validated
+identifiers only; doc ids are passed as named parameters.
+"""
+from __future__ import annotations
+
+import json
+
+from .config import PlatformSettings
+from .sql import ident
+
+PARSER_VERSION = "ai_parse_document:2.0|ai_prep_search:2.0"
+
+
+class BotPaths:
+    def __init__(self, settings: PlatformSettings, bot_id: str):
+        ident(settings.catalog, bot_id)  # validates
+        self.catalog = settings.catalog
+        self.bot_id = bot_id
+        self.volume = f"/Volumes/{settings.catalog}/{bot_id}/docs"
+        self.files = f"{self.volume}/files"
+        self.images = f"{self.volume}/page_images"
+        self.config_file = f"{self.volume}/config.yml"
+
+    def t(self, table: str) -> str:
+        return ident(self.catalog, self.bot_id, table)
+
+
+def _in_list(n: int) -> str:
+    return ", ".join(f":d{i}" for i in range(n))
+
+
+def doc_params(doc_ids: list[str]) -> dict[str, str]:
+    return {f"d{i}": d for i, d in enumerate(doc_ids)}
+
+
+def parse_binary_sql(p: BotPaths, n_docs: int) -> str:
+    """Parse PDF/Office/image docs whose current version isn't parsed yet."""
+    return f"""
+    INSERT INTO {p.t('parsed_elements')}
+    SELECT m.doc_id, m.doc_version, 'ai_parse_document',
+           CASE WHEN m.page_range IS NULL THEN
+             ai_parse_document(f.content, map(
+               'version', '2.0',
+               'imageOutputPath', '{p.images}/' || m.doc_id || '/v' || m.doc_version || '/',
+               'descriptionElementTypes', '*'))
+           ELSE
+             ai_parse_document(f.content, map(
+               'version', '2.0',
+               'imageOutputPath', '{p.images}/' || m.doc_id || '/v' || m.doc_version || '/',
+               'descriptionElementTypes', '*',
+               'pageRange', m.page_range))
+           END,
+           NULL, false, current_timestamp()
+    FROM read_files('{p.files}', format => 'binaryFile') f
+    JOIN {p.t('manifest')} m ON regexp_replace(f.path, '^dbfs:', '') = m.file_path
+    WHERE m.doc_id IN ({_in_list(n_docs)}) AND m.parser = 'ai_parse_document'
+    """
+
+
+def parse_text_sql(p: BotPaths, n_docs: int) -> str:
+    """Markdown / txt / html need no parsing: store the text (ING-3)."""
+    return f"""
+    INSERT INTO {p.t('parsed_elements')}
+    SELECT m.doc_id, m.doc_version, 'text_reader', NULL,
+           decode(f.content, 'UTF-8'), false, current_timestamp()
+    FROM read_files('{p.files}', format => 'binaryFile') f
+    JOIN {p.t('manifest')} m ON regexp_replace(f.path, '^dbfs:', '') = m.file_path
+    WHERE m.doc_id IN ({_in_list(n_docs)}) AND m.parser = 'text_reader'
+    """
+
+
+def latest_parse_cte(p: BotPaths) -> str:
+    """Latest parse per doc version; a manual override (QA-11) wins."""
+    return f"""
+    latest AS (
+      SELECT * FROM {p.t('parsed_elements')}
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY doc_id, doc_version ORDER BY is_override DESC, parsed_at DESC) = 1
+    )"""
+
+
+def chunk_sql(p: BotPaths, settings: PlatformSettings, n_docs: int) -> list[str]:
+    """Replace chunks for the given docs (idempotent: delete then insert)."""
+    schema_json = json.dumps(settings.get("ingestion.metadata_schema")).replace("'", "\\'")
+    opts = f"map('version', '2.0', 'schema', '{schema_json}')"
+    # Only the current version is re-chunked; older versions stay for rollback (REL-3).
+    current = (f"SELECT concat(doc_id, '_v', doc_version) FROM {p.t('manifest')} "
+               f"WHERE doc_id IN ({_in_list(n_docs)}) AND status <> 'superseded'")
+    delete = (f"DELETE FROM {p.t('chunked')} "
+              f"WHERE concat(doc_id, '_v', doc_version) IN ({current})")
+    insert = f"""
+    INSERT INTO {p.t('chunked')}
+    WITH {latest_parse_cte(p)},
+    docs AS (
+      SELECT m.doc_id, m.doc_version, m.doc_name, m.file_path, l.parsed, l.text_content
+      FROM {p.t('manifest')} m
+      JOIN latest l ON l.doc_id = m.doc_id AND l.doc_version = m.doc_version
+      WHERE m.doc_id IN ({_in_list(n_docs)}) AND m.status <> 'superseded'
+    ),
+    prepped AS (
+      SELECT doc_id, doc_version, doc_name, file_path,
+        CASE WHEN text_content IS NOT NULL
+             THEN ai_prep_search(text_content, {opts})
+             ELSE ai_prep_search(parsed, {opts}) END AS r
+      FROM docs
+    )
+    SELECT
+      concat(doc_id, '_v', doc_version, '_', c.value:chunk_position::INT) AS chunk_id,
+      doc_id, doc_version, doc_name, file_path AS source_uri,
+      c.value:chunk_position::INT AS chunk_position,
+      transform(cast(c.value:pages AS ARRAY<VARIANT>), x -> x:page_id::INT) AS page_ids,
+      nullif(trim(regexp_extract(c.value:chunk_to_embed::STRING, 'Section Header: ([^\\n]*)', 1)), '') AS section,
+      c.value:chunk_to_retrieve::STRING AS chunk_to_retrieve,
+      c.value:chunk_to_embed::STRING AS chunk_to_embed,
+      c.value:metadata:doc_type::STRING AS doc_type,
+      c.value:metadata:effective_date::STRING AS effective_date,
+      c.value:metadata:department::STRING AS department,
+      false AS flagged,
+      false AS injection_flag,
+      current_timestamp() AS updated_at
+    FROM prepped, LATERAL variant_explode(r:document:contents) AS c
+    """
+    count = f"""
+    MERGE INTO {p.t('manifest')} m
+    USING (SELECT doc_id, doc_version, count(*) AS n FROM {p.t('chunked')}
+           WHERE doc_id IN ({_in_list(n_docs)}) GROUP BY doc_id, doc_version) c
+    ON m.doc_id = c.doc_id AND m.doc_version = c.doc_version
+    WHEN MATCHED THEN UPDATE SET chunk_count = c.n, parser_version = '{PARSER_VERSION}',
+      updated_at = current_timestamp()
+    """
+    return [delete, insert, count]
+
+
+def qa_metrics_sql(p: BotPaths, n_docs: int) -> str:
+    """Per-doc extraction signals for the readability badge (QA-5)."""
+    return f"""
+    WITH {latest_parse_cte(p)},
+    els AS (
+      SELECT l.doc_id, e.value:confidence::DOUBLE AS conf,
+             length(e.value:content::STRING) AS chars,
+             e.value:bbox[0]:page_id::INT AS page_id
+      FROM latest l, LATERAL variant_explode(l.parsed:document:elements) e
+      WHERE l.parsed IS NOT NULL AND l.doc_id IN ({_in_list(n_docs)})
+    ),
+    pages AS (
+      SELECT l.doc_id, coalesce(array_size(cast(l.parsed:document:pages AS ARRAY<VARIANT>)), 0) AS n_pages,
+             to_json(l.parsed:error_status) AS errors_json, l.text_content IS NOT NULL AS is_text
+      FROM latest l WHERE l.doc_id IN ({_in_list(n_docs)})
+    )
+    SELECT p.doc_id, p.n_pages, p.errors_json, p.is_text,
+           avg(e.conf) AS mean_confidence, sum(e.chars) AS total_chars,
+           count(DISTINCT e.page_id) AS pages_with_text,
+           collect_set(e.page_id) AS text_pages
+    FROM pages p LEFT JOIN els e ON e.doc_id = p.doc_id
+    GROUP BY p.doc_id, p.n_pages, p.errors_json, p.is_text
+    """
+
+
+NO_EXPIRY_TS = 4102444800  # 2100-01-01: "doesn't expire until replaced" (DCL-1)
+
+
+def approved_chunks_select(p: BotPaths) -> str:
+    """The candidate set: approved, active, current-version docs and unflagged chunks
+    (DOC-8, DCL-8), with metadata used for query-time filtering (DCL-1, IDN-4)."""
+    return f"""
+    SELECT c.chunk_id, '{p.bot_id}' AS bot_id, c.doc_id, c.doc_version, m.doc_name,
+           c.source_uri, c.page_ids, c.section, c.chunk_to_retrieve, c.chunk_to_embed,
+           c.doc_type, c.effective_date, c.department,
+           CAST(unix_timestamp(CAST(coalesce(m.effective_date, DATE'1970-01-01') AS TIMESTAMP)) AS BIGINT)
+             AS effective_ts,
+           CASE WHEN coalesce(m.no_expiry, false) OR m.expires_at IS NULL THEN {NO_EXPIRY_TS}
+                ELSE CAST(unix_timestamp(m.expires_at) AS BIGINT) END AS expires_ts,
+           coalesce(m.security_scope, 'general') AS security_scope,
+           coalesce(m.geo_scope, 'ALL') AS geo_scope
+    FROM {p.t('chunked')} c
+    JOIN {p.t('manifest')} m ON m.doc_id = c.doc_id AND m.doc_version = c.doc_version
+    WHERE m.status = 'approved' AND m.is_active AND NOT coalesce(c.flagged, false)
+      AND coalesce(length(trim(c.chunk_to_retrieve)), 0) > 0
+    """

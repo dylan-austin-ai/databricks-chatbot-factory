@@ -1,0 +1,72 @@
+import pytest
+
+from factory.controlplane import ControlPlane, render
+from factory.ingestion import BotPaths, approved_chunks_select, chunk_sql, parse_binary_sql
+from factory.provisioning import Provisioner, principal
+from factory.sql import ident
+
+
+def test_ident_rejects_injection():
+    assert ident("cat", "claims_chatbot") == "`cat`.`claims_chatbot`"
+    with pytest.raises(ValueError):
+        ident("cat", "x`; DROP TABLE y; --")
+
+
+def test_principal_quoting():
+    assert principal("claims team") == "`claims team`"
+    with pytest.raises(ValueError):
+        principal("bad`name")
+
+
+def test_ddl_renders(settings):
+    stmts = render("controlplane_ddl.sql", catalog="`c`", platform="`_platform`",
+                   tag_chatbot="chatbot_name", shared_value="shared-platform")
+    assert any("CREATE TABLE IF NOT EXISTS `c`.`_platform`.bots" in s for s in stmts)
+    bot = render("bot_schema_ddl.sql", catalog="`c`", schema="`b`", display_name="B")
+    assert any("CREATE VOLUME IF NOT EXISTS `c`.`b`.docs" in s for s in bot)
+    views = render("dashboard_views.sql", catalog="`c`", platform="`_platform`",
+                   tag_chatbot="chatbot_name", shared_value="shared-platform")
+    assert any("v_observability_daily" in v for v in views)
+    gov = render("governance.sql", catalog="`c`", platform="`p`", security="`security`", admins="`mlops`", extra=", `app-sp`")
+    assert any("CREATE OR REPLACE POLICY mask_pii_text" in g and "EXCEPT `security`, `mlops`" in g for g in gov)
+    assert any("ai_mask(" in g for g in gov)
+    assert len(render("metric_views.sql", catalog="`c`", platform="`p`")) == 2
+    assert render("system_views.sql", catalog="`c`", platform="`p`", tag_chatbot="chatbot_name")
+
+
+def test_pipeline_sql_shapes(settings):
+    p = BotPaths(settings, "claims_chatbot")
+    sql = parse_binary_sql(p, 2)
+    assert ":d0, :d1" in sql and "ai_parse_document" in sql and "pageRange" in sql
+    delete, insert, count = chunk_sql(p, settings, 1)
+    assert "ai_prep_search(text_content" in insert and "ai_prep_search(parsed" in insert
+    assert "doc_type" in insert and "'schema'" in insert
+    sel = approved_chunks_select(p)
+    assert "m.status = 'approved' AND m.is_active" in sel
+    assert "expires_ts" in sel and "effective_ts" in sel and "'claims_chatbot' AS bot_id" in sel
+
+
+def test_provisioning_is_idempotent(settings, cfg, fake_sql):
+    fake_sql.answers = [(r"FROM .*provisioning_steps", [{"step": "create_objects"},
+                                                         {"step": "tag_objects"}])]
+    cp = ControlPlane(fake_sql, settings)
+    Provisioner(fake_sql, settings, cp).run(cfg, "tester", only=["create_objects", "tag_objects",
+                                                                  "grant_access"])
+    assert not fake_sql.find(r"CREATE SCHEMA")            # already done -> skipped
+    grants = fake_sql.find(r"^GRANT")
+    assert any("`claims-adjusters`" in g and "access_probe" in g for g in grants)
+    assert not any("MODIFY" in g for g in grants)           # users never get MODIFY (LCY-5)
+    assert not any("`claims-adjusters`" in g and "manifest" in g for g in grants)
+
+
+def test_middleware_bot_grants_no_end_users(settings, cfg, fake_sql):
+    cfg.access_mode, cfg.sensitivity = "middleware", "public"
+    Provisioner(fake_sql, settings, ControlPlane(fake_sql, settings)).grant_access(cfg)
+    assert not any("claims-adjusters" in g for g in fake_sql.find(r"^GRANT"))
+
+
+def test_tags_applied(settings, cfg, fake_sql):
+    Provisioner(fake_sql, settings, ControlPlane(fake_sql, settings)).tag_objects(cfg)
+    tagged = fake_sql.find("SET TAGS")
+    assert all("'chatbot_name' = 'claims_chatbot'" in t for t in tagged)
+    assert any("ALTER SCHEMA" in t for t in tagged)

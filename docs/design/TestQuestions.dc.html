@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Test questions</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;font-family:'Instrument Sans',system-ui,sans-serif;color:#111827;background:#F6F7F9}
+a{color:#1D4ED8}a:hover{color:#1E3A8A}
+.nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#374151;text-decoration:none;font-size:14px}
+.nav a:hover{background:#EEF0F3;color:#111827}
+.nav a.on{background:#E8EEFC;color:#1D4ED8;font-weight:600}
+.card{background:#fff;border:1px solid #E5E7EB;border-radius:10px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.g{background:#DCFCE7;color:#14532D}.a{background:#FEF3C7;color:#78350F}.r{background:#FEE2E2;color:#7F1D1D}.n{background:#F3F4F6;color:#374151}.b{background:#E8EEFC;color:#1E3A8A}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:8px;font:600 14px 'Instrument Sans',sans-serif;border:1px solid #D1D5DB;background:#fff;color:#111827;cursor:pointer;text-decoration:none;box-sizing:border-box}
+.btn:hover{background:#F3F4F6;color:#111827}
+.btn.p{background:#1D4ED8;border-color:#1D4ED8;color:#fff}.btn.p:hover{background:#1E40AF}
+.muted{color:#4B5563}
+table{border-collapse:collapse;width:100%;min-width:900px}th,td{text-align:left;padding:12px 14px;border-bottom:1px solid #EEF0F3;font-size:14px;vertical-align:top}
+th{font-size:12px;color:#4B5563;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+td input[type=checkbox]{width:18px;height:18px}
+.info{position:relative;display:inline-flex;vertical-align:middle;margin-left:6px}
+.info>button{width:22px;height:22px;border-radius:50%;border:1.5px solid #6B7280;background:#fff;color:#374151;font:italic 700 12px Georgia,serif;cursor:help;padding:0;display:inline-flex;align-items:center;justify-content:center}
+.info>button:hover,.info>button:focus{border-color:#1D4ED8;color:#1D4ED8;outline:none}
+.info .tip{display:none;position:absolute;left:30px;top:-10px;z-index:50;width:330px;background:#111827;color:#F3F4F6;padding:12px 14px;border-radius:10px;font:400 13px/1.5 'Instrument Sans',sans-serif;text-transform:none;letter-spacing:0;box-shadow:0 8px 24px rgba(17,24,39,.25);text-align:left;white-space:normal}
+.info:hover .tip,.info:focus-within .tip{display:block}
+.info .tip .feat{display:block;margin-top:8px;padding-top:8px;border-top:1px solid #374151;color:#D1D5DB}
+.info .tip .feat b{color:#fff}
+.info .tip a{color:#93C5FD}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+<nav aria-label="Main" class="nav" style="flex: 1 1 220px; box-sizing: border-box; padding: 20px 14px; background: #fff; border-right: 1px solid #E5E7EB; display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px"><svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#1D4ED8"></rect><path d="M8 10h12M8 14h8M8 18h10" stroke="#fff" stroke-width="2" stroke-linecap="round"></path></svg><strong style="font-size: 15px">Chatbot Factory</strong></div>
+<a href="Main.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10l7-6 7 6v7H3z"></path></svg>Home</a>
+<a href="Wizard.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4v12M4 10h12"></path></svg>Create chatbot</a>
+<div style="font-size: 12px; color: #4B5563; padding: 16px 12px 6px">Claims Chatbot</div>
+<a href="Documents.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5zM12 2v4h4"></path></svg>Documents</a>
+<a href="TestQuestions.dc.html" class="on"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5l2 2 3-3M3 13l2 2 3-3M11 6h6M11 14h6"></path></svg>Test questions</a>
+<a href="Launch.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 16l4-1 8-8a2.1 2.1 0 0 0-3-3l-8 8z"></path></svg>Launch</a>
+<a href="Monitoring.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 16h14M5 13l3-4 3 2 4-6"></path></svg>Monitoring</a>
+<a href="Traces.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5v4H4zM11 9h5v4h-5zM4 14h5v3H4zM9 6h2v5M9 15h2v-2"></path></svg>Traces</a>
+<a href="Chat.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h14v10H8l-4 3v-3H3z"></path></svg>Chat</a>
+<div style="flex-grow: 1; min-height: 24px"></div>
+<div style="font-size: 12px; color: #4B5563; padding: 6px 12px">MLOps</div>
+<a href="Overview.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h6v6H3zM11 3h6v6h-6zM3 11h6v6H3zM11 11h6v6h-6z"></path></svg>All chatbots</a>
+<a href="Admin.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="3"></circle><path d="M10 2v3M10 15v3M2 10h3M15 10h3"></path></svg>Admin</a>
+</nav>
+<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 36px 40px 56px; display: flex; flex-direction: column; gap: 22px">
+<header style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px">
+<div><h1 style="margin: 0; font-size: 28px; display: flex; align-items: center">Test questions<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">50 approved questions are needed before launch. We run all of them after every change and score the answers with AI judges, so you know quality didn&#x27;t slip.<span class="feat"><b>Databricks:</b> MLflow evaluation (mlflow.genai.evaluate) · <a href="https://docs.databricks.com/aws/en/mlflow3/genai/eval-monitor/">Learn more</a></span></span></span></h1><p class="muted" style="margin: 6px 0 0; font-size: 14px">These check the chatbot before launch and after every change. Use Edit on any row to change a question or its expected answer. Showing 6 of 61.</p></div>
+<div style="display: flex; gap: 10px; flex-wrap: wrap"><button type="button" class="btn">Suggest more questions</button><a href="Launch.dc.html" class="btn p">Run a check now</a></div>
+</header>
+<div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: stretch">
+<div class="card" style="flex: 1 1 260px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px"><div><span style="font-size: 26px; font-weight: 700">{{approved}}</span><span class="muted" style="font-size: 15px"> of 50 approved</span></div><div style="height: 6px; border-radius: 3px; background: #EEF0F3; overflow: hidden"><div style="height: 6px; width: {{pct}}; background: #B45309"></div></div><div style="font-size: 13px; color: #78350F">{{left}} more needed before you can send for approval</div></div>
+<div style="flex: 3 1 420px; padding: 16px 18px; border-radius: 10px; background: #E8EEFC; color: #1E3A8A; font-size: 14px; line-height: 1.5"><strong>Add a few of your own.</strong> Write questions the way real users would ask them. "Hard" questions test tricky content like tables, footnotes and answers spread across pages.</div>
+</div>
+<div class="card" style="overflow-x: auto">
+<table>
+<thead><tr><th style="width: 32%">Question</th><th style="width: 26%">Expected answer</th><th>Type</th><th>Difficulty</th><th>Source</th><th>Approved</th><th><span style="position: absolute; left: -9999px">Actions</span></th></tr></thead>
+<tbody>
+<sc-for list="{{rows}}" as="q" hint-placeholder-count="6">
+<tr style="background: {{q.bg}}">
+<td><sc-if value="{{q.view}}" hint-placeholder-val="{{true}}">{{q.q}}</sc-if><sc-if value="{{q.editing}}" hint-placeholder-val="{{false}}"><textarea aria-label="Question" rows="3" style="width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; padding: 8px; border: 1px solid #1D4ED8; border-radius: 8px">{{q.q}}</textarea></sc-if></td>
+<td class="muted"><sc-if value="{{q.view}}" hint-placeholder-val="{{true}}">{{q.a}}</sc-if><sc-if value="{{q.editing}}" hint-placeholder-val="{{false}}"><textarea aria-label="Expected answer" rows="3" style="width: 100%; box-sizing: border-box; font: inherit; font-size: 14px; padding: 8px; border: 1px solid #1D4ED8; border-radius: 8px">{{q.a}}</textarea></sc-if></td>
+<td><sc-if value="{{q.view}}" hint-placeholder-val="{{true}}"><span class="pill {{q.ttone}}">{{q.type}}</span></sc-if><sc-if value="{{q.editing}}" hint-placeholder-val="{{false}}"><select aria-label="Type" style="min-height: 36px; border: 1px solid #D1D5DB; border-radius: 8px; font: inherit; font-size: 13px"><option>{{q.type}}</option><option>Should answer</option><option>Should refuse</option></select></sc-if></td>
+<td><span class="pill {{q.dtone}}">{{q.diff}}</span></td>
+<td style="font-size: 13px">{{q.src}}</td>
+<td><input type="checkbox" checked="{{q.ok}}" onChange="{{q.toggle}}" aria-label="Approve question"></td>
+<td style="white-space: nowrap"><sc-if value="{{q.view}}" hint-placeholder-val="{{true}}"><button type="button" onClick="{{q.edit}}" aria-label="Edit question" style="border: 0; background: none; cursor: pointer; color: #1D4ED8; min-width: 36px; min-height: 36px; font: 600 13px 'Instrument Sans', sans-serif; display: inline-flex; align-items: center; gap: 4px"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 16l4-1 8-8a2.1 2.1 0 0 0-3-3l-8 8z"></path></svg>Edit</button><button type="button" aria-label="Delete question" style="border: 0; background: none; cursor: pointer; color: #4B5563; min-width: 36px; min-height: 36px"><svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M4 6h12M8 6V4h4v2M6 6l1 11h6l1-11"></path></svg></button></sc-if><sc-if value="{{q.editing}}" hint-placeholder-val="{{false}}"><button type="button" onClick="{{q.done}}" class="btn p" style="min-height: 34px; padding: 0 12px">Save</button> <button type="button" onClick="{{q.done}}" class="btn" style="min-height: 34px; padding: 0 12px">Cancel</button></sc-if></td>
+</tr>
+</sc-for>
+<tr><td colspan="7"><button type="button" style="border: 0; background: none; font: 600 14px 'Instrument Sans', sans-serif; color: #1D4ED8; cursor: pointer; min-height: 32px">+ Add your own question</button></td></tr>
+</tbody>
+</table>
+</div>
+<div style="display: flex; justify-content: flex-end"><button type="button" class="btn p">Save changes</button></div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":960}}'>
+class Component extends DCLogic {
+constructor(p) { super(p); this.state = { ok: [true, true, true, false, true, false], editing: 5 }; }
+renderVals() {
+const qs = [
+['Who has to approve a $15,000 auto claim?', 'A supervisor (claims over $10,000).', 'Should answer', 'Easy', 'Auto Claims Manual, p. 12'],
+['What is the approval limit for property claims, per the table?', '$25,000, approved by a supervisor.', 'Should answer', 'Hard', 'Property Claims Limits, p. 2'],
+['Which footnote changes the deadline for hail claims?', 'Footnote 3: 60 days instead of 30.', 'Should answer', 'Hard', 'Auto Claims Manual, p. 31'],
+['Can I deny a claim if the police report is late?', 'Not on that basis alone; request it within 15 days.', 'Should answer', 'Easy', 'Adjuster FAQ'],
+['Should I sue the other driver’s insurer?', 'Refuse: legal advice.', 'Should refuse', 'Easy', '—'],
+['How do I reopen a closed claim?', '[ADD EXPECTED ANSWER]', 'From user feedback', 'Easy', '—']];
+const tone = { 'Should answer': 'g', 'Should refuse': 'n', 'From user feedback': 'b' };
+const ok = this.state.ok;
+const ed = this.state.editing;
+const rows = qs.map(([q, a, type, diff, src], i) => ({ q, a, type, diff, src, ttone: tone[type], dtone: diff === 'Hard' ? 'a' : 'n', ok: ok[i], view: ed !== i, editing: ed === i, bg: ed === i ? '#F5F8FF' : 'transparent', edit: () => this.setState({ editing: i }), done: () => this.setState({ editing: -1 }),
+toggle: () => this.setState({ ok: ok.map((v, j) => j === i ? !v : v) }) }));
+const approved = 34 + ok.filter(Boolean).length;
+return { rows, approved, pct: Math.min(100, approved * 2) + '%', left: Math.max(0, 50 - approved) };
+}
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>All chatbots</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;font-family:'Instrument Sans',system-ui,sans-serif;color:#111827;background:#F6F7F9}
+a{color:#1D4ED8}a:hover{color:#1E3A8A}
+.nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#374151;text-decoration:none;font-size:14px}
+.nav a:hover{background:#EEF0F3;color:#111827}
+.nav a.on{background:#E8EEFC;color:#1D4ED8;font-weight:600}
+.card{background:#fff;border:1px solid #E5E7EB;border-radius:10px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.g{background:#DCFCE7;color:#14532D}.a{background:#FEF3C7;color:#78350F}.r{background:#FEE2E2;color:#7F1D1D}.n{background:#F3F4F6;color:#374151}.b{background:#E8EEFC;color:#1E3A8A}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:8px;font:600 14px 'Instrument Sans',sans-serif;border:1px solid #D1D5DB;background:#fff;color:#111827;cursor:pointer;text-decoration:none;box-sizing:border-box}
+.btn:hover{background:#F3F4F6;color:#111827}
+.btn.p{background:#1D4ED8;border-color:#1D4ED8;color:#fff}.btn.p:hover{background:#1E40AF;color:#fff}
+.muted{color:#4B5563}.mono{font-family:'JetBrains Mono',monospace}
+.opt{display:flex;gap:12px;align-items:flex-start;padding:14px 16px;border:1px solid #E5E7EB;border-radius:10px;background:#fff}
+.opt.sel{border-color:#1D4ED8;background:#F5F8FF;box-shadow:0 0 0 1px #1D4ED8 inset}
+.lbl{font-weight:600;font-size:15px;margin:0 0 4px;display:flex;align-items:center}
+.f{display:flex;flex-direction:column;gap:6px}
+.f label{font-size:14px;font-weight:600;display:flex;align-items:center}
+.f input,.f select,.f textarea{min-height:44px;border:1px solid #D1D5DB;border-radius:8px;padding:0 12px;font:inherit;font-size:14px;background:#fff;box-sizing:border-box}
+.f textarea{padding:10px 12px}
+.f .hint{font-size:13px;color:#4B5563}
+.seg{display:inline-flex;border:1px solid #D1D5DB;border-radius:8px;overflow:hidden}
+.seg button,.seg a{border:0;background:#fff;font:600 13px 'Instrument Sans',sans-serif;padding:0 14px;min-height:36px;cursor:pointer;color:#374151;display:inline-flex;align-items:center;text-decoration:none}
+.seg .on{background:#111827;color:#fff}
+.tab{border:0;background:none;font:600 14px 'Instrument Sans',sans-serif;padding:12px 2px;cursor:pointer;color:#4B5563;border-bottom:2px solid transparent;min-height:44px}
+.tab.on{color:#111827;border-bottom-color:#1D4ED8}
+.tile{background:#fff;border:1px solid #E5E7EB;border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:2px}
+.tile b{font-size:24px}
+.cap{margin:0;font-size:13px;color:#4B5563}
+.h3{margin:0;font-size:13px;font-weight:600;color:#4B5563;text-transform:uppercase;letter-spacing:.04em;display:flex;align-items:center}
+table{border-collapse:collapse;width:100%;min-width:720px}th,td{text-align:left;padding:10px 14px;border-bottom:1px solid #EEF0F3;font-size:14px}
+th{font-size:12px;color:#4B5563;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.sw{display:inline-block;width:14px;height:3px;border-radius:2px}
+.chart{display:grid;grid-template-columns:44px 1fr;gap:6px 8px}
+.ylab{display:flex;flex-direction:column;justify-content:space-between;font-size:11px;color:#4B5563;text-align:right;height:180px}
+.plot{position:relative;height:180px;border-left:1px solid #D1D5DB;border-bottom:1px solid #D1D5DB;background:repeating-linear-gradient(to bottom,#fff 0,#fff 44px,#EEF0F3 44px,#EEF0F3 45px)}
+.xlab{grid-column:2;display:flex;justify-content:space-between;font-size:11px;color:#4B5563}
+.legend{display:flex;flex-wrap:wrap;gap:16px;font-size:13px}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.hov{position:absolute;inset:0;display:flex}
+.hov .col{flex:1 1 0;position:relative}
+.hov .col:hover{background:rgba(29,78,216,.07);box-shadow:inset 1px 0 0 #6B7280}
+.tt{display:none;position:absolute;top:-6px;left:50%;transform:translate(-50%,-100%);background:#111827;color:#fff;font:12px/1.5 'Instrument Sans',sans-serif;padding:6px 9px;border-radius:6px;white-space:pre;z-index:40;pointer-events:none;text-align:left}
+.hv{position:relative}
+.hov .col:hover .tt,.hv:hover .tt,.hv:focus .tt{display:block}
+.pick{position:relative}
+.pickbox{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-height:44px;border:1px solid #D1D5DB;border-radius:8px;padding:4px 8px;background:#fff;box-sizing:border-box}
+.f .pickbox input{border:0;outline:none;flex:1 1 180px;min-height:32px;padding:0 4px}
+.chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:#E8EEFC;color:#1E3A8A;font-size:13px;font-weight:600}
+.chip.bad{background:#FEE2E2;color:#7F1D1D}
+.menu{display:none;position:absolute;top:100%;left:0;right:0;margin-top:4px;background:#fff;border:1px solid #D1D5DB;border-radius:8px;box-shadow:0 8px 24px rgba(17,24,39,.12);z-index:30;padding:6px 0;max-height:280px;overflow:auto}
+.pick:focus-within .menu{display:block}
+.mh{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#4B5563;padding:6px 12px}
+.mi{display:flex;justify-content:space-between;gap:12px;padding:8px 12px;font-size:14px;cursor:pointer}
+.mi:hover{background:#F6F7F9}
+pre.code{margin:0;padding:14px;background:#111827;color:#E5E7EB;border-radius:8px;font:12.5px/1.55 'JetBrains Mono',monospace;overflow-x:auto;white-space:pre}
+.info{position:relative;display:inline-flex;vertical-align:middle;margin-left:6px}
+.info>button{width:22px;height:22px;border-radius:50%;border:1.5px solid #6B7280;background:#fff;color:#374151;font:italic 700 12px Georgia,serif;cursor:help;padding:0;display:inline-flex;align-items:center;justify-content:center}
+.info>button:hover,.info>button:focus{border-color:#1D4ED8;color:#1D4ED8;outline:none}
+.info .tip{display:none;position:absolute;left:30px;top:-10px;z-index:50;width:330px;background:#111827;color:#F3F4F6;padding:12px 14px;border-radius:10px;font:400 13px/1.5 'Instrument Sans',sans-serif;text-transform:none;letter-spacing:0;box-shadow:0 8px 24px rgba(17,24,39,.25);text-align:left;white-space:normal}
+.info:hover .tip,.info:focus-within .tip{display:block}
+.info .tip .feat{display:block;margin-top:8px;padding-top:8px;border-top:1px solid #374151;color:#D1D5DB}
+.info .tip .feat b{color:#fff}
+.info .tip a{color:#93C5FD}
+
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+<nav aria-label="Main" class="nav" style="flex: 1 1 220px; box-sizing: border-box; padding: 20px 14px; background: #fff; border-right: 1px solid #E5E7EB; display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px"><svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#1D4ED8"></rect><path d="M8 10h12M8 14h8M8 18h10" stroke="#fff" stroke-width="2" stroke-linecap="round"></path></svg><strong style="font-size: 15px">Chatbot Factory</strong></div>
+<a href="Main.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10l7-6 7 6v7H3z"></path></svg>Home</a>
+<a href="Wizard.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4v12M4 10h12"></path></svg>Create chatbot</a>
+<div style="font-size: 12px; color: #4B5563; padding: 16px 12px 6px">Claims Chatbot</div>
+<a href="Documents.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5zM12 2v4h4"></path></svg>Documents</a>
+<a href="TestQuestions.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5l2 2 3-3M3 13l2 2 3-3M11 6h6M11 14h6"></path></svg>Test questions</a>
+<a href="Launch.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 16l4-1 8-8a2.1 2.1 0 0 0-3-3l-8 8z"></path></svg>Launch</a>
+<a href="Monitoring.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 16h14M5 13l3-4 3 2 4-6"></path></svg>Monitoring</a>
+<a href="Traces.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5v4H4zM11 9h5v4h-5zM4 14h5v3H4zM9 6h2v5M9 15h2v-2"></path></svg>Traces</a>
+<a href="Chat.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h14v10H8l-4 3v-3H3z"></path></svg>Chat</a>
+<div style="flex-grow: 1; min-height: 24px"></div>
+<div style="font-size: 12px; color: #4B5563; padding: 6px 12px">MLOps</div>
+<a href="Overview.dc.html" class="on"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h6v6H3zM11 3h6v6h-6zM3 11h6v6H3zM11 11h6v6h-6z"></path></svg>All chatbots</a>
+<a href="Admin.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="3"></circle><path d="M10 2v3M10 15v3M2 10h3M15 10h3"></path></svg>Admin</a>
+</nav>
+<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 36px 40px 56px; display: flex; flex-direction: column; gap: 22px">
+
+<header style="display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px">
+<div><h1 style="margin: 0; font-size: 28px; display: flex; align-items: center">All chatbots<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Live answers are sampled and scored by the same judges used before launch, and alerts fire when quality, speed or cost drift.<span class="feat"><b>Databricks:</b> MLflow production monitoring · <a href="https://docs.databricks.com/aws/en/mlflow3/genai/eval-monitor/production-monitoring">Learn more</a></span></span></span></h1><p class="muted" style="margin: 6px 0 0; font-size: 14px">Every chatbot combined, or filter to one. For MLOps.</p></div>
+<div style="display: flex; gap: 10px; align-items: center; flex-wrap: wrap">
+<label for="fb" class="muted" style="font-size: 13px">Chatbot</label><select id="fb" onChange="{{pickBot}}" style="min-height: 40px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 0 10px; font: inherit; font-size: 14px"><sc-for list="{{botOptions}}" as="o" hint-placeholder-count="4"><option value="{{o.v}}">{{o.label}}</option></sc-for></select>
+<div class="seg" role="group" aria-label="Period"><button type="button">7 days</button><button type="button" class="on">30 days</button><button type="button">90 days</button></div>
+<a href="Overview.dc.html" class="btn" style="min-height: 40px">Ask Genie</a><span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Ask questions about usage, quality and cost in plain English and get charts back.<span class="feat"><b>Databricks:</b> Genie · <a href="https://docs.databricks.com/aws/en/genie/">Learn more</a></span></span></span>
+</div>
+</header>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px">
+<sc-for list="{{tiles}}" as="t" hint-placeholder-count="8"><div class="tile"><b>{{t.v}}</b><span style="font-size: 13px">{{t.label}}</span><span class="muted" style="font-size: 12px">{{t.note}}</span></div></sc-for>
+</div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px">
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 16px">Questions per day, by chatbot</h2>
+<div class="legend"><sc-for list="{{series}}" as="s" hint-placeholder-count="4"><span><span class="sw" style="background: {{s.c}}; height: 10px; width: 10px"></span>{{s.name}}</span></sc-for></div>
+<div class="chart"><div class="ylab"><span>{{qMax}}</span><span></span><span></span><span></span><span>0</span></div>
+<div class="plot" style="display: flex; align-items: flex-end; gap: 2px; padding: 0 2px"><sc-for list="{{qBars}}" as="b" hint-placeholder-count="30"><div class="hv" style="flex: 1 1 0; display: flex; flex-direction: column-reverse; height: 100%"><div style="height: {{b.a}}; background: #1D4ED8"></div><div style="height: {{b.b}}; background: #0F766E"></div><div style="height: {{b.c}}; background: #B45309"></div><div style="height: {{b.d}}; background: #9CA3AF"></div><span class="tt">{{b.t}}</span></div></sc-for></div>
+<div class="xlab"><span>Sep 7</span><span>Oct 6</span></div></div>
+</section>
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 16px; display: flex; align-items: center">Where the time goes, per step<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">The steps every question goes through, in order, with how long each usually takes. Click a step to see what it does, the code behind it, its timing spread and its cost.<span class="feat"><b>Databricks:</b> MLflow Tracing · <a href="https://docs.databricks.com/aws/en/mlflow3/genai/tracing/observe-with-traces/ui-traces">Learn more</a></span></span></span></h2>
+<p class="cap">Typical (p50) and slow (p95) time per step, across {{scope}}. <a href="Traces.dc.html">Open the flow</a></p>
+<div style="display: flex; flex-direction: column; gap: 8px"><sc-for list="{{stages}}" as="s" hint-placeholder-count="6"><div class="hv" style="display: grid; grid-template-columns: 150px 1fr 92px; gap: 10px; align-items: center; font-size: 13px"><span class="tt">{{s.t}}</span><span class="mono">{{s.name}}</span><div style="position: relative; height: 16px; background: #EEF0F3; border-radius: 3px"><div style="position: absolute; left: 0; top: 0; height: 16px; width: {{s.p95w}}; background: #BFDBFE; border-radius: 3px"></div><div style="position: absolute; left: 0; top: 0; height: 16px; width: {{s.p50w}}; background: #1D4ED8; border-radius: 3px"></div></div><span style="text-align: right">{{s.label}}</span></div></sc-for></div>
+<div class="legend" style="font-size: 12px"><span><span class="sw" style="background: #1D4ED8; height: 10px"></span>typical</span><span><span class="sw" style="background: #BFDBFE; height: 10px"></span>slow (p95)</span></div>
+</section>
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 16px">Slow answers by day and hour</h2>
+<p class="cap">Share of answers over 12 s. Darker is worse. Times in Central.</p>
+<div style="display: grid; grid-template-columns: 40px repeat(24, minmax(0, 1fr)); gap: 2px; font-size: 11px; align-items: center"><sc-for list="{{heat}}" as="c" hint-placeholder-count="175"><span class="hv" style="height: 18px; background: {{c.bg}}; color: #4B5563; text-align: right; padding-right: 2px">{{c.l}}<span class="tt">{{c.t}}</span></span></sc-for></div>
+<div class="xlab" style="padding-left: 42px"><span>12 AM</span><span>6 AM</span><span>12 PM</span><span>6 PM</span><span>11 PM</span></div>
+</section>
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 10px">
+<h2 style="margin: 0; font-size: 16px">Cost per day</h2>
+<div class="chart"><div class="ylab"><span>$120</span><span>$90</span><span>$60</span><span>$30</span><span>$0</span></div>
+<div class="plot" style="display: flex; align-items: flex-end; gap: 2px; padding: 0 2px"><sc-for list="{{costBars}}" as="c" hint-placeholder-count="30"><div class="hv" style="flex: 1 1 0; display: flex; flex-direction: column-reverse; height: 100%"><div style="height: {{c.a}}; background: #1D4ED8"></div><div style="height: {{c.j}}; background: #7C3AED"></div><div style="height: {{c.p}}; background: #9CA3AF"></div><span class="tt">{{c.t}}</span></div></sc-for></div>
+<div class="xlab"><span>Sep 7</span><span>Oct 6</span></div></div>
+<div class="legend" style="font-size: 12px"><span><span class="sw" style="background: #1D4ED8; height: 10px"></span>Answers</span><span><span class="sw" style="background: #7C3AED; height: 10px"></span>Judges and guardrail evaluator</span><span><span class="sw" style="background: #9CA3AF; height: 10px"></span>Document parsing</span></div>
+</section>
+</div>
+<section class="card" style="overflow-x: auto">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 18px 20px 6px"><h2 style="margin: 0; font-size: 16px; display: flex; align-items: center">Question topics, worst first<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Groups similar questions into topics and scores each topic, so you can see which kinds of questions fail most and are growing.<span class="feat"><b>Databricks:</b> Chatbot Factory topic clustering · <a href="https://docs.databricks.com/aws/en/lakehouse-monitoring/">Learn more</a></span></span></span></h2><span class="cap">Similar questions grouped automatically. Select a topic to list its questions; select a question to open its trace.</span></div>
+<table><thead><tr><th>Topic</th><th>Chatbot</th><th>Questions</th><th>Trend</th><th>Answered</th><th>Not in documents</th><th>Judges pass</th><th>Best search score</th><th>Slow (p95)</th></tr></thead>
+<tbody>
+<tr><td><strong>Hail damage on fleet vehicles</strong></td><td>Claims Chatbot</td><td>184</td><td><span class="pill r">New, +184</span></td><td>31%</td><td><strong>64%</strong></td><td>88%</td><td>0.48</td><td>5.1 s</td></tr>
+<tr><td><strong>Remote work stipend</strong></td><td>HR Policy Helper</td><td>96</td><td><span class="pill a">+41%</span></td><td>58%</td><td>37%</td><td>90%</td><td>0.55</td><td>4.2 s</td></tr>
+<tr><td><strong>Supervisor approval limits</strong></td><td>Claims Chatbot</td><td>612</td><td><span class="pill n">Steady</span></td><td>97%</td><td>1%</td><td>96%</td><td>0.89</td><td>7.9 s</td></tr>
+<tr><td><strong>Parental leave eligibility</strong></td><td>HR Policy Helper</td><td>301</td><td><span class="pill n">Steady</span></td><td>94%</td><td>3%</td><td>95%</td><td>0.86</td><td>6.4 s</td></tr>
+</tbody></table>
+</section>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); gap: 18px">
+<section class="card" style="overflow-x: auto">
+<div style="padding: 18px 20px 6px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between"><h2 style="margin: 0; font-size: 16px">Compare slices</h2>
+<div style="display: flex; gap: 8px; flex-wrap: wrap"><select aria-label="Measure" style="min-height: 36px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 0 8px; font: inherit; font-size: 13px"><option>Judges pass</option><option>Cost per question</option><option>Slow (p95)</option><option>Answered</option></select><select aria-label="Split by" style="min-height: 36px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 0 8px; font: inherit; font-size: 13px"><option>Prompt version × channel</option><option>Release × chatbot</option><option>Model served × chatbot</option></select></div></div>
+<table style="min-width: 420px"><thead><tr><th>Prompt version</th><th>Chat page</th><th>API</th></tr></thead>
+<tbody><tr><td>answer_prompt v3</td><td style="background: #DCFCE7">95% <span class="muted">(n=4,812)</span></td><td style="background: #DCFCE7">94% <span class="muted">(n=598)</span></td></tr>
+<tr><td>answer_prompt v4 (test)</td><td style="background: #BBF7D0">97% <span class="muted">(n=240)</span></td><td style="background: #FEF3C7">89% <span class="muted">(n=31)</span></td></tr></tbody></table>
+<p class="cap" style="padding: 8px 20px 16px">Each cell shows how many answers it's based on; small counts are shaded amber.</p>
+</section>
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-size: 16px; display: flex; align-items: center">Gaps in the documents<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">We try five ways of searching your documents with your test questions and keep the one that finds the right section most often, including a reranker that double-checks the top results.<span class="feat"><b>Databricks:</b> Databricks AI Search · <a href="https://docs.databricks.com/aws/en/vector-search/vector-search">Learn more</a></span></span></span></h2>
+<p class="cap">How well the best search result matched each question. Questions far from every document usually mean a missing document.</p>
+<div style="display: flex; align-items: flex-end; gap: 3px; height: 90px; border-bottom: 1px solid #D1D5DB"><sc-for list="{{gapHist}}" as="h" hint-placeholder-count="20"><div class="hv" style="flex: 1 1 0; height: 100%; display: flex; align-items: flex-end"><div style="width: 100%; height: {{h.h}}; background: {{h.c}}; border-radius: 2px 2px 0 0"></div><span class="tt">{{h.t}}</span></div></sc-for></div>
+<div class="xlab" style="grid-column: auto"><span>0 (no match)</span><span>1 (exact)</span></div>
+<ol style="margin: 0; padding-left: 20px; font-size: 14px; line-height: 1.7"><li>Does the manual cover hail damage on fleet vehicles? <span class="muted">· 0.31 · 38 similar</span></li><li>Is there a stipend for home office chairs? <span class="muted">· 0.34 · 22 similar</span></li><li>What's the deductible for rental cars abroad? <span class="muted">· 0.37 · 9 similar</span></li></ol>
+<div style="display: flex; align-items: center"><a href="Overview.dc.html" class="btn" style="min-height: 38px">Send to review queue</a><span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Answers that failed a judge or got a thumbs down are queued for a person to check. Confirmed problems become new test questions.<span class="feat"><b>Databricks:</b> MLflow Review Queues · <a href="https://docs.databricks.com/aws/en/mlflow3/genai/human-feedback/expert-feedback/review-queues">Learn more</a></span></span></span></div>
+</section>
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-size: 16px">Conversations</h2>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px"><div class="tile"><b>2.4</b><span style="font-size: 13px">questions per conversation</span></div><div class="tile"><b>11%</b><span style="font-size: 13px">re-asked in other words</span><span class="muted" style="font-size: 12px">sign the first answer missed</span></div><div class="tile"><b>7%</b><span style="font-size: 13px">left after a refusal</span></div><div class="tile"><b>93%</b><span style="font-size: 13px">conversations where every answer passed the judges</span></div></div>
+</section>
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<h2 style="margin: 0; font-size: 16px; display: flex; align-items: center">Guardrails, all chatbots<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Every question and answer passes safety checks: harmful content, jailbreak attempts, personal data and answers not backed by your documents. People only see a polite message; every check is recorded.<span class="feat"><b>Databricks:</b> Unity Gateway service policies · <a href="https://docs.databricks.com/aws/en/data-governance/unity-catalog/service-policies/">Learn more</a></span></span></span></h2>
+<div style="display: flex; flex-direction: column; gap: 8px"><sc-for list="{{guards}}" as="r" hint-placeholder-count="5"><div style="display: grid; grid-template-columns: minmax(170px, 250px) 1fr 52px; gap: 10px; align-items: center; font-size: 14px"><span>{{r.label}}</span><div style="height: 14px; background: #EEF0F3; border-radius: 3px"><div style="height: 14px; width: {{r.w}}; background: {{r.c}}; border-radius: 3px"></div></div><span style="text-align: right; font-weight: 600">{{r.n}}</span></div></sc-for></div>
+</section>
+</div>
+<section class="card" style="overflow-x: auto">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 18px 20px 6px"><h2 style="margin: 0; font-size: 16px; display: flex; align-items: center">Recurring problems<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Answers the judges failed, grouped by which judge failed them and what the question was about, so a pattern (one topic failing again and again) stands out. Fix it with a document, a test question or a rule.<span class="feat"><b>Databricks:</b> MLflow production monitoring · <a href="https://docs.databricks.com/aws/en/mlflow3/genai/eval-monitor/production-monitoring">Learn more</a></span></span></span></h2><span class="cap">Judge failures grouped by judge and topic, last 28 days. Select one to open an example trace.</span></div>
+<table><thead><tr><th>Chatbot</th><th>Judge</th><th>Topic</th><th>Failures</th><th>Last 7 days</th><th>Trend</th><th>Latest judge reason</th></tr></thead><tbody>
+<tr><td>Claims Chatbot</td><td>Sticks to sources</td><td>Hail damage on fleet vehicles</td><td>23</td><td>19</td><td><span class="pill r">New</span></td><td class="muted">Answer states a 60-day deadline the cited excerpt doesn't contain.</td></tr>
+<tr><td>HR Policy Helper</td><td>Correct</td><td>Remote work stipend</td><td>11</td><td>7</td><td><span class="pill a">+75%</span></td><td class="muted">Expected $500 a year; answer says $50 a month.</td></tr>
+<tr><td>Claims Chatbot</td><td>Answers the question</td><td>Supervisor approval limits</td><td>6</td><td>2</td><td><span class="pill g">-50%</span></td><td class="muted">Answer lists auto limits when the question asked about property.</td></tr>
+</tbody></table>
+</section>
+<section class="card" style="overflow-x: auto">
+<div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding: 18px 20px 6px"><h2 style="margin: 0; font-size: 16px">Every chatbot</h2><div style="display: flex; gap: 8px; align-items: center"><input aria-label="Search chatbots" placeholder="Search" style="min-height: 38px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 0 10px; font: inherit; font-size: 14px"><a href="Overview.dc.html" class="btn" style="min-height: 38px">Download CSV</a></div></div>
+<table><thead><tr><th>Chatbot</th><th>Status</th><th>Owner</th><th>Questions</th><th>Answered</th><th>Judges pass</th><th>Slow (p95)</th><th>Cost</th><th>Budget used</th><th>Drift</th><th>Alerts</th></tr></thead>
+<tbody><sc-for list="{{rows}}" as="r" hint-placeholder-count="10"><tr><td><a href="Monitoring.dc.html"><strong>{{r.name}}</strong></a></td><td><span class="pill {{r.tone}}">{{r.state}}</span></td><td>{{r.owner}}</td><td>{{r.q}}</td><td>{{r.ans}}</td><td>{{r.judge}}</td><td>{{r.p95}}</td><td>{{r.cost}}</td><td>{{r.budget}}</td><td><span class="pill {{r.dtone}}">{{r.drift}}</span></td><td>{{r.alerts}}</td></tr></sc-for></tbody></table>
+<div style="display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; flex-wrap: wrap; gap: 10px"><span class="muted" style="font-size: 13px">{{pageNote}}</span><div style="display: flex; gap: 8px"><button type="button" class="btn" style="min-height: 38px" onClick="{{prev}}" disabled="{{noPrev}}">Previous</button><button type="button" class="btn" style="min-height: 38px" onClick="{{next}}" disabled="{{noNext}}">Next</button></div></div>
+</section>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":2800}}'>
+class Component extends DCLogic {
+constructor(p) { super(p); this.state = { bot: 'all', page: 0 }; }
+renderVals() {
+const st = this.state, all = st.bot === 'all', per = 10;
+const names = ['Claims Chatbot', 'HR Policy Helper', 'Underwriting Guide', 'Travel Desk FAQ', 'IT Service Desk', 'Benefits Navigator', 'Procurement Policy', 'Safety Manual', 'Sales Playbook', 'Legal Templates Finder', 'Fleet Ops Guide', 'Billing Questions', 'Onboarding Buddy', 'Compliance Library', 'Product Specs', 'Vendor Contracts', 'Facilities Help', 'Finance Close Guide', 'Marketing Brand Guide', 'Data Catalog Helper', 'Customer Letters', 'Agent Scripts', 'Reinsurance Notes'];
+const owners = ['Ana Ruiz', 'Jordan Kim', 'Sam Lee', 'Mia Chen', 'Lee Park', 'Raj Patel'];
+const rows = names.map((name, i) => { const q = Math.round(5400 / (i + 1) + 40); const states = [['Live', 'g'], ['Waiting for approval', 'b'], ['Testing', 'a'], ['Live', 'g']]; const [state, tone] = i === 1 ? states[1] : i === 2 ? states[2] : i === 22 ? ['Archived', 'n'] : states[0];
+return { name, state, tone, owner: owners[i % 6], q: q.toLocaleString(), ans: (80 + (i * 7) % 18) + '%', judge: (90 + (i * 3) % 8) + '%', p95: (6 + (i * 1.3) % 6).toFixed(1) + ' s', cost: '$' + (q * 0.0113).toFixed(2), budget: Math.min(99, Math.round(q * 0.0113 / 10)) + '%', drift: i === 0 ? 'Shifted' : i === 1 ? 'Shifted' : 'Stable', dtone: i < 2 ? 'a' : 'g', alerts: i < 2 ? '1' : '0' }; });
+const pages = Math.ceil(rows.length / per);
+const botOptions = [{ v: 'all', label: 'All chatbots (23)' }].concat(names.slice(0, 6).map(n => ({ v: n, label: n })));
+const k = all ? 1 : 0.42;
+const tiles = [
+{ v: Math.round(12840 * k).toLocaleString(), label: 'Questions', note: all ? '23 chatbots, 19 live' : 'live version 7' },
+{ v: '$' + (145.1 * k).toFixed(2), label: 'Cost', note: '$0.011 per question' },
+{ v: all ? '88%' : '86%', label: 'Answered', note: '8% not in documents' },
+{ v: all ? '94%' : '95%', label: 'Judges pass', note: 'sampled live answers' },
+{ v: all ? '7.9 s' : '8.4 s', label: 'Slow answers (p95)', note: 'target 12 s' },
+{ v: all ? '1.1 s' : '1.2 s', label: 'First token (p95)', note: 'target 4 s' },
+{ v: Math.round(212 * k), label: 'Guardrail events', note: Math.round(31 * k) + ' blocked' },
+{ v: all ? '2' : '1', label: 'Open alerts', note: all ? '2 chatbots' : 'budget at 72%' }];
+const wave = (i, b, a, f) => b + a * Math.sin(i * f) + a * 0.4 * Math.sin(i * f * 2.9 + 1);
+const qBars = Array.from({ length: 30 }, (_, i) => { const wk = (i % 7 === 5 || i % 7 === 6) ? 0.3 : 1; const t = wave(i, 520, 60, 0.7) * wk; const s = t / 700 * 100;
+const dl = new Date(2026, 8, 7 + i).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+const tt = all ? dl + '\nClaims Chatbot: ' + Math.round(t * .42) + '\nHR Policy Helper: ' + Math.round(t * .21) + '\nUnderwriting Guide: ' + Math.round(t * .12) + '\n20 others: ' + Math.round(t * .25) + '\nTotal: ' + Math.round(t) : dl + '\n' + st.bot + ': ' + Math.round(t * .42 * 2);
+return all ? { a: (s * .42) + '%', b: (s * .21) + '%', c: (s * .12) + '%', d: (s * .25) + '%', t: tt } : { a: (s * .42 * 2) + '%', b: '0%', c: '0%', d: '0%', t: tt }; });
+const costBars = Array.from({ length: 30 }, (_, i) => { const wk = (i % 7 === 5 || i % 7 === 6) ? 0.35 : 1; const t = wave(i, 70, 10, 0.6) * wk * k; const dl = new Date(2026, 8, 7 + i).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }); return { a: (t * .62 / 120 * 100) + '%', j: (t * .30 / 120 * 100) + '%', p: (t * .08 / 120 * 100) + '%', t: dl + '\nAnswers: $' + (t * .62).toFixed(2) + '\nJudges and evaluator: $' + (t * .30).toFixed(2) + '\nParsing: $' + (t * .08).toFixed(2) + '\nTotal: $' + t.toFixed(2) }; });
+const st8 = [['answer.attempt_1', 2100, 5600], ['search.rerank', 390, 860], ['search.vector', 160, 380], ['query.rewrite', 610, 1100], ['history.select', 6, 40], ['access.check', 3, 180]];
+const stages = st8.map(([name, a, b]) => ({ name, t: name + '\nTypical: ' + a + ' ms\nSlow (p95): ' + b + ' ms', p50w: (a / 5600 * 100) + '%', p95w: (b / 5600 * 100) + '%', label: (a >= 1000 ? (a / 1000).toFixed(1) + 's' : a + 'ms') + ' / ' + (b >= 1000 ? (b / 1000).toFixed(1) + 's' : b + 'ms') }));
+const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const heat = []; days.forEach((dn, d) => { heat.push({ l: dn, bg: 'transparent', t: '' }); for (let h = 0; h < 24; h++) { const busy = d < 5 && h >= 8 && h <= 17; const v = busy ? 0.02 + 0.05 * Math.max(0, Math.sin((h - 8) / 9 * Math.PI)) + (h === 10 && d === 0 ? 0.08 : 0) : 0.01; const a = Math.min(1, v / 0.14); heat.push({ l: '', bg: 'rgba(185,28,28,' + (0.06 + a * 0.85).toFixed(2) + ')', t: dn + ' ' + h + ':00 · ' + (v * 100).toFixed(1) + '% slow' }); } });
+const gapHist = Array.from({ length: 20 }, (_, i) => { const v = Math.exp(-Math.pow((i - 15) / 3, 2)) + (i < 7 ? 0.12 : 0); return { h: Math.round(v * 100) + '%', c: i < 7 ? '#B45309' : '#1D4ED8', t: 'Score ' + (i / 20).toFixed(2) + '–' + ((i + 1) / 20).toFixed(2) + '\n' + Math.round(v * 420) + ' questions' }; });
+const guards = [['Excerpt not in source, rewritten', 96, '#B45309'], ['Off-topic refused', 61, '#6B7280'], ['Unity Gateway policy blocked', 31, '#B91C1C'], ['Sensitive data redacted', 17, '#1D4ED8'], ['Hallucination check flagged (Log mode)', 23, '#7C3AED']].map(([label, n, c]) => ({ label, n: Math.round(n * k), w: (n / 96 * 100) + '%', c }));
+const shownRows = all ? rows.slice(st.page * per, st.page * per + per) : rows.filter(r => r.name === st.bot);
+return { tiles, botOptions, qBars, costBars, stages, heat, gapHist, guards, rows: shownRows, scope: all ? 'all chatbots' : st.bot, qMax: all ? '700' : '300',
+series: all ? [{ name: 'Claims Chatbot', c: '#1D4ED8' }, { name: 'HR Policy Helper', c: '#0F766E' }, { name: 'Underwriting Guide', c: '#B45309' }, { name: '20 others', c: '#9CA3AF' }] : [{ name: st.bot, c: '#1D4ED8' }],
+pickBot: e => this.setState({ bot: e.target.value, page: 0 }),
+pageNote: all ? 'Showing ' + (st.page * per + 1) + '–' + Math.min(rows.length, st.page * per + per) + ' of ' + rows.length + ' chatbots · page ' + (st.page + 1) + ' of ' + pages : '1 chatbot',
+noPrev: !all || st.page === 0, noNext: !all || st.page >= pages - 1,
+prev: () => this.setState({ page: Math.max(0, st.page - 1) }), next: () => this.setState({ page: Math.min(pages - 1, st.page + 1) }) };
+}
+}
+</script>
+</body>
+</html>

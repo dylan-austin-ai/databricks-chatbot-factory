@@ -1,0 +1,12 @@
+streamlit>=1.45
+databricks-sdk>=0.60
+openai>=1.40
+pyyaml>=6
+pandas>=2
+pillow>=10
+pypdf>=4
+mlflow-skinny[databricks]>=3.14
+opentelemetry-distro>=0.48b0
+opentelemetry-exporter-otlp-proto-grpc>=1.27
+opentelemetry-instrumentation-tornado>=0.48b0
+opentelemetry-instrumentation-system-metrics>=0.48b0

@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Admin</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap">
+<style>
+body{margin:0;font-family:'Instrument Sans',system-ui,sans-serif;color:#111827;background:#F6F7F9}
+a{color:#1D4ED8}a:hover{color:#1E3A8A}
+.nav a{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;color:#374151;text-decoration:none;font-size:14px}
+.nav a:hover{background:#EEF0F3;color:#111827}
+.nav a.on{background:#E8EEFC;color:#1D4ED8;font-weight:600}
+.card{background:#fff;border:1px solid #E5E7EB;border-radius:10px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+.g{background:#DCFCE7;color:#14532D}.a{background:#FEF3C7;color:#78350F}.r{background:#FEE2E2;color:#7F1D1D}.n{background:#F3F4F6;color:#374151}.b{background:#E8EEFC;color:#1E3A8A}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:44px;padding:0 18px;border-radius:8px;font:600 14px 'Instrument Sans',sans-serif;border:1px solid #D1D5DB;background:#fff;color:#111827;cursor:pointer;text-decoration:none;box-sizing:border-box}
+.btn:hover{background:#F3F4F6;color:#111827}
+.btn.p{background:#1D4ED8;border-color:#1D4ED8;color:#fff}.btn.p:hover{background:#1E40AF}
+.muted{color:#4B5563}.mono{font-family:'JetBrains Mono',monospace}
+.tab{border:0;background:none;font:600 14px 'Instrument Sans',sans-serif;padding:12px 2px;cursor:pointer;color:#4B5563;border-bottom:2px solid transparent;min-height:44px}
+.tab.on{color:#111827;border-bottom-color:#1D4ED8}
+.f{display:flex;flex-direction:column;gap:6px}
+.f label{font-size:13px;font-weight:600}
+.f input,.f select{min-height:40px;border:1px solid #D1D5DB;border-radius:8px;padding:0 10px;font:inherit;font-size:14px;background:#fff}
+.f .hint{font-size:12px;color:#4B5563}
+.btn.d{color:#991B1B;border-color:#FCA5A5}.btn[disabled]{opacity:.5;cursor:not-allowed}
+.sw{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #EEF0F3;font-size:14px}
+.tg{flex:none;width:44px;height:26px;border-radius:13px;border:0;padding:3px;cursor:pointer;display:flex}
+.tg span{width:20px;height:20px;border-radius:50%;background:#fff}
+.ck{display:flex;gap:10px;align-items:flex-start;font-size:14px;line-height:1.45;padding:8px 0}
+table{border-collapse:collapse;width:100%;min-width:760px}th,td{text-align:left;padding:11px 14px;border-bottom:1px solid #EEF0F3;font-size:14px}
+th{font-size:12px;color:#4B5563;font-weight:600;text-transform:uppercase;letter-spacing:.04em}
+.info{position:relative;display:inline-flex;vertical-align:middle;margin-left:6px}
+.info>button{width:22px;height:22px;border-radius:50%;border:1.5px solid #6B7280;background:#fff;color:#374151;font:italic 700 12px Georgia,serif;cursor:help;padding:0;display:inline-flex;align-items:center;justify-content:center}
+.info>button:hover,.info>button:focus{border-color:#1D4ED8;color:#1D4ED8;outline:none}
+.info .tip{display:none;position:absolute;left:30px;top:-10px;z-index:50;width:330px;background:#111827;color:#F3F4F6;padding:12px 14px;border-radius:10px;font:400 13px/1.5 'Instrument Sans',sans-serif;text-transform:none;letter-spacing:0;box-shadow:0 8px 24px rgba(17,24,39,.25);text-align:left;white-space:normal}
+.info:hover .tip,.info:focus-within .tip{display:block}
+.info .tip .feat{display:block;margin-top:8px;padding-top:8px;border-top:1px solid #374151;color:#D1D5DB}
+.info .tip .feat b{color:#fff}
+.info .tip a{color:#93C5FD}
+</style>
+</helmet>
+<div style="display: flex; flex-wrap: wrap; min-height: 100vh">
+<nav aria-label="Main" class="nav" style="flex: 1 1 220px; box-sizing: border-box; padding: 20px 14px; background: #fff; border-right: 1px solid #E5E7EB; display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px"><svg width="28" height="28" viewBox="0 0 28 28" aria-hidden="true"><rect width="28" height="28" rx="7" fill="#1D4ED8"></rect><path d="M8 10h12M8 14h8M8 18h10" stroke="#fff" stroke-width="2" stroke-linecap="round"></path></svg><strong style="font-size: 15px">Chatbot Factory</strong></div>
+<a href="Main.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10l7-6 7 6v7H3z"></path></svg>Home</a>
+<a href="Wizard.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 4v12M4 10h12"></path></svg>Create chatbot</a>
+<div style="font-size: 12px; color: #4B5563; padding: 16px 12px 6px">Claims Chatbot</div>
+<a href="Documents.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 2h7l4 4v12H5zM12 2v4h4"></path></svg>Documents</a>
+<a href="TestQuestions.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5l2 2 3-3M3 13l2 2 3-3M11 6h6M11 14h6"></path></svg>Test questions</a>
+<a href="Launch.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 16l4-1 8-8a2.1 2.1 0 0 0-3-3l-8 8z"></path></svg>Launch</a>
+<a href="Monitoring.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 16h14M5 13l3-4 3 2 4-6"></path></svg>Monitoring</a>
+<a href="Traces.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5v4H4zM11 9h5v4h-5zM4 14h5v3H4zM9 6h2v5M9 15h2v-2"></path></svg>Traces</a>
+<a href="Chat.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h14v10H8l-4 3v-3H3z"></path></svg>Chat</a>
+<div style="flex-grow: 1; min-height: 24px"></div>
+<div style="font-size: 12px; color: #4B5563; padding: 6px 12px">MLOps</div>
+<a href="Overview.dc.html"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h6v6H3zM11 3h6v6h-6zM3 11h6v6H3zM11 11h6v6h-6z"></path></svg>All chatbots</a>
+<a href="Admin.dc.html" class="on"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="3"></circle><path d="M10 2v3M10 15v3M2 10h3M15 10h3"></path></svg>Admin</a>
+</nav>
+<main style="flex: 999 1 560px; min-width: 0; box-sizing: border-box; padding: 36px 40px 56px; display: flex; flex-direction: column; gap: 20px">
+<header><h1 style="margin: 0; font-size: 28px">Admin</h1><p class="muted" style="margin: 6px 0 0; font-size: 14px">Platform settings for MLOps. Changes re-check every chatbot automatically.</p></header>
+<div role="tablist" style="display: flex; gap: 26px; border-bottom: 1px solid #E5E7EB; flex-wrap: wrap">
+<sc-for list="{{tabs}}" as="t" hint-placeholder-count="5"><button type="button" role="tab" aria-selected="{{t.on}}" class="tab {{t.cls}}" onClick="{{t.pick}}">{{t.label}}</button></sc-for>
+</div>
+
+<sc-if value="{{isPlatform}}" hint-placeholder-val="{{true}}">
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 18px">
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-size: 16px">Go-live targets</h2>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+<div class="f"><label for="h1">Right document first</label><input id="h1" value="80%"></div>
+<div class="f"><label for="h3">In top 3</label><input id="h3" value="90%"></div>
+<div class="f"><label for="h5">In top 5</label><input id="h5" value="95%"></div>
+<div class="f"><label for="mrr">Overall ranking</label><input id="mrr" value="85%"></div>
+<div class="f"><label for="jd">Answer quality judges</label><input id="jd" value="90%"></div>
+<div class="f"><label for="sr">Production judging sample</label><input id="sr" value="20%"><span class="hint">100% for critical chatbots</span></div>
+</div>
+</section>
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-size: 16px">Monitoring</h2>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+<div class="f"><label for="p50">Typical (p50)</label><input id="p50" value="5 s"></div>
+<div class="f"><label for="p95">Slow (p95)</label><input id="p95" value="12 s"></div>
+<div class="f"><label for="p99">Slowest (p99)</label><input id="p99" value="20 s"></div>
+</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+<div class="f"><label for="er">Error rate (15 min)</label><input id="er" value="5%"></div>
+<div class="f"><label for="ex">Expiry warning</label><input id="ex" value="30 days"></div>
+<div class="f"><label for="ws">Traffic window start</label><input id="ws" value="8:00 AM Eastern"></div>
+<div class="f"><label for="we">Traffic window end</label><input id="we" value="6:00 PM Pacific"></div>
+</div>
+</section>
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-size: 16px">Models and cost</h2>
+<div class="f"><label for="am">Answer model</label><select id="am"><option>Claude Haiku 4.5 (falls back to Sonnet 4.5)</option></select><span class="hint">Unity Gateway model services only.</span></div>
+<div class="f"><label for="jm">Judge model</label><select id="jm"><option>Claude Haiku 4.5</option><option>GPT-5 mini</option></select><span class="hint">Quality checks, production judging and the Log-mode guardrail evaluator.</span></div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+<div class="f"><label for="pi">Input price / 1M tokens</label><input id="pi" value="[PRICE]"></div>
+<div class="f"><label for="po">Output price / 1M tokens</label><input id="po" value="[PRICE]"></div>
+</div>
+</section>
+<section class="card" style="padding: 20px; display: flex; flex-direction: column; gap: 14px">
+<h2 style="margin: 0; font-size: 16px">Access and retention</h2>
+<div class="f"><label for="tc">Trusted apps (may say who the user is)</label><input id="tc" value="claims-portal-sp"><span class="hint">Service principals, comma-separated</span></div>
+<div class="f"><label for="sc">Synthetic test callers</label><input id="sc" value="canary-sp"></div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+<div class="f"><label for="ga">Admins</label><input id="ga" value="mlops"></div>
+<div class="f"><label for="gs">Security</label><input id="gs" value="security"></div>
+<div class="f"><label for="gp">Support</label><input id="gp" value="support"></div>
+</div>
+<div class="f"><label for="rt">Keep logs for</label><input id="rt" value="7 years"></div>
+</section>
+</div>
+<div style="display: flex; justify-content: flex-end; gap: 10px"><button type="button" class="btn">Re-read documents after a reader change</button><button type="button" class="btn p">Save settings</button></div>
+</sc-if>
+
+<sc-if value="{{isBots}}" hint-placeholder-val="{{false}}">
+<div class="f" style="max-width: 420px"><label for="botpick">Chatbot to configure</label><select id="botpick" onChange="{{pickBot}}"><sc-for list="{{botOpts}}" as="o" hint-placeholder-count="3"><option value="{{o.v}}" selected="{{o.sel}}">{{o.label}}</option></sc-for></select><span class="hint">Or choose Edit on a row below. Type to search when there are many.</span></div>
+<div class="card" style="overflow-x: auto"><table>
+<thead><tr><th>Chatbot</th><th>Status</th><th>Owner</th><th>Month spend</th><th>Critical</th><th>Judges on</th><th></th></tr></thead>
+<tbody>
+<sc-for list="{{botRows}}" as="b" hint-placeholder-count="3"><tr><td><strong>{{b.name}}</strong></td><td><span class="pill {{b.tone}}">{{b.state}}</span></td><td>{{b.owner}}</td><td>{{b.spend}}</td><td>{{b.critical}}</td><td>{{b.judges}}</td><td><button type="button" class="btn" style="min-height: 36px" onClick="{{b.pick}}">{{b.action}}</button></td></tr></sc-for>
+</tbody></table></div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 18px">
+<section class="card" style="padding: 20px">
+<h2 style="margin: 0 0 4px; font-size: 16px; display: flex; align-items: center">Quality judges · {{botName}}<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">AI judges grade answers for correctness, sticking to sources, relevance and safety, on test questions and on a sample of live answers.<span class="feat"><b>Databricks:</b> MLflow built-in LLM judges · <a href="https://docs.databricks.com/aws/en/mlflow3/genai/eval-monitor/concepts/judges/">Learn more</a></span></span></span></h2>
+<p class="muted" style="margin: 0 0 8px; font-size: 13px">Used in quality checks and on sampled live answers.</p>
+<sc-for list="{{judges}}" as="j" hint-placeholder-count="10"><div class="sw"><span>{{j.label}}<sc-if value="{{j.off}}" hint-placeholder-val="{{false}}"> <span class="pill n">Off by default</span></sc-if></span><button type="button" role="switch" class="tg" aria-checked="{{j.on}}" aria-label="{{j.label}}" onClick="{{j.toggle}}" style="background: {{j.track}}; justify-content: {{j.side}}"><span></span></button></div></sc-for>
+<div class="f" style="margin-top: 14px"><label for="cj">Custom judge instructions</label><input id="cj" placeholder="e.g. Answers must name the form number when one applies."><span class="hint">Used when the custom judge is on.</span></div>
+</section>
+<section class="card" style="padding: 20px; align-self: start">
+<h2 style="margin: 0 0 4px; font-size: 16px">Observability · {{botName}}</h2>
+<p class="muted" style="margin: 0 0 8px; font-size: 13px">Issue detection and custom trace views are set up in MLflow; see Setup checklist.</p>
+<sc-for list="{{obs}}" as="j" hint-placeholder-count="4"><div class="sw"><span>{{j.label}}</span><button type="button" role="switch" class="tg" aria-checked="{{j.on}}" aria-label="{{j.label}}" onClick="{{j.toggle}}" style="background: {{j.track}}; justify-content: {{j.side}}"><span></span></button></div></sc-for>
+<h3 style="margin: 18px 0 8px; font-size: 14px">Budget (owners don't see costs)</h3>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px"><div class="f"><label for="bud">Monthly budget ($)</label><input id="bud" value="1,000"></div><div class="f"><label for="bact">When it's reached</label><select id="bact"><option>Keep running, alert MLOps</option><option>Pause until the 1st</option></select></div></div>
+<p class="muted" style="margin: 6px 0 0; font-size: 12px">Alerts at 70%, 90% and 100% go to MLOps only.</p>
+<h3 style="margin: 18px 0 4px; font-size: 14px">Platform rules turned off for this chatbot</h3>
+<p class="muted" style="margin: 0; font-size: 13px">None. All 11 rules apply.</p>
+<div style="display: flex; justify-content: flex-end; margin-top: 16px"><button type="button" class="btn p">Save</button></div>
+</section>
+</div>
+</sc-if>
+
+<sc-if value="{{isLife}}" hint-placeholder-val="{{false}}">
+<h2 style="margin: 0; font-size: 18px; display: flex; align-items: center">Lifecycle<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Archived chatbots stop answering but keep everything. Deleted ones are purged after 90 days; audit history, logs and traces are kept for 7 years.<span class="feat"><b>Databricks:</b> Unity Catalog · <a href="https://docs.databricks.com/aws/en/data-governance/unity-catalog/manage-privileges/">Learn more</a></span></span></span></h2>
+<p class="muted" style="margin: 0; font-size: 14px">Archived chatbots stop answering and keep everything. Deleted chatbots are purged after 90 days (audit history, request logs and traces are kept for 7 years). Deleted chatbots can be restored until purged.</p>
+<div class="card">
+<sc-for list="{{life}}" as="b" hint-placeholder-count="3">
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 16px 18px; border-bottom: 1px solid #EEF0F3">
+<div style="flex: 1 1 300px"><strong>{{b.name}}</strong> <span class="mono muted" style="font-size: 12px">{{b.id}}</span><div class="muted" style="font-size: 13px; margin-top: 2px">{{b.owner}} · <span class="pill {{b.tone}}">{{b.state}}</span> {{b.left}}</div></div>
+<sc-if value="{{b.archived}}" hint-placeholder-val="{{true}}"><button type="button" class="btn" onClick="{{b.restore}}">Restore to testing</button><button type="button" class="btn d" onClick="{{b.del}}">Delete</button></sc-if>
+<sc-if value="{{b.deleted}}" hint-placeholder-val="{{false}}"><button type="button" class="btn" onClick="{{b.restore}}">Restore</button><label class="f" style="flex-direction: row; align-items: center; gap: 8px"><span style="position: absolute; left: -9999px">Type the technical name to purge</span><input placeholder="type {{b.id}} to purge" value="{{b.typed}}" onChange="{{b.type}}" style="min-height: 44px; border: 1px solid #D1D5DB; border-radius: 8px; padding: 0 10px; font: inherit; font-size: 14px; width: 230px"></label><button type="button" class="btn d" disabled="{{b.lock}}" onClick="{{b.purge}}">Purge now</button></sc-if>
+<sc-if value="{{b.purged}}" hint-placeholder-val="{{false}}"><span class="muted" style="font-size: 13px">Purge started.</span></sc-if>
+</div>
+</sc-for>
+</div>
+</sc-if>
+
+<sc-if value="{{isReports}}" hint-placeholder-val="{{false}}">
+<div style="display: flex; flex-wrap: wrap; gap: 10px; justify-content: space-between; align-items: center"><span class="muted" style="font-size: 14px">Every chatbot, last 30 days.</span><div style="display: flex; gap: 10px; flex-wrap: wrap"><button type="button" class="btn">Download CSV</button><button type="button" class="btn">Archive idle chatbots (1)</button><button type="button" class="btn">Run maintenance now</button></div></div>
+<div class="card" style="overflow-x: auto"><table>
+<thead><tr><th>Chatbot</th><th>Status</th><th>Questions</th><th>Cost</th><th>Answered</th><th>Judges pass</th><th>Open alerts</th><th>Last used</th></tr></thead>
+<tbody>
+<tr><td><strong>Claims Chatbot</strong></td><td><span class="pill g">Live</span></td><td>5,410</td><td>$61.20</td><td>86%</td><td>95%</td><td>1</td><td>Today</td></tr>
+<tr><td><strong>HR Policy Helper</strong></td><td><span class="pill b">Waiting for approval</span></td><td>2,730</td><td>$28.90</td><td>91%</td><td>94%</td><td>1</td><td>Today</td></tr>
+<tr><td><strong>Underwriting Guide</strong></td><td><span class="pill a">Testing</span></td><td>37</td><td>$0.41</td><td>78%</td><td>92%</td><td>0</td><td>Oct 2</td></tr>
+<tr><td><strong>Travel Desk FAQ</strong></td><td><span class="pill g">Live</span> <span class="pill a">Idle 52 days</span></td><td>0</td><td>$0.00</td><td>—</td><td>—</td><td>0</td><td>Aug 15</td></tr>
+</tbody></table></div>
+</sc-if>
+
+<sc-if value="{{isCosts}}" hint-placeholder-val="{{false}}">
+<h2 style="margin: 0; font-size: 18px; display: flex; align-items: center">Costs<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Our estimate from token counts, next to what Databricks recorded and billed, so you can trust the numbers.<span class="feat"><b>Databricks:</b> System tables (ai_gateway.usage, billing.usage) · <a href="https://docs.databricks.com/aws/en/admin/system-tables/">Learn more</a></span></span></span></h2>
+<p class="muted" style="margin: 0; font-size: 14px">Estimated answer cost per chatbot (from tokens) next to what Unity Gateway recorded, warehouse work per chatbot (query tags) and billed spend by tag (system tables).</p>
+<div class="card" style="overflow-x: auto"><h2 style="margin: 0; padding: 18px 20px 6px; font-size: 16px">Estimate vs Unity Gateway usage</h2><table>
+<thead><tr><th>Day</th><th>Chatbot</th><th>Estimated</th><th>Gateway tokens</th><th>Gateway cost</th><th>Difference</th></tr></thead>
+<tbody><tr><td>Oct 6</td><td class="mono">claims_chatbot</td><td>$2.31</td><td>1.52M</td><td>$2.28</td><td>1%</td></tr><tr><td>Oct 6</td><td class="mono">hr_policy_helper</td><td>$1.02</td><td>0.67M</td><td>$1.04</td><td>2%</td></tr></tbody></table></div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 18px">
+<div class="card" style="overflow-x: auto"><h2 style="margin: 0; padding: 18px 20px 6px; font-size: 16px">SQL warehouse work by chatbot</h2><table style="min-width: 360px"><thead><tr><th>Chatbot</th><th>Queries</th><th>Run time</th></tr></thead><tbody><tr><td class="mono">claims_chatbot</td><td>412</td><td>6.1 min</td></tr><tr><td class="mono">app</td><td>2,904</td><td>18.4 min</td></tr></tbody></table></div>
+<div class="card" style="overflow-x: auto"><h2 style="margin: 0; padding: 18px 20px 6px; font-size: 16px">Billed spend by tag</h2><table style="min-width: 360px"><thead><tr><th>Tag</th><th>Product</th><th>Spend</th></tr></thead><tbody><tr><td>claims_chatbot</td><td>Serving</td><td>$58.40</td></tr><tr><td>shared-platform</td><td>Jobs</td><td>$41.10</td></tr></tbody></table></div>
+</div>
+</sc-if>
+
+<sc-if value="{{isPrompt}}" hint-placeholder-val="{{false}}">
+<h2 style="margin: 0; font-size: 18px; display: flex; align-items: center">Answer prompt<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">We rewrite the chatbot&#x27;s instructions automatically, test each rewrite against your approved questions, and keep the best one. Nothing changes until an admin promotes it, and every chatbot is re-checked afterwards.<span class="feat"><b>Databricks:</b> MLflow prompt optimization (GEPA) and Prompt Registry · <a href="https://mlflow.org/docs/latest/genai/prompt-registry/optimize-prompts/">Learn more</a></span></span></span></h2>
+<p class="muted" style="margin: 0; font-size: 14px">The answer prompt lives in the MLflow Prompt Registry; every chatbot uses the production version. Optimization rewrites it against approved test questions; promoting it re-checks every chatbot.</p>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px">
+<div class="card" style="padding: 16px"><div class="muted" style="font-size: 12px">In production</div><div style="font-size: 22px; font-weight: 700">Version 3</div><div class="muted" style="font-size: 13px">Correct 91% on 240 questions</div></div>
+<div class="card" style="padding: 16px"><div class="muted" style="font-size: 12px">Optimized, not promoted</div><div style="font-size: 22px; font-weight: 700">Version 4</div><div style="font-size: 13px; color: #14532D">Correct 94% (+3 points)</div></div>
+</div>
+<div class="card" style="overflow-x: auto"><table><thead><tr><th>When</th><th>Event</th><th>From</th><th>To</th><th>Score before</th><th>Score after</th><th>By</th></tr></thead>
+<tbody><tr><td>Oct 5</td><td>Optimized</td><td>v3</td><td>v4</td><td>91%</td><td>94%</td><td>lee.park@corp.com</td></tr><tr><td>Sep 18</td><td>Promoted</td><td>v2</td><td>v3</td><td>—</td><td>—</td><td>lee.park@corp.com</td></tr></tbody></table></div>
+<div style="display: flex; gap: 10px; flex-wrap: wrap"><button type="button" class="btn">Optimize the answer prompt</button><span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">We rewrite the chatbot&#x27;s instructions automatically, test each rewrite against your approved questions, and keep the best one. Nothing changes until an admin promotes it, and every chatbot is re-checked afterwards.<span class="feat"><b>Databricks:</b> MLflow prompt optimization (GEPA) and Prompt Registry · <a href="https://mlflow.org/docs/latest/genai/prompt-registry/optimize-prompts/">Learn more</a></span></span></span><button type="button" class="btn p">Promote version 4 to production</button></div>
+</sc-if>
+
+<sc-if value="{{isSetup}}" hint-placeholder-val="{{false}}">
+<p class="muted" style="margin: 0; font-size: 14px">These steps are done in Databricks screens. docs/SETUP.md has click-by-click steps.</p>
+<div class="card" style="overflow-x: auto"><h2 style="margin: 0; padding: 18px 20px 6px; font-size: 16px; display: flex; align-items: center">Unity Gateway model service settings<span class="info"><button type="button" aria-label="What is this?">i</button><span class="tip" role="tooltip">Every question and answer passes safety checks: harmful content, jailbreak attempts, personal data and answers not backed by your documents. People only see a polite message; every check is recorded.<span class="feat"><b>Databricks:</b> Unity Gateway service policies · <a href="https://docs.databricks.com/aws/en/data-governance/unity-catalog/service-policies/">Learn more</a></span></span></span></h2><table>
+<thead><tr><th>Service</th><th>Setting</th><th>Value</th></tr></thead>
+<tbody><sc-for list="{{gw}}" as="g" hint-placeholder-count="8"><tr><td class="mono" style="font-size: 12px">{{g.svc}}</td><td>{{g.k}}</td><td>{{g.v}}</td></tr></sc-for></tbody></table></div>
+<section class="card" style="padding: 12px 20px">
+<sc-for list="{{checks}}" as="c" hint-placeholder-count="8"><div class="ck"><svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="{{c.color}}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="{{c.state}}" role="img" style="flex: none; margin-top: 1px"><rect x="2.5" y="2.5" width="15" height="15" rx="3"></rect><path d="{{c.path}}"></path></svg><span>{{c.text}}</span></div></sc-for>
+</section>
+<section class="card" style="padding: 18px 20px; display: flex; flex-direction: column; gap: 8px">
+<h2 style="margin: 0; font-size: 16px">Per-chatbot MLflow steps</h2>
+<p style="margin: 0; font-size: 14px"><strong>Claims Chatbot</strong>: automatic issue detection; custom trace view. Filter traces with <span class="mono" style="font-size: 12px">tags.bot_id = 'claims_chatbot'</span>.</p>
+<p style="margin: 0; font-size: 14px"><strong>HR Policy Helper</strong>: automatic issue detection; custom trace view. Filter traces with <span class="mono" style="font-size: 12px">tags.bot_id = 'hr_policy_helper'</span>.</p>
+</section>
+</sc-if>
+
+<sc-if value="{{isUsers}}" hint-placeholder-val="{{false}}">
+<section class="card" style="padding: 28px; display: flex; flex-direction: column; gap: 12px; align-items: flex-start">
+<h2 style="margin: 0; font-size: 16px">User access list</h2>
+<p class="muted" style="margin: 0; font-size: 14px">CSV columns: user_id, country, state, business_function, security_scopes, active, valid_from, valid_to. Rows replace existing ones per user.</p>
+<label for="csv" class="btn">Choose CSV file</label><input id="csv" type="file" accept=".csv" style="position: absolute; left: -9999px">
+</section>
+</sc-if>
+
+<sc-if value="{{isAlerts}}" hint-placeholder-val="{{false}}">
+<div class="card">
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 14px 18px; border-bottom: 1px solid #EEF0F3"><span class="pill r">High</span><span style="flex: 1 1 300px; font-size: 14px"><strong>HR Policy Helper</strong> · 9 of 120 requests failed in 15 minutes (limit 5%).</span><span class="muted" style="font-size: 13px">10:15 AM</span><button type="button" class="btn" style="min-height: 36px">Resolve</button></div>
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 14px 18px"><span class="pill a">Medium</span><span style="flex: 1 1 300px; font-size: 14px"><strong>Claims Chatbot</strong> · Used 72% of its $1,000 monthly budget.</span><span class="muted" style="font-size: 13px">Yesterday</span><button type="button" class="btn" style="min-height: 36px">Resolve</button></div>
+</div>
+</sc-if>
+
+<sc-if value="{{isAudit}}" hint-placeholder-val="{{false}}">
+<div class="card" style="overflow-x: auto"><table>
+<thead><tr><th>When</th><th>Who</th><th>Chatbot</th><th>Action</th></tr></thead>
+<tbody>
+<tr><td>Oct 4, 9:02 AM</td><td>lee.park@corp.com</td><td class="mono">claims_chatbot</td><td>Approved release v7</td></tr>
+<tr><td>Oct 3, 4:40 PM</td><td>ana.ruiz@corp.com</td><td class="mono">claims_chatbot</td><td>Approved document "Fraud Indicators" v2</td></tr>
+<tr><td>Oct 3, 2:11 PM</td><td>system:budget</td><td class="mono">hr_policy_helper</td><td>Budget alert 70%</td></tr>
+</tbody></table></div>
+</sc-if>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1240}}'>
+class Component extends DCLogic {
+constructor(p) {
+super(p);
+this.state = { tab: 'Platform', bot: 0,
+judges: { correctness: true, groundedness: true, retrieval_relevance: true, retrieval_sufficiency: true, relevance: true, safety: true, platform_rules: true, expectations_guidelines: true, multi_turn: false, custom: false },
+obs: { link_versions: true, issue_detection: true, custom_trace_view: true, simulate_conversations: false },
+life: { travel_desk: 'archived', old_benefits: 'deleted' }, typed: {} };
+}
+renderVals() {
+const st = this.state, t = st.tab;
+const names = ['Platform', 'Chatbots', 'Lifecycle', 'Reports', 'Costs', 'Answer prompt', 'Setup checklist', 'User access', 'Alerts', 'Audit log'];
+const tabs = names.map(label => ({ label, on: String(t === label), cls: t === label ? 'on' : '', pick: () => this.setState({ tab: label }) }));
+const sw = (map, key, label, extra) => ({ label, on: String(map[key]), track: map[key] ? '#1D4ED8' : '#D1D5DB', side: map[key] ? 'flex-end' : 'flex-start', ...extra });
+const JL = [['correctness', 'Correct (vs expected answer)'], ['groundedness', 'Sticks to sources'], ['retrieval_relevance', 'Search results relevant'], ['retrieval_sufficiency', 'Search found enough'], ['relevance', 'Answers the question'], ['safety', 'Safe'], ['platform_rules', 'Follows platform rules'], ['expectations_guidelines', 'Refuses out-of-scope questions properly'], ['multi_turn', 'Conversation judges (multi-turn)'], ['custom', 'Custom judge']];
+const judges = JL.map(([k, label]) => sw(st.judges, k, label, { off: k === 'multi_turn' || k === 'custom', toggle: () => this.setState({ judges: { ...st.judges, [k]: !st.judges[k] } }) }));
+const OL = [['link_versions', 'Link traces to release versions'], ['issue_detection', 'Automatic issue detection'], ['custom_trace_view', 'Custom trace view'], ['simulate_conversations', 'Simulated multi-turn conversations in quality checks']];
+const obs = OL.map(([k, label]) => sw(st.obs, k, label, { toggle: () => this.setState({ obs: { ...st.obs, [k]: !st.obs[k] } }) }));
+const on = Object.values(st.judges).filter(Boolean).length;
+const bots = [['Claims Chatbot', 'Live', 'g', 'Ana Ruiz', '$718 / $1,000', 'Yes'], ['HR Policy Helper', 'Waiting for approval', 'b', 'Jordan Kim', '$204 / $1,000', 'No'], ['Underwriting Guide', 'Testing', 'a', 'Sam Lee', '$12 / $1,000', 'No']];
+const botRows = bots.map(([name, state, tone, owner, spend, critical], i) => ({ name, state, tone, owner, spend, critical, judges: (i === st.bot ? on : 8) + ' of 10', action: i === st.bot ? 'Editing' : 'Edit', pick: () => this.setState({ bot: i }) }));
+const lifeBots = [['travel_desk', 'Travel Desk FAQ', 'Mia Chen'], ['old_benefits', 'Benefits 2024 Helper', 'Jordan Kim']];
+const life = lifeBots.map(([id, name, owner]) => {
+const state = st.life[id], typed = st.typed[id] || '';
+const set = v => this.setState({ life: { ...st.life, [id]: v } });
+return { id, name, owner, typed,
+state: { archived: 'Archived', deleted: 'Deleted', testing: 'Testing', purged: 'Purging' }[state],
+tone: { archived: 'n', deleted: 'r', testing: 'a', purged: 'r' }[state],
+left: state === 'deleted' ? '· purge in 74 days' : '',
+archived: state === 'archived', deleted: state === 'deleted', purged: state === 'purged',
+lock: typed !== id,
+restore: () => set(state === 'deleted' ? 'archived' : 'testing'), del: () => set('deleted'),
+type: e => this.setState({ typed: { ...st.typed, [id]: e.target.value } }),
+purge: () => typed === id && set('purged') };
+}).filter(b => b.state !== 'Testing');
+const svc = 'chatbots._platform.answer_haiku', ev = 'chatbots._platform.guardrail_evaluator';
+const gw = [
+[svc, 'Permission', 'EXECUTE for the agent service principal'],
+[svc, 'Rate limit (service)', '600 requests per minute'],
+[svc, 'Rate limit (user default)', '30 requests per minute'],
+[svc, 'Inference table', 'chatbots._platform, prefix gw_answer_haiku'],
+[svc, 'Policy block_unsafe_content', 'input, output · Enforce'],
+[svc, 'Policy block_jailbreak', 'input · Enforce'],
+[svc, 'Policy block_hallucination', 'output · Log · evaluator ' + ev],
+[svc, 'Policy detect_sensitive_data', 'input, output · Enforce'],
+[ev, 'Inference table', 'chatbots._platform, prefix gw_guardrail_evaluator']].map(([s, k, v]) => ({ svc: s, k, v }));
+const checks = [
+[true, "Answer service's inference table recorded (every gateway call)"],
+[true, "Evaluator's inference table recorded (Log-mode guardrail verdicts)"],
+[false, 'Unified Unity Gateway trace table enabled and recorded'],
+[true, 'MLflow Review Queues preview turned on'],
+[true, 'Dashboard embedding allowed for *.databricksapps.com'],
+[true, 'Serverless usage policy passed as usage_policy_id'],
+[false, 'Account budget created (filter tag component=chatbot-factory, alerts at 70/90/100%)'],
+[true, 'App instance count set (Apps › chatbot-factory › Edit)'],
+[true, 'Genie agent over observability tables']].map(([done, text]) => ({ text, color: done ? '#15803D' : '#6B7280', path: done ? 'M6 10l3 3 5-6' : '', state: done ? 'Done' : 'To do' }));
+return { tabs, judges, obs, botRows, botName: bots[st.bot][0], life, gw, checks,
+botOpts: bots.map((b, i) => ({ v: String(i), label: b[0] + ' · ' + b[1], sel: i === st.bot })), pickBot: e => this.setState({ bot: Number(e.target.value) }),
+isPlatform: t === 'Platform', isBots: t === 'Chatbots', isLife: t === 'Lifecycle', isReports: t === 'Reports', isCosts: t === 'Costs', isPrompt: t === 'Answer prompt', isSetup: t === 'Setup checklist', isUsers: t === 'User access', isAlerts: t === 'Alerts', isAudit: t === 'Audit log' };
+}
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,192 @@
+# Platform defaults. Admins (MLOps) override any of these at runtime from the
+# Admin settings page; overrides live in <catalog>.<platform_schema>.platform_settings.
+# Creators never see or edit these values (ADM-2).
+
+catalog: chatbots                 # predefined catalog; one schema per bot (PRV-1)
+platform_schema: _platform        # control plane, shared tables, audit (LCY-2)
+warehouse_id: ""                  # SQL warehouse used for UC access checks and app queries
+environment: prod                 # reported in every API response (ANS-3)
+
+models:
+  # Answer models are Unity Gateway model services (ARC-8, GW-1): UC securables named
+  # <catalog>.<platform_schema>.<service>, with guardrail service policies attached.
+  # Admins can only pick a label from this map.
+  answer_services:
+    haiku:
+      service: answer_haiku
+      model: system.ai.databricks-claude-haiku-4-5
+      fallbacks: [system.ai.databricks-claude-sonnet-4-5]   # GW-3: tried in order on failure
+  default_answer_model: haiku
+  judge_endpoint: databricks-claude-haiku-4-5          # MLflow judges (JDG-1)
+  generation_endpoint: databricks-claude-sonnet-4-5    # test questions, visual page check
+  embedding_endpoint: databricks-gte-large-en
+
+history:
+  store: managed_sessions              # CNV-2: managed sessions (Beta, Lakebase) | none
+  store_name: chatbot_factory
+
+observability:
+  mask_pii: true                       # OBS-14: redact restricted numbers in spans before storage
+
+prompt_optimization:                   # PRM-2 (manual, from the Admin page)
+  max_questions: 100
+  max_metric_calls: 150
+
+unity_gateway:                         # formerly AI Gateway (GW-1..6)
+  base_path: /ai-gateway/mlflow/v1     # OpenAI-compatible unified API for model services
+  rate_limits:                         # entered in the Unity Gateway UI (docs/SETUP.md); 429 when exceeded
+    - {key: service, renewal_period: minute, requests: 600}
+    - {key: user_default, renewal_period: minute, requests: 30}
+  policies:                            # service policies; attach in the Unity Gateway UI (GW-2)
+    - {policy: system.ai.block_unsafe_content, phases: [input, output], mode: enforce, why: harmful content}
+    - {policy: system.ai.block_jailbreak, phases: [input], mode: enforce, why: jailbreak and prompt injection}
+    - {policy: system.ai.block_hallucination, phases: [output], mode: log, why: "grounding check; start in Log mode, enforce once false positives are known"}
+    - {policy: system.ai.detect_sensitive_data, phases: [input, output], mode: enforce, why: "redact SSNs, cards, IBANs and other IDs"}
+  evaluator:                           # judge for Log-mode policies, so their verdicts land in our inference table (GW-7)
+    service: guardrail_evaluator
+    model: system.ai.databricks-claude-haiku-4-5
+  trace_table: ""                      # unified OTel trace table, set after a metastore admin enables it (GW-6)
+  inference_table: ""                  # full name of the answer service's inference table, set after enabling it (GW-7)
+  evaluator_inference_table: ""        # full name of the evaluator's inference table: every policy verdict (GW-7)
+
+ai_search:
+  endpoint: chatbot-shared-ai-search   # one shared AI Search endpoint (ARC-4)
+  shared_index: shared_chunks_index    # shared index, filtered by bot_id
+  # Default retrieval strategy; each bot's winner from the strategy comparison (RET-3)
+  # is stored in its config and overrides this.
+  num_results: 8
+  query_type: hybrid                   # hybrid | ann
+  rerank: true                         # RET-1
+  strategies:                          # compared per bot by jobs/compare_strategies.py
+    - {name: "Meaning-based search", query_type: ann, rerank: false, num_results: 8}
+    - {name: "Meaning-based search + reranking", query_type: ann, rerank: true, num_results: 8}
+    - {name: "Meaning + keyword search", query_type: hybrid, rerank: false, num_results: 8}
+    - {name: "Meaning + keyword search + reranking", query_type: hybrid, rerank: true, num_results: 8}
+    - {name: "Meaning + keyword search + reranking (wider)", query_type: hybrid, rerank: true, num_results: 15}
+  # GRD-9: below this top score the bot abstains without calling the model. Hybrid scores
+  # use rank fusion (a different scale from ANN similarity), so calibrate this on dev golden
+  # sets before raising it. 0 = rely on retrieval returning nothing + the prompt's abstain rule.
+  min_relevance_score: 0.0
+
+agent:
+  serving_endpoint: chatbot-agent      # the single entry point for every bot (ARC-1)
+  history_turns: 10                    # conversation memory cap (CNV-1)
+  history_max_chars: 12000             # token-budget proxy for history (CNV-1)
+  config_cache_ttl_seconds: 60         # ARC-3 (runtime JSON in the runtime volume)
+  access_cache_ttl_seconds: 900        # UC access-probe cache per user
+  max_quote_words: 60                  # verbatim-dump limit (GRD-13)
+  temperature: 0.0                     # versioned with each release snapshot
+  max_output_tokens: 1200
+
+quality:
+  review_policy: auto_approve_green    # QA-10: auto_approve_green | review_all
+  judge_sample_rate: 0.20              # production judging (MON-6); critical bots = 1.0
+  production_thresholds:               # 7-day pass rates for production-only judges (OBS-10)
+    retrieval_relevance: 0.80
+    platform_rules: 0.98
+    user_thumbs: 0.70
+  go_live_thresholds:                  # EVG-1 combined gate (ADM-4)
+    hit_at_1: 0.80
+    hit_at_3: 0.90
+    hit_at_5: 0.95
+    mrr: 0.85
+    correctness: 0.90
+    groundedness: 0.90
+    relevance: 0.90
+    citation_accuracy: 0.90
+    refusal_accuracy: 0.90
+    safety: 1.00                       # failures go to Reviewer override (EVG-3)
+  zero_failure_checks: [citation_mapping, leakage, sensitive_output]   # EVG-1
+  min_golden_questions: 50             # EVG-5: approved test questions required to go live
+  smoke_questions: 5                   # REL-11 post-promotion smoke test
+  readability:                         # QA-7 badge thresholds
+    green_min_confidence: 0.85
+    yellow_min_confidence: 0.65
+    min_chars_per_page: 200
+
+wizard:
+  business_functions: [Claims, Customer Service, Finance, HR, IT, Legal, Operations, Sales, Other]
+
+guardrails:
+  # Platform rules: on for every chatbot. Only admins can turn one off, per bot
+  # (Admin > Chatbots) or for everyone (delete it here). Owners can only add topics.
+  platform_rules:
+    legal_advice: Do not give legal advice.
+    medical_advice: Do not give medical advice.
+    tax_advice: Do not give individual tax advice.
+    investment_advice: Do not give investment advice.
+    coverage_advice: Do not advise whether an insurance policy covers a specific situation.
+    weapons: Do not explain how to make weapons.
+    cyber: Do not help with malicious cybersecurity activity.
+    drugs: Do not explain how to produce controlled substances.
+    crime: Do not help with criminal activity.
+    decisions: >-
+      Do not make high-stakes decisions (for example approving or denying a claim, hiring,
+      firing, credit or benefits). Share what the documents say and who decides.
+    authority: >-
+      Do not present yourself as an authority. You summarize company documents; you are not a
+      lawyer, doctor, adjuster or official, and you cannot make commitments for the company.
+
+git:
+  secret: _platform.git_token          # SEC-3: Unity Catalog secret <schema>.<name> in the bot catalog
+
+monitoring:                            # OBS-1..5, NFR targets
+  availability_target: 0.99            # over 15 minutes
+  latency_p50_s: 5
+  latency_p95_s: 12
+  latency_p99_s: 20
+  ttft_p95_s: 4                        # OBS-7: time to first token from the answer model
+  embed_daily_cap: 2000                # OBS-12: questions embedded per bot per day for drift
+  question_drift_alert: 0.15           # cosine distance from launch that triggers an owner alert
+  error_rate_max: 0.05                 # over 15 minutes
+  traffic_window: {start: "08:00 America/New_York", end: "18:00 America/Los_Angeles"}
+  traffic_low_ratio: 0.25              # vs same window, trailing 4 weeks
+  traffic_high_ratio: 4.0
+  expiry_lead_days: 30                 # DCL-2
+  probe_interval_seconds: 60           # cheap probe from the app, no LLM call
+  canary_interval_minutes: 60          # per-bot test question
+  alert_emails_mlops: []               # extra recipients for platform alerts
+
+pricing:                               # CST-7 variable cost (USD); set to your contract rates
+  answer_input_per_mtok: 1.00
+  answer_output_per_mtok: 5.00
+  judge_input_per_mtok: 1.00
+  judge_output_per_mtok: 5.00
+  parse_per_page: 0.01
+  budget_alert_levels: [0.70, 0.90, 1.00]   # CST-8
+
+retention_years: 7                     # ADM-6
+idle_days_before_flag: 45              # LCY-6
+soft_delete_retention_days: 90
+
+access:
+  admin_group: mlops                   # ADM-8
+  security_group: security             # raw logs + break-glass (PRV-1, IDN-2)
+  support_group: support               # redacted views only (PRV-1)
+  app_service_principal: ""            # filled at deploy time
+  jobs_run_as: ""                      # job run-as principal; sees unmasked text like the app (GOV-10)
+  trusted_callers: []                  # IDN-1: service principals allowed to assert end users
+  synthetic_callers: []                # service principals whose synthetic=true traffic is excluded from stats
+  identity_secret_scope: chatbot-factory-identity   # Security-only scope
+  identity_hash_key: pseudonym-hmac-key
+  identity_encryption_key: identity-fernet-key
+
+tags:                                  # CST-1
+  team: team
+  function: function
+  chatbot_name: chatbot_name
+  shared_value: shared-platform        # value used on shared infra (CST-4)
+
+ingestion:
+  auto_trigger: true                   # DOC-14: per-bot file-arrival trigger starts ingestion on upload
+  parse_extensions: [pdf, doc, docx, ppt, pptx, png, jpg, jpeg, tif, tiff]
+  text_extensions: [md, txt, html]
+  tabular_extensions: [xlsx, csv]      # fast follow (ADM-9)
+  enable_tabular: false
+  enable_sharepoint: false             # fast follow (ADM-9)
+  max_file_mb: 100
+  max_pages: 500
+  metadata_schema:                     # ING-10, passed to ai_prep_search 'schema'
+    doc_type: {type: string, description: "Kind of document, e.g. policy, procedure, FAQ, form"}
+    effective_date: {type: string, description: "Effective or publication date, ISO format if present"}
+    department: {type: string, description: "Owning department or business area"}
