@@ -4,6 +4,39 @@ resources:
       name: chatbot-factory
       description: "Build governed chatbots from your documents, no code required."
       source_code_path: ../
+      # Runtime config lives here instead of app.yaml so the catalog and environment follow
+      # the bundle target. opentelemetry-instrument exports app spans, logs and metrics to the
+      # UC tables under telemetry_export_destinations (Apps telemetry, APP-2); the OTLP endpoint
+      # variables are injected by Databricks.
+      config:
+        command: ["opentelemetry-instrument", "streamlit", "run", "app/app.py", "--server.headless", "true"]
+        env:
+          - name: OTEL_TRACES_SAMPLER
+            value: always_on
+          - name: FACTORY_CATALOG
+            value: ${var.catalog}
+          - name: FACTORY_ENV               # picks the traces experiment
+            value: ${bundle.target}
+          - name: FACTORY_APP_VERSION
+            value: "2.0.0"
+          - name: FACTORY_WAREHOUSE_ID
+            value_from: sql-warehouse
+          - name: MLFLOW_TRACING_SQL_WAREHOUSE_ID     # user feedback onto UC-stored traces (OBS-10)
+            value_from: sql-warehouse
+          - name: PROVISION_JOB_ID
+            value_from: provision-job
+          - name: INGEST_JOB_ID
+            value_from: ingest-job
+          - name: EVALS_JOB_ID
+            value_from: evals-job
+          - name: REINDEX_JOB_ID
+            value_from: reindex-job
+          - name: PROMOTE_JOB_ID
+            value_from: promote-job
+          - name: OPTIMIZE_JOB_ID
+            value_from: optimize-job
+          - name: MAINTENANCE_JOB_ID
+            value_from: maintenance-job
       usage_policy_id: ${var.usage_policy_id}
       compute_size: MEDIUM            # Medium/Large/XLarge; instance count (1-5, horizontal scaling) is set in the Apps UI
       telemetry_export_destinations:  # OpenTelemetry from the app itself into Unity Catalog (APP-2)

@@ -177,16 +177,13 @@ This tags every job, the app and the agent endpoint, so their cost shows up in
 Each chatbot's own monthly budget is set in the creation wizard. The factory enforces it from
 tagged usage, separately from these account budgets.
 
-### A11. Edit the app's environment file
+### A11. App catalog and environment (nothing to edit)
 
-Open `app.yaml` and check these two values for the environment you're deploying:
-
-```yaml
-  - name: FACTORY_CATALOG
-    value: chatbots_dev          # "chatbots" for prod
-  - name: FACTORY_ENV
-    value: dev                   # "prod" for prod
-```
+The app's command and environment variables are defined in `resources/app.yml` under `config:`.
+`FACTORY_CATALOG` comes from the bundle's `catalog` variable and `FACTORY_ENV` from the target
+name, so `-t dev` gives `chatbots_dev` / `dev` and `-t prod` gives `chatbots` / `prod`. To use a
+different catalog, change `catalog` for the target in `databricks.yml` or pass
+`--var catalog=<name>` on deploy.
 
 ### A12. Install the CLI
 
@@ -504,8 +501,8 @@ thumbs-down feedback. If its flags are mostly right, edit the policy in C2 and c
 
 1. In dev, check that the commit you're promoting passed:
    `databricks bundle run run_evals -t dev --params bot_id=all`.
-2. Repeat A5 (catalog `chatbots`), A9/A10 if they're per environment, A11 (`chatbots` / `prod`)
-   and Parts B–D with `-t prod`, using a service principal as the deploy identity.
+2. Repeat A5 (catalog `chatbots`), A9/A10 if they're per environment, and Parts B–D with
+   `-t prod`, using a service principal as the deploy identity.
 3. `deploy_agent` in prod refuses to run unless dev quality checks passed for this exact
    platform version and git commit.
 
