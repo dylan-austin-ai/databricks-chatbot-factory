@@ -6,4 +6,4 @@ Claude Design canvas, which supplies their runtime (`support.js`); opened direct
 they show unstyled markup. Edit the live canvas, then copy the files back here.
 
 The Streamlit app follows them through `app/ui.py` (colors, type, pills, tiles, stepper) and
-`.streamlit/config.toml` (theme). Screen copy and behavior come from `docs/UI_REQUIREMENTS.md`.
+`.streamlit/config.toml` (theme). Screen copy and behavior come from the UI requirements document, which is kept outside this repository.

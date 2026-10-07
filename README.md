@@ -39,7 +39,7 @@ failure. `releases`, `release_chunks` and `index_history` reconstruct the index 
 | `src/factory/platform_defaults.yml` | Defaults; MLOps edits them on the Admin page (stored in `platform_settings`, published to the runtime volume) |
 | `agent/agent.py`, `agent/deploy.py` | The single shared agent and its gated deploy |
 | `app/` | Streamlit app styled to the Claude Design screens (`app/ui.py`, `.streamlit/config.toml`) |
-| `docs/design/`, `docs/UI_REQUIREMENTS.md` | The design canvas files (17 screens) and the screen-by-screen UI spec |
+| `docs/design/` | The design canvas files (17 screens) |
 | `jobs/` | setup_platform, setup_observability, provision, ingest (+ per-bot file-arrival triggers), compare_strategies, run_evals (`mlflow.genai.evaluate`), promote, monitor, prod_judging, drift, optimize_prompt, reindex, git_sync, maintenance |
 | `sql/` | Control-plane DDL, per-bot DDL, dashboard views, ABAC governance, metric views, system-table cost views |
 | `resources/`, `databricks.yml` | Declarative Automation Bundle (dev and prod, direct deployment engine) |
