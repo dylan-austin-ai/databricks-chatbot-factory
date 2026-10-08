@@ -140,3 +140,21 @@ def test_no_sql_generates_ids_with_uuid_function():
     assert files
     offenders = [str(f.relative_to(root)) for f in files if "uuid()" in f.read_text()]
     assert offenders == []
+
+
+def test_metric_view_yaml_parses_with_backticked_names():
+    import yaml
+
+    stmts = render("metric_views.sql", catalog="`qa_chatbot_factory`", platform="`_platform`")
+    assert len(stmts) == 2
+    sources = []
+    for stmt in stmts:
+        head, body, tail = stmt.split("$$")
+        assert head.startswith("CREATE OR REPLACE VIEW `qa_chatbot_factory`.`_platform`.mv_chatbot_")
+        assert tail.strip() == ""
+        spec = yaml.safe_load(body)
+        assert spec["version"] == 1.1 and spec["fields"] and spec["measures"]
+        assert all(set(item) == {"name", "expr"} for item in spec["fields"] + spec["measures"])
+        sources.append(spec["source"])
+    assert sources == ["`qa_chatbot_factory`.`_platform`.request_log",
+                       "`qa_chatbot_factory`.`_platform`.judge_results"]

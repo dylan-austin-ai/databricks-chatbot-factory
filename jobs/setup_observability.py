@@ -24,7 +24,7 @@ from mlflow.genai.scorers import (ConversationCompleteness, Guidelines, Knowledg
                                   delete_scorer)
 
 try:
-    from mlflow.genai.scorers import set_databricks_monitoring_sql_warehouse_id  # UC trace storage
+    from mlflow.tracing import set_databricks_monitoring_sql_warehouse_id  # UC trace storage; MLflow >= 3.5
     set_databricks_monitoring_sql_warehouse_id(a.warehouse_id, experiment_id=exp.experiment_id)
 except Exception as e:  # noqa: BLE001
     print(f"Monitoring warehouse not set: {e}")

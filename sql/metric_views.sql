@@ -1,8 +1,10 @@
 -- Unity Catalog metric views (OBS-15): one governed definition of each chatbot KPI, used by the
 -- Genie agent, dashboards and SQL. Rendered by jobs/setup_observability.py.
+-- The source names are rendered with backticks, and a YAML value can't start with a backtick,
+-- so each source is double-quoted.
 CREATE OR REPLACE VIEW {catalog}.{platform}.mv_chatbot_usage WITH METRICS LANGUAGE YAML AS $$
 version: 1.1
-source: {catalog}.{platform}.request_log
+source: "{catalog}.{platform}.request_log"
 filter: channel = 'live' AND NOT synthetic
 fields:
   - name: Day
@@ -36,7 +38,7 @@ $$;
 
 CREATE OR REPLACE VIEW {catalog}.{platform}.mv_chatbot_quality WITH METRICS LANGUAGE YAML AS $$
 version: 1.1
-source: {catalog}.{platform}.judge_results
+source: "{catalog}.{platform}.judge_results"
 fields:
   - name: Day
     expr: DATE_TRUNC('DAY', source.ts)
