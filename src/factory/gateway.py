@@ -1,8 +1,8 @@
 """Unity Gateway (formerly AI Gateway) for answer models (ARC-8, GW-1..6).
 
 Answer models are Unity Gateway *model services*: Unity Catalog securables
-(<catalog>.<platform_schema>.<service>). Their routing and fallbacks are applied here through
-the REST API. The agent calls them through the OpenAI-compatible unified API at
+(<catalog>.<platform_schema>.<service>). They are created here through the REST API with
+their routing and fallbacks; an existing service is never modified. The agent calls them through the OpenAI-compatible unified API at
 <host>/ai-gateway/mlflow/v1 with model="<catalog.schema.name>".
 
 Rate limits, the inference table and guardrail *service policies* (with Enforce/Log mode) are
@@ -59,19 +59,46 @@ def service_config(settings, label: str) -> dict:
     }
 
 
+def _routed_models(body: dict) -> list[str]:
+    """Models a service body routes to, primary first then fallbacks, wherever they are nested."""
+    found: list[str] = []
+
+    def walk(node) -> None:
+        if isinstance(node, dict):
+            model = (node.get("pay_per_token_config") or {}).get("model")
+            if model:
+                found.append(model)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(body)
+    return found
+
+
 def ensure_model_service(w, settings, label: str) -> str:
-    """Create the model service, or update only its routing; returns its full name."""
+    """Create the model service if it doesn't exist; returns its full name.
+
+    An existing service is left untouched: the API can't update routing yet (UpdateModelService
+    rejects config.routing), and rate limits, the inference table and policies are set in the
+    UI. If its routing differs from the settings, that is printed so it can be changed there.
+    """
     full = service_name(settings, label)
     body = service_config(settings, label)
     try:
-        w.api_client.do("GET", f"{API}/{full}")
+        existing = w.api_client.do("GET", f"{API}/{full}")
     except NotFound:  # the SDK's 404, including ResourceDoesNotExist -> create
         catalog, schema, sid = full.split(".")
         w.api_client.do("POST", API, query={"parent": f"schemas/{catalog}.{schema}", "model_service_id": sid},
                         body=body)
         return full
-    w.api_client.do("PATCH", f"{API}/{full}", query={"update_mask": "comment,config.routing"},
-                    body=body)  # the mask leaves UI-set rate limits, inference table and policies alone
+    wanted, current = _routed_models(body), _routed_models(existing or {})
+    if current and current != wanted:
+        print(f"WARNING: model service {full} routes to {current} but the settings say {wanted}. "
+              "The API can't change routing on an existing service: edit it in the Unity Gateway UI, "
+              "or delete the service and rerun this job (its UI settings must then be re-entered).")
     return full
 
 

@@ -104,8 +104,9 @@ index_name = ensure_shared_index(vector_client(), s)
 step(4, "Runtime settings file the agent reads at startup")
 cp.publish(None)
 
-# Answer models are Unity Gateway model services (GW-1): routing and fallbacks are (re)applied on
-# every deploy; rate limits, inference table and policies are set in the UI (docs/SETUP.md).
+# Answer models are Unity Gateway model services (GW-1): created here with their routing and
+# fallbacks if missing, and otherwise left alone. Rate limits, the inference table and policies
+# are set in the UI (docs/SETUP.md, Part C).
 step(5, "Answer model services")
 for label in labels(s):
     print("Model service ready:", ensure_model_service(w, s, label))

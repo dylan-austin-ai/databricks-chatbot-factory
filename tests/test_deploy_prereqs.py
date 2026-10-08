@@ -104,14 +104,14 @@ def test_preflight_reports_every_missing_piece_together(settings):
 class _GatewayApi:
     """Model-service REST stand-in: GET raises `missing` until the service is created."""
 
-    def __init__(self, missing=None):
-        self.calls, self.missing = [], missing
+    def __init__(self, missing=None, existing=None):
+        self.calls, self.missing, self.existing = [], missing, existing or {}
 
     def do(self, method, path, **kwargs):
         self.calls.append(method)
         if method == "GET" and self.missing is not None:
             raise self.missing
-        return {}
+        return self.existing
 
 
 def test_model_service_is_created_on_sdk_not_found(settings):
@@ -126,12 +126,34 @@ def test_model_service_is_created_on_sdk_not_found(settings):
         assert name == "chatbots_test._platform.answer_haiku"
 
 
-def test_model_service_is_updated_when_it_exists(settings):
+def test_existing_model_service_is_left_untouched(settings, capsys):
+    from factory.gateway import ensure_model_service, service_config
+
+    api = _GatewayApi(existing=service_config(settings, "haiku"))
+    assert ensure_model_service(SimpleNamespace(api_client=api), settings, "haiku") \
+        == "chatbots_test._platform.answer_haiku"
+    assert api.calls == ["GET"]
+    assert capsys.readouterr().out == ""
+
+
+def test_existing_model_service_with_different_routing_warns(settings, capsys):
+    from factory.gateway import ensure_model_service, service_config
+
+    other = service_config(settings, "haiku")
+    other["config"]["routing"]["destinations"][0]["pay_per_token_config"]["model"] = "models/system.ai.other"
+    api = _GatewayApi(existing={"name": "x", **other})
+    ensure_model_service(SimpleNamespace(api_client=api), settings, "haiku")
+    assert api.calls == ["GET"]
+    out = capsys.readouterr().out
+    assert "WARNING" in out and "models/system.ai.other" in out
+
+
+def test_existing_model_service_with_unknown_shape_does_not_warn(settings, capsys):
     from factory.gateway import ensure_model_service
 
-    api = _GatewayApi()
+    api = _GatewayApi(existing={"name": "x"})
     ensure_model_service(SimpleNamespace(api_client=api), settings, "haiku")
-    assert api.calls == ["GET", "PATCH"]
+    assert api.calls == ["GET"] and capsys.readouterr().out == ""
 
 
 def test_model_service_other_errors_are_not_swallowed(settings):

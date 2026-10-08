@@ -557,8 +557,10 @@ Scheduled jobs that run on their own:
 The code has unit tests but hasn't run against a live workspace. Watch for these in the B2/B3
 output and the first smoke test:
 
-- The model service REST create and PATCH (`update_mask=comment,config.routing` must leave the
-  UI settings from C2 alone). Check C2's settings are still there after rerunning `deploy_agent`.
+- The model service REST create. `deploy_agent` never modifies a service that already exists
+  (the API can't update routing yet), so C2's settings survive reruns. To change a service's
+  models later, edit its routing in the Unity Gateway UI; the job prints a warning when the
+  routing differs from `models.answer_services` in the settings.
 - The blocked-reply shape (`databricks_service_policy`) for streaming and non-streaming answers.
 - Whether the evaluator inference table's `request_id` matches the answer service's, which
   `v_guardrail_verdicts` joins on.
