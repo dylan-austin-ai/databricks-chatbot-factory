@@ -15,7 +15,7 @@ a = args("catalog", "environment", "warehouse_id")
 spark, sql, settings, cp, w = context(a.catalog)
 s = settings
 mlflow.set_tracking_uri("databricks")
-exp = mlflow.set_experiment(f"/Shared/chatbot-factory/{a.environment or 'dev'}/traces")
+exp = mlflow.set_experiment(f"/Shared/chatbot-factory/{a.environment or 'qa'}/traces")
 
 # 1. Production scorers ---------------------------------------------------------------------
 from mlflow.genai.scorers import (ConversationCompleteness, Guidelines, KnowledgeRetention,  # noqa: E402

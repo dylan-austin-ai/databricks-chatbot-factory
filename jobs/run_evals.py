@@ -1,7 +1,7 @@
 """Golden-set evaluation on mlflow.genai.evaluate and the combined gate (EVG-1..5, EVL-6, CAS-4, JDG-1..4).
 
 --bot_id X       one bot (candidate release by default; after doc/config changes, EVL-6)
---bot_id all     every non-draft bot (platform release gate in dev, CAS-4)
+--bot_id all     every non-draft bot (platform release gate in QA, CAS-4)
 --channel live   evaluate the live release instead (post-promotion smoke test, REL-11)
 --limit N        only the first N approved questions (smoke test)
 
@@ -41,7 +41,7 @@ min_cases = int(settings.get("quality.min_golden_questions", 50))
 rules = list(settings.get("guardrails.platform_rules", {}).values())
 git_commit = os.environ.get("FACTORY_GIT_COMMIT", "")
 mlflow.set_tracking_uri("databricks")
-mlflow.set_experiment(f"/Shared/chatbot-factory/{a.environment or 'dev'}/traces")
+mlflow.set_experiment(f"/Shared/chatbot-factory/{a.environment or 'qa'}/traces")
 
 BUILTINS = {"correctness": (Correctness, {}), "groundedness": (RetrievalGroundedness, {}),
             "retrieval_relevance": (RetrievalRelevance, {}), "retrieval_sufficiency": (RetrievalSufficiency, {}),

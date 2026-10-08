@@ -29,7 +29,7 @@ Changes stage a candidate, the combined gate runs (Hit@1 ≥ .80, Hit@3 ≥ .90,
 MRR ≥ .85, judges ≥ 90%, zero deterministic failures; unsafe flags go to the Reviewer), the
 Reviewer approves, the promote job flips rows to live, syncs, smoke-tests and auto-rolls back on
 failure. `releases`, `release_chunks` and `index_history` reconstruct the index for any day
-(`Releases.index_as_of_sql`). Platform code moves dev → prod as the exact git commit.
+(`Releases.index_as_of_sql`). Platform code moves QA → prod as the exact git commit.
 
 ## Layout
 
@@ -42,8 +42,8 @@ failure. `releases`, `release_chunks` and `index_history` reconstruct the index 
 | `docs/design/` | The design canvas files (17 screens) |
 | `jobs/` | setup_platform, setup_observability, provision, ingest (+ per-bot file-arrival triggers), compare_strategies, run_evals (`mlflow.genai.evaluate`), promote, monitor, prod_judging, drift, optimize_prompt, reindex, git_sync, maintenance |
 | `sql/` | Control-plane DDL, per-bot DDL, dashboard views, ABAC governance, metric views, system-table cost views |
-| `resources/`, `databricks.yml` | Declarative Automation Bundle (dev and prod, direct deployment engine) |
-| `tests/` | 112 unit tests for the pure logic |
+| `resources/`, `databricks.yml` | Declarative Automation Bundle (qa and prod targets, direct deployment engine) |
+| `tests/` | 125 unit tests for the pure logic |
 
 ## Prerequisites
 
@@ -73,19 +73,26 @@ Summary:
 9. Databricks CLI ≥ 0.279 (direct deployment engine), MLflow ≥ 3.14 (UC traces).
 10. Previews and admin settings (Admin › Setup checklist tracks them): MLflow Review Queues;
     dashboard embedding allowed for `*.databricksapps.com`; unified Unity Gateway trace table;
-    a serverless usage policy (`--var usage_policy_id=...`); app instance count for scaling.
+    a serverless usage policy per environment, tagged `component` and `environment`; app instance
+    count for scaling.
 
 ## Deploy
 
+Targets are `qa` (catalog `qa_chatbot_factory`) and `prod` (catalog `prod_chatbot_factory`), each in its own
+workspace. Workspace identifiers (warehouse, agent service principal, usage policy) are kept out
+of the repository in `.databricks/bundle/<target>/variable-overrides.json`; copy
+`variable-overrides.example.json` there and fill it in (docs/SETUP.md, A11).
+
 ```bash
-databricks bundle deploy -t dev --var warehouse_id=<id> --var agent_principal=<app-id>
-databricks bundle run setup_platform -t dev
-databricks bundle run deploy_agent -t dev
-databricks bundle run chatbot_factory -t dev
+databricks bundle deploy -t qa
+databricks bundle run setup_platform -t qa
+databricks bundle run deploy_agent -t qa
+databricks bundle run chatbot_factory -t qa
 ```
 
-Prod: run `run_evals bot_id=all` in dev on the commit, then deploy the same commit with
-`-t prod`. `deploy_agent` refuses unless dev evals passed for that platform version and commit.
+Prod: run `run_evals bot_id=all` in QA on the commit, then deploy the same commit with
+`-t prod`. `deploy_agent` refuses unless every live QA chatbot, and at least one, passed its
+quality check for that platform version and commit.
 Existing prod resources can be adopted with `databricks bundle deployment bind`.
 
 ## Local development

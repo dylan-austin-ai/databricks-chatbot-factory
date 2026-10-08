@@ -25,13 +25,18 @@ def test_ddl_renders(settings):
     bot = render("bot_schema_ddl.sql", catalog="`c`", schema="`b`", display_name="B")
     assert any("CREATE VOLUME IF NOT EXISTS `c`.`b`.docs" in s for s in bot)
     views = render("dashboard_views.sql", catalog="`c`", platform="`_platform`",
-                   tag_chatbot="chatbot_name", shared_value="shared-platform")
+                   tag_chatbot="chatbot_name", shared_value="shared-platform",
+                   environment="qa", workspace_id="123")
     assert any("v_observability_daily" in v for v in views)
+    assert any("v_cost_by_tag" in v and "u.workspace_id = '123'" in v for v in views)
     gov = render("governance.sql", catalog="`c`", platform="`p`", security="`security`", admins="`mlops`", extra=", `app-sp`")
     assert any("CREATE OR REPLACE POLICY mask_pii_text" in g and "EXCEPT `security`, `mlops`" in g for g in gov)
     assert any("ai_mask(" in g for g in gov)
     assert len(render("metric_views.sql", catalog="`c`", platform="`p`")) == 2
-    assert render("system_views.sql", catalog="`c`", platform="`p`", tag_chatbot="chatbot_name")
+    system = render("system_views.sql", catalog="`c`", platform="`p`", tag_chatbot="chatbot_name",
+                    environment="qa", workspace_id="123")
+    assert any("request_tags['environment'] = 'qa'" in v for v in system)
+    assert any("system.query.history" in v and "workspace_id = '123'" in v for v in system)
 
 
 def test_pipeline_sql_shapes(settings):
@@ -105,7 +110,7 @@ def test_every_rendered_statement_is_whole(settings):
 
     values = dict(catalog="`c`", platform="`_platform`", schema="`b`", display_name="B",
                   tag_chatbot="chatbot_name", shared_value="shared-platform",
-                  security="`security`", admins="`mlops`", extra="")
+                  security="`security`", admins="`mlops`", extra="", environment="qa", workspace_id="123")
     starts = re.compile(r"^(CREATE|ALTER|GRANT|REVOKE|DROP|INSERT|MERGE|COMMENT|SET|WITH|SELECT|REFRESH)\b", re.I)
     for name in ("controlplane_ddl.sql", "bot_schema_ddl.sql", "dashboard_views.sql", "governance.sql",
                  "system_views.sql", "metric_views.sql"):
@@ -117,17 +122,39 @@ def test_every_rendered_statement_is_whole(settings):
 
 
 def test_platform_release_insert_uses_select_and_a_generated_id(settings, fake_sql):
+    import json
     import uuid
 
     from factory.controlplane import ControlPlane
 
-    rid = ControlPlane(fake_sql, settings).record_platform_release("1.0.0", "abc123", "dev", "7", True, "deployer")
+    rid = ControlPlane(fake_sql, settings).record_platform_release(
+        "1.0.0", "abc123", "qa", "7", True, "deployer@corp.com", git_branch="main",
+        git_origin="git@github.com:org/repo.git", config={"catalog": "chatbots_test", "endpoint": "chatbot-agent"})
     (stmt, params), = fake_sql.statements
     assert stmt.startswith("INSERT INTO chatbots_test._platform.platform_releases (release_id, platform_version,")
-    assert " SELECT :id, :pv, :gc, :env, :mv, CAST(:gate AS BOOLEAN), :who, current_timestamp()" in stmt
+    assert " SELECT :id, :pv, :gc, :env, :mv, CAST(:gate AS BOOLEAN), :who, current_timestamp(), " in stmt
     assert "VALUES" not in stmt and "uuid()" not in stmt
-    assert uuid.UUID(rid) and params == {"id": rid, "pv": "1.0.0", "gc": "abc123", "env": "dev",
-                                         "mv": "7", "gate": True, "who": "deployer"}
+    assert uuid.UUID(rid) and params["id"] == rid
+    assert (params["gc"], params["env"], params["who"], params["branch"]) == ("abc123", "qa", "deployer@corp.com", "main")
+    config = json.loads(params["config"])
+    assert config["catalog"] == "chatbots_test" and len(config["settings_sha256"]) == 64
+
+
+def test_control_plane_adds_columns_missing_from_existing_tables(settings):
+    from conftest import FakeSql
+    from factory.controlplane import ControlPlane
+
+    old_table = [{"col_name": c} for c in ("release_id", "platform_version", "git_commit", "environment",
+                                           "model_version", "gate_enforced", "deployed_by", "ts", "git_branch")]
+    sql = FakeSql(answers=[(r"DESCRIBE TABLE .*platform_releases", old_table)])
+    ControlPlane(sql, settings).ensure()
+    alters = sql.find(r"^ALTER TABLE chatbots_test\._platform\.platform_releases ADD COLUMNS")
+    assert alters == ["ALTER TABLE chatbots_test._platform.platform_releases ADD COLUMNS "
+                      "(git_origin STRING, config_json STRING)"]
+
+    current = FakeSql(answers=[(r"DESCRIBE TABLE", old_table + [{"col_name": "git_origin"}, {"col_name": "config_json"}])])
+    ControlPlane(current, settings).ensure()
+    assert current.find(r"ADD COLUMNS") == []
 
 
 def test_no_sql_generates_ids_with_uuid_function():

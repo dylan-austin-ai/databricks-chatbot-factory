@@ -1,10 +1,14 @@
-# Chatbot Factory: Declarative Automation Bundle, formerly Asset Bundle (ADM-1, REL-7: dev and prod for platform code;
+# Chatbot Factory: Declarative Automation Bundle, formerly Asset Bundle (ADM-1, REL-7: qa and prod for platform code;
 # bots themselves are tested as candidate releases inside prod, REL-1).
 # Existing resources can be bound instead of recreated (REL-11), e.g.:
 #   databricks bundle deployment bind deploy_agent <job_id> -t prod
-#   databricks bundle deploy -t dev
-#   databricks bundle run setup_platform -t dev
-#   databricks bundle run deploy_agent -t dev
+#   databricks bundle deploy -t qa
+#   databricks bundle run setup_platform -t qa
+#   databricks bundle run deploy_agent -t qa
+#
+# Workspace-specific identifiers (warehouse_id, agent_principal, usage_policy_id) are not stored
+# in this file. Put them in .databricks/bundle/<target>/variable-overrides.json, which is local
+# to your machine and ignored by git; variable-overrides.example.json shows the shape.
 bundle:
   name: chatbot-factory
   engine: direct            # Go-SDK deployment engine (Terraform engine is being retired); CLI >= 0.279
@@ -16,25 +20,36 @@ variables:
   catalog:
     description: Predefined catalog that holds one schema per chatbot (PRV-1)
   warehouse_id:
-    description: SQL warehouse for app queries and the agent's UC access checks
+    description: >-
+      SQL warehouse for app queries and the agent's UC access checks. Required; set it per target
+      in .databricks/bundle/<target>/variable-overrides.json
+  agent_principal:
+    description: >-
+      Application ID of the dedicated agent service principal (reads runtime, writes logs).
+      Required; set it per target in .databricks/bundle/<target>/variable-overrides.json
+  usage_policy_id:
+    description: >-
+      Serverless usage policy (account console > Usage > Usage policies) whose tags land in
+      system.billing.usage.custom_tags for every job, the app, the agent endpoint and the AI
+      Search endpoint (CST-11). One policy per environment, tagged component=chatbot-factory and
+      environment=<target>. Set it per target in the local variable-overrides.json
+    default: ""
   admin_group:
     description: MLOps group with admin rights (ADM-8)
     default: mlops
   agent_endpoint:
     default: chatbot-agent
-  dev_catalog:
-    description: Catalog of the dev environment, read by the prod release gate (CAS-4)
-    default: chatbots_dev
+  agent_sp_scope:
+    description: Secret scope in this workspace holding the agent service principal's credentials
+    default: chatbot-factory
+  identity_scope:
+    description: Security-only secret scope in this workspace holding the identity keys (IDN-2)
+    default: chatbot-factory-identity
+  qa_catalog:
+    description: Catalog of the QA environment, read by the prod release gate (CAS-4)
+    default: qa_chatbot_factory
   release_gate:
     default: "false"
-  agent_principal:
-    description: Application ID of the dedicated agent service principal (reads runtime, writes logs)
-    default: ""
-  usage_policy_id:
-    description: >-
-      Serverless usage policy (account console > Usage > Usage policies) whose tags land in
-      system.billing.usage.custom_tags for every job, the app and the agent endpoint (CST-11)
-    default: ""
 
 sync:
   exclude:
@@ -42,17 +57,23 @@ sync:
     - "**/__pycache__/**"
 
 targets:
-  dev:
+  qa:
     mode: development
     default: true
+    presets:
+      tags:
+        environment: qa       # on every job, next to component (cost attribution, CST-11)
     variables:
-      catalog: chatbots_dev
+      catalog: qa_chatbot_factory
       release_gate: "false"
 
   prod:
     mode: production
+    presets:
+      tags:
+        environment: prod
     variables:
-      catalog: chatbots
+      catalog: prod_chatbot_factory
       release_gate: "true"
     permissions:
       - group_name: ${var.admin_group}

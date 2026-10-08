@@ -9,10 +9,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-# The bundle passes the deployed git commit to every task (REL-7, REL-8).
+# The bundle passes the deployed git commit and the environment (bundle target) to every task
+# (REL-7, REL-8). Settings read the environment from FACTORY_ENV.
 for _arg in sys.argv:
-    if _arg.startswith("--git_commit=") and _arg.split("=", 1)[1]:
-        os.environ["FACTORY_GIT_COMMIT"] = _arg.split("=", 1)[1]
+    for _flag, _var in (("--git_commit=", "FACTORY_GIT_COMMIT"), ("--environment=", "FACTORY_ENV")):
+        if _arg.startswith(_flag) and _arg.split("=", 1)[1]:
+            os.environ[_var] = _arg.split("=", 1)[1]
 
 from factory.config import PlatformSettings  # noqa: E402
 from factory.controlplane import ControlPlane  # noqa: E402

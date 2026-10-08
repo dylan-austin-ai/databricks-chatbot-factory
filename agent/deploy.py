@@ -1,9 +1,10 @@
 """Log, register and deploy the shared agent (ARC-1, CAS-2..6, ADM-1).
 
-dev:  python deploy.py --catalog chatbots_dev --warehouse_id ... --endpoint chatbot-agent
+qa:   python deploy.py --catalog qa_chatbot_factory --warehouse_id ... --endpoint chatbot-agent
 prod: same with --require_gate true: refuses to deploy unless every live bot's
-      golden set passed in dev against this platform version AND this exact git
-      commit (CAS-4, REL-7). Every deployment is recorded in platform_releases.
+      golden set passed in QA against this platform version AND this exact git
+      commit, and at least one QA chatbot has passed (CAS-4, REL-7). Every
+      deployment is recorded in platform_releases with its source and configuration.
 
 Endpoint is always-on (no scale-to-zero) so non-technical users never wait on a
 cold start.
@@ -12,7 +13,8 @@ The script runs as numbered steps. It first checks what it can't build (catalog,
 model endpoints, secret scopes) and stops with the full list if anything is missing. It then
 builds what it depends on, in order, waiting for each to be ready: control plane, AI Search
 endpoint and shared index, runtime settings, model services, traces experiment, prompt.
-Only then is the agent logged and deployed. Every step is safe to re-run.
+Only then is the agent logged and deployed. It waits for the endpoint to serve the new version
+before recording the release and removing the versions it replaced. Every step is safe to re-run.
 
 Observability (OBS-6..12): every request is an MLflow trace stored in Unity Catalog Delta
 tables (<catalog>._platform.traces_otel_*) behind one MLflow experiment, so traces are
@@ -21,7 +23,6 @@ the MLflow Prompt Registry. Answer models are Unity Gateway model services with 
 inference tables; usage lands in system.ai_gateway.usage tagged per bot (GW-1..6).
 """
 import argparse
-import getpass
 import inspect
 import os
 import sys
@@ -59,9 +60,11 @@ p.add_argument("--catalog", default="chatbots")
 p.add_argument("--warehouse_id", required=True)
 p.add_argument("--endpoint", default="chatbot-agent")
 p.add_argument("--require_gate", default="false")
-p.add_argument("--dev_catalog", default="")
+p.add_argument("--qa_catalog", default="")
 p.add_argument("--git_commit", default="")
-p.add_argument("--environment", default="dev")
+p.add_argument("--git_branch", default="")
+p.add_argument("--git_origin", default="")
+p.add_argument("--environment", default="qa")
 p.add_argument("--identity_scope", default="chatbot-factory-identity")
 p.add_argument("--agent_sp_scope", default="chatbot-factory")
 p.add_argument("--agent_principal", default="")
@@ -71,11 +74,13 @@ a, _ = p.parse_known_args()
 # Shared job setup (Spark, settings including the admin overrides, control plane, SDK client).
 sys.path.insert(0, str(ROOT / "jobs"))
 from _bootstrap import context, vector_client  # noqa: E402
-from factory.gateway import ensure_model_service, labels, ui_checklist  # noqa: E402
-from factory.preflight import deploy_problems  # noqa: E402
+from factory.gateway import (ensure_model_service, grant_execute, labels, logging_problems,  # noqa: E402
+                             ui_checklist)
+from factory.preflight import deploy_problems, gate_problems  # noqa: E402
 from factory.provisioning import ensure_shared_index, grant_agent_access  # noqa: E402
+from factory.serving import remove_old_versions, wait_until_serving  # noqa: E402
 
-STEPS = 10
+STEPS = 12
 
 
 def step(n: int, what: str) -> None:
@@ -100,17 +105,27 @@ cp.ensure()  # idempotent; shared_chunks and platform_releases are used below
 grant_agent_access(sql, s, a.agent_principal)
 
 step(3, "AI Search endpoint and shared index (the first run waits for provisioning)")
-index_name = ensure_shared_index(vector_client(), s)
+index_name = ensure_shared_index(vector_client(), s, usage_policy_id=a.usage_policy_id)
 
 step(4, "Runtime settings file the agent reads at startup")
 cp.publish(None)
 
 # Answer models are Unity Gateway model services (GW-1): created here with their routing and
-# fallbacks if missing, and otherwise left alone. Rate limits, the inference table and policies
-# are set in the UI (docs/SETUP.md, Part C).
-step(5, "Answer model services")
+# fallbacks if missing, and otherwise left alone. EXECUTE is granted here; rate limits, the
+# inference table and policies can only be set in the UI (docs/SETUP.md, Part C).
+step(5, "Answer model services and who may call them")
+callers = [x for x in (a.agent_principal, s.get("access.admin_group"), s.get("access.jobs_run_as")) if x]
+execute_granted = set()
 for label in labels(s):
-    print("Model service ready:", ensure_model_service(w, s, label))
+    service = ensure_model_service(w, s, label)
+    print("Model service ready:", service)
+    # The agent calls the answer services; only MLOps needs the guardrail evaluator.
+    who = [s.get("access.admin_group")] if label == "evaluator" else callers
+    try:
+        execute_granted.add(grant_execute(w, s, label, [x for x in who if x]))
+        print(f"  EXECUTE granted to: {', '.join(x for x in who if x)}")
+    except Exception as e:  # noqa: BLE001 - the agent is denied until this is granted by hand
+        print(f"  WARNING: EXECUTE not granted on {service}: {str(e)[:200]}. Grant it in the UI (docs/SETUP.md, C2).")
 
 # Traces in Unity Catalog, viewed through one MLflow experiment (OBS-9). The binding is made
 # once, when the experiment is created, and can't be changed later.
@@ -146,20 +161,26 @@ if code_changed:
         mlflow.genai.set_prompt_alias(prompt_name, alias, version=prompt.version)
 
 if a.require_gate == "true":
-    step(8, "Release gate: dev quality checks for this version and commit")
-    dev = a.dev_catalog or a.catalog
-    failed = spark.sql(f"""
-        WITH latest AS (
-          SELECT bot_id, passed FROM `{dev}`.`{s.platform_schema}`.eval_runs
-          WHERE platform_version = '{PLATFORM_VERSION}' AND git_commit = '{a.git_commit}'
-          QUALIFY ROW_NUMBER() OVER (PARTITION BY bot_id ORDER BY ts DESC) = 1)
-        SELECT b.bot_id FROM `{dev}`.`{s.platform_schema}`.bots b
-        LEFT JOIN latest l USING (bot_id)
-        WHERE b.state = 'live' AND b.deleted_at IS NULL
-          AND (b.platform_pin IS NULL OR b.pin_expires_at < current_timestamp())
-          AND NOT coalesce(l.passed, false)""").collect()
-    if failed:
-        raise SystemExit("Release gate failed (CAS-4) for: " + ", ".join(r.bot_id for r in failed))
+    step(8, "Release gate: QA quality checks for this version and commit")
+    qa = a.qa_catalog or a.catalog
+    try:
+        bots = [r.asDict() for r in spark.sql(f"""
+            WITH latest AS (
+              SELECT bot_id, passed FROM `{qa}`.`{s.platform_schema}`.eval_runs
+              WHERE platform_version = :pv AND git_commit = :gc
+              QUALIFY ROW_NUMBER() OVER (PARTITION BY bot_id ORDER BY ts DESC) = 1)
+            SELECT b.bot_id, coalesce(l.passed, false) AS passed,
+                   b.state = 'live' AND (b.platform_pin IS NULL OR b.pin_expires_at < current_timestamp())
+                     AS required
+            FROM `{qa}`.`{s.platform_schema}`.bots b
+            LEFT JOIN latest l USING (bot_id)
+            WHERE b.deleted_at IS NULL""", args={"pv": PLATFORM_VERSION, "gc": a.git_commit}).collect()]
+    except Exception as e:  # noqa: BLE001 - no evidence means no deploy
+        raise SystemExit(f"Release gate failed (CAS-4): could not read QA results from catalog '{qa}'. "
+                         f"It must be readable from this workspace. {str(e)[:300]}")
+    blockers = gate_problems(bots, PLATFORM_VERSION, a.git_commit)
+    if blockers:
+        raise SystemExit("Release gate failed (CAS-4):\n  - " + "\n  - ".join(blockers))
 else:
     step(8, "Release gate: not required for this target")
 
@@ -186,7 +207,8 @@ with mlflow.start_run(run_name=f"chatbot_agent_{PLATFORM_VERSION}"):
             "databricks-ai-bridge>=0.6", "openai>=1.40", "pyyaml>=6", "cryptography>=42",
         ] + (["databricks-agentbricks"] if s.get("history.store") == "managed_sessions" else []),
         registered_model_name=model_name,
-        metadata={"platform_version": PLATFORM_VERSION},
+        metadata={"platform_version": PLATFORM_VERSION, "environment": a.environment,
+                  "git_commit": a.git_commit},
     )
 
 from databricks import agents  # noqa: E402
@@ -210,7 +232,8 @@ deploy_kwargs = dict(
         "DATABRICKS_CLIENT_SECRET": f"{{{{secrets/{a.agent_sp_scope}/agent-sp-client-secret}}}}",
     },
     tags={s.get("tags.chatbot_name"): s.get("tags.shared_value"), "component": "chatbot-factory",
-          "platform_version": PLATFORM_VERSION},
+          "environment": a.environment, "platform_version": PLATFORM_VERSION,
+          **({"git_commit": a.git_commit} if a.git_commit else {})},
 )
 if a.usage_policy_id:  # serverless usage policy tags on the endpoint's billing (CST-11)
     # usage_policy_id replaced budget_policy_id. agents.deploy ignores unknown keywords instead
@@ -221,10 +244,14 @@ agents.deploy(model_name, version, **deploy_kwargs)
 from mlflow import MlflowClient  # noqa: E402
 MlflowClient().set_registered_model_alias(model_name, "champion", version)
 
+# Don't record or clean up anything for a deployment that didn't take.
+step(10, "Waiting for the endpoint to serve the new version")
+wait_until_serving(w, a.endpoint, model_name, version)
+
 # Trace tables (OBS-9): explicit grants (ALL PRIVILEGES isn't enough for trace writes).
 # Writers: the agent (spans) and the app (user feedback). Readers: MLOps and Security only,
 # because traces hold raw questions and answers (PRV-1). Support uses redacted views.
-step(10, "Trace table grants and the platform release record")
+step(11, "Trace table grants and the platform release record")
 writers = [x for x in (a.agent_principal, s.get("access.app_service_principal")) if x]
 readers = [s.get("access.admin_group"), s.get("access.security_group")]
 for t in ("spans", "annotations", "logs", "metrics"):
@@ -238,11 +265,27 @@ for t in ("spans", "annotations", "logs", "metrics"):
     for who in readers:
         spark.sql(f"GRANT SELECT ON TABLE {table} TO `{who}`")
 
-# Platform release record (REL-7, REL-8)
-cp.record_platform_release(PLATFORM_VERSION, a.git_commit, a.environment, str(version),
-                           a.require_gate == "true", getpass.getuser())
+# Platform release record (REL-7, REL-8): who deployed what source with which configuration
+cp.record_platform_release(
+    PLATFORM_VERSION, a.git_commit, a.environment, str(version), a.require_gate == "true",
+    w.current_user.me().user_name, git_branch=a.git_branch, git_origin=a.git_origin,
+    config={"catalog": a.catalog, "workspace_id": str(w.get_workspace_id()), "endpoint": a.endpoint,
+            "model": model_name, "warehouse_id": a.warehouse_id, "usage_policy_id": a.usage_policy_id,
+            "agent_principal": a.agent_principal, "identity_scope": a.identity_scope,
+            "agent_sp_scope": a.agent_sp_scope, "experiment_id": experiment.experiment_id,
+            "prompt": prompt_name, "shared_index": index_name, "qa_catalog": a.qa_catalog})
 print(f"Deployed {model_name} v{version} to {a.endpoint} (platform {PLATFORM_VERSION})")
 
+# Every served version keeps compute running and the endpoint holds at most 15, so drop the
+# versions this one replaced now that it is serving.
+step(12, "Removing the agent versions this one replaced")
+removed = remove_old_versions(w, agents, a.endpoint, model_name, version)
+print("Removed versions:", ", ".join(removed) if removed else "none")
+
+# What can only be set, or could not be set, from here.
+todo = [i for i in ui_checklist(s) if not (i["setting"] == "Permission" and i["service"] in execute_granted)]
 print("Set these in the Unity Gateway UI if not already set (docs/SETUP.md, Part C):")
-for item in ui_checklist(s):
+for item in todo:
     print(f"  {item['service']}: {item['setting']} = {item['value']}")
+for problem in logging_problems(s, spark.catalog.tableExists):
+    print(f"WARNING: inference logging not verified. {problem}")

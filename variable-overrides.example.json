@@ -1,0 +1,5 @@
+{
+  "warehouse_id": "<SQL warehouse ID, setup step A4>",
+  "agent_principal": "<application ID of the agent service principal, setup step A6>",
+  "usage_policy_id": "<serverless usage policy ID for this environment, setup step A9; \"\" if none>"
+}

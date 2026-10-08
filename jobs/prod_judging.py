@@ -25,7 +25,7 @@ a = args("catalog", "lookback_hours", "environment")
 spark, sql, settings, cp, w = context(a.catalog)
 hours = int(a.lookback_hours or 24)
 mlflow.set_tracking_uri("databricks")
-exp = mlflow.set_experiment(f"/Shared/chatbot-factory/{a.environment or 'dev'}/traces")
+exp = mlflow.set_experiment(f"/Shared/chatbot-factory/{a.environment or 'qa'}/traces")
 since_ms = int((time.time() - hours * 3600) * 1000)
 today = dt.date.today()
 

@@ -13,7 +13,7 @@ from factory.controlplane import render
 from factory.provisioning import ensure_shared_index, grant_agent_access, principal
 from factory.sql import ident
 
-a = args("catalog", "agent_principal")
+a = args("catalog", "agent_principal", "usage_policy_id")
 spark, sql, settings, cp, w = context(a.catalog)
 s = settings
 sql.execute(f"CREATE CATALOG IF NOT EXISTS {ident(s.catalog)}")
@@ -47,7 +47,8 @@ grant_agent_access(sql, s, a.agent_principal)
 # on its own: features an account hasn't enabled are reported, not fatal.
 fmt = dict(catalog=ident(s.catalog), platform=ident(s.platform_schema), security=principal(security),
            admins=principal(admins), tag_chatbot=s.get("tags.chatbot_name"),
-           extra="".join(f", {principal(p)}" for p in (app_sp, s.get("access.jobs_run_as")) if p))
+           extra="".join(f", {principal(p)}" for p in (app_sp, s.get("access.jobs_run_as")) if p),
+           **cp.deployment_scope())
 for file in ("governance.sql", "system_views.sql"):
     for stmt in render(file, **fmt):
         try:
@@ -70,7 +71,7 @@ api("POST", "/api/data-quality/v1/monitors",
     {"object_type": "schema", "object_id": w.schemas.get(f"{s.catalog}.{s.platform_schema}").schema_id,
      "anomaly_detection_config": {"excluded_table_full_names": []}}, "Anomaly detection")
 
-ensure_shared_index(vector_client(), settings)
+ensure_shared_index(vector_client(), settings, usage_policy_id=a.usage_policy_id)
 cp.publish(None)  # settings.json for the agent
 
 try:

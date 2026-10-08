@@ -14,18 +14,19 @@ Who can do each step:
 | **Workspace admin** | Previews, groups, embed policy, secret scope permissions |
 | **MLOps (you)** | Everything else |
 
-Set aside about half a day for the first environment (dev). Prod repeats Parts B–F with
-`-t prod`.
+Set aside about half a day for the first environment (QA). Prod is a separate workspace and
+repeats Parts A–F there with `-t prod`.
 
 Values used below (change them if yours differ):
 
-| Name | Dev | Prod |
+| Name | QA | Prod |
 |---|---|---|
-| Catalog | `chatbots_dev` | `chatbots` |
+| Catalog | `qa_chatbot_factory` | `prod_chatbot_factory` |
 | Platform schema | `_platform` | `_platform` |
 | Agent endpoint | `chatbot-agent` | `chatbot-agent` |
 | App | `chatbot-factory` | `chatbot-factory` |
-| Traces experiment | `/Shared/chatbot-factory/dev/traces` | `/Shared/chatbot-factory/prod/traces` |
+| Traces experiment | `/Shared/chatbot-factory/qa/traces` | `/Shared/chatbot-factory/prod/traces` |
+| Bundle target | `qa` | `prod` |
 
 ---
 
@@ -80,10 +81,10 @@ URL. This is `<warehouse_id>`.
 
 ### A5. Create the catalog and its owner [UI] (metastore admin)
 
-1. **Catalog** › **+** › **Create a catalog**. Name `chatbots_dev`, type **Standard**, pick the
+1. **Catalog** › **+** › **Create a catalog**. Name `qa_chatbot_factory`, type **Standard**, pick the
    storage location your company uses, then **Create**.
 2. Decide which identity deploys the bundle and runs the jobs (the *deploy identity*):
-   - **Dev:** your own user is fine.
+   - **QA:** your own user is fine.
    - **Prod:** use a service principal (create one in **Settings** › **Identity and access** ›
      **Service principals** › **Add service principal**), and deploy prod from CI or with
      `databricks auth login` as that principal.
@@ -91,10 +92,10 @@ URL. This is `<warehouse_id>`.
    identity the **Owner** of the catalog. Jobs create schemas, AI Search indexes, model services
    and views inside it, and later hand the platform schema to the app.
 4. Create the platform schema, as the deploy identity, before the first deploy **[CLI]** (or
-   **Catalog** › `chatbots_dev` › **Create schema**, name `_platform`):
+   **Catalog** › `qa_chatbot_factory` › **Create schema**, name `_platform`):
 
    ```bash
-   databricks schemas create _platform chatbots_dev
+   databricks schemas create _platform qa_chatbot_factory
    ```
 
    The app sends its own telemetry to tables in this schema, and Databricks creates those tables
@@ -152,7 +153,7 @@ identities can't be decrypted.
 ### A8. Git token (only if chatbots read documents from private git repos) [UI]
 
 1. Create a read-only token in your git host for a bot account.
-2. **Catalog** › `chatbots_dev` › `_platform` › **Create** › **Secret**. This needs the platform
+2. **Catalog** › `qa_chatbot_factory` › `_platform` › **Create** › **Secret**. This needs the platform
    schema, so do it after step C1 (the first run of `setup_platform`). Name it `git_token` and
    paste the token as the value.
 3. On the secret's **Permissions** tab, grant **READ SECRET** to `<jobs_run_as>`.
@@ -161,17 +162,19 @@ identities can't be decrypted.
 
 ### A9. Serverless usage policy [UI] (account admin)
 
-This tags every job, the app and the agent endpoint, so their cost shows up in
-`system.billing.usage`.
+This tags every job, the app, the agent endpoint and the AI Search endpoint, so their cost shows
+up in `system.billing.usage`. Create **one policy per environment**: serverless billing tags
+come from the policy, so this is what tells QA spend from prod spend.
 
 1. Click your user name › **Settings** › **Compute** › next to **Serverless usage policies**,
    click **Manage** › **Create**.
-2. Name `chatbot-factory`, select the workspace, and add the custom tag `component` =
-   `chatbot-factory` › **Create**.
+2. Name it `chatbot-factory-qa` (or `-prod`), select that environment's workspace, and add two
+   custom tags: `component` = `chatbot-factory` and `environment` = `qa` (or `prod`) › **Create**.
 3. On the policy's **Permissions** tab, use **Grant access** to give **User** to `<jobs_run_as>`,
    the agent service principal and (after B2) the app's service principal.
 4. Copy the policy ID from the browser URL when the policy is open. This is
-   `<usage_policy_id>`. If you skip this step, leave the variable empty.
+   `<usage_policy_id>`. If you skip this step, set it to `""` in A11; costs then can't be
+   attributed to the factory or to an environment.
 
 ### A10. Account budget [UI] (account admin)
 
@@ -188,13 +191,38 @@ This tags every job, the app and the agent endpoint, so their cost shows up in
 Each chatbot's own monthly budget is set in the creation wizard. The factory enforces it from
 tagged usage, separately from these account budgets.
 
-### A11. App catalog and environment (nothing to edit)
+### A11. Store this environment's identifiers [CLI]
 
-The app's command and environment variables are defined in `resources/app.yml` under `config:`.
-`FACTORY_CATALOG` comes from the bundle's `catalog` variable and `FACTORY_ENV` from the target
-name, so `-t dev` gives `chatbots_dev` / `dev` and `-t prod` gives `chatbots` / `prod`. To use a
-different catalog, change `catalog` for the target in `databricks.yml` or pass
-`--var catalog=<name>` on deploy.
+The catalog and environment come from the bundle target: `-t qa` uses `qa_chatbot_factory` and
+records the environment as `qa`; `-t prod` uses `prod_chatbot_factory` and `prod`. Nothing to
+edit for those.
+
+The identifiers that belong to your workspace are **not** stored in the repository. Put them in
+a local file per target, which the CLI reads on every `bundle` command and git ignores:
+
+```bash
+mkdir -p .databricks/bundle/qa
+cp variable-overrides.example.json .databricks/bundle/qa/variable-overrides.json
+```
+
+Then edit `.databricks/bundle/qa/variable-overrides.json`:
+
+```json
+{
+  "warehouse_id": "<warehouse_id from A4>",
+  "agent_principal": "<agent_principal from A6>",
+  "usage_policy_id": "<usage_policy_id from A9>"
+}
+```
+
+Do the same under `.databricks/bundle/prod/` with the prod workspace's values. `warehouse_id`
+and `agent_principal` are required: every `bundle` command fails with "no value assigned to
+required variable" until they are set. Anyone else who deploys needs their own copy of the file.
+
+The two secret scope names (`chatbot-factory`, `chatbot-factory-identity`) are bundle variables
+too (`agent_sp_scope`, `identity_scope`). QA and prod are separate workspaces, so each has its
+own scopes under the same names and the defaults work for both. Add them to the file only if a
+workspace uses different names.
 
 ### A12. Install the CLI
 
@@ -213,10 +241,8 @@ databricks auth login --host https://<your-workspace>.cloud.databricks.com
 
 ```bash
 cd chatbot-factory
-databricks bundle validate -t dev --var warehouse_id=<warehouse_id> \
-  --var agent_principal=<agent_principal> --var usage_policy_id=<usage_policy_id>
-databricks bundle deploy -t dev --var warehouse_id=<warehouse_id> \
-  --var agent_principal=<agent_principal> --var usage_policy_id=<usage_policy_id>
+databricks bundle validate -t qa
+databricks bundle deploy -t qa
 ```
 
 The first deploy may stop with an error that serving endpoint `chatbot-agent` doesn't exist,
@@ -230,7 +256,7 @@ listed there. Fix that and deploy again.
 ### B2. Create the platform tables [CLI]
 
 ```bash
-databricks bundle run setup_platform -t dev
+databricks bundle run setup_platform -t qa
 ```
 
 This creates the platform schema and tables, ABAC column masks, cost views and the shared AI
@@ -241,7 +267,7 @@ A2 that isn't on yet. Turn it on and rerun this step; nothing else is affected.
 ### B3. Deploy the agent [CLI]
 
 ```bash
-databricks bundle run deploy_agent -t dev
+databricks bundle run deploy_agent -t qa
 ```
 
 The job prints numbered steps. It first checks the prerequisites from Part A that it can't
@@ -251,29 +277,38 @@ before deploying it: the control plane tables, the AI Search endpoint and shared
 agent's settings file. On a new workspace the AI Search step waits for the endpoint and index to
 finish provisioning, which can take 15 minutes or more.
 
-It then does six things:
+It then:
 
+- creates the Unity Gateway model services `qa_chatbot_factory._platform.answer_haiku` (Haiku 4.5 with
+  a Sonnet 4.5 fallback) and `qa_chatbot_factory._platform.guardrail_evaluator`, and grants **EXECUTE**
+  on the answer service to the agent service principal, `mlops` and `<jobs_run_as>` (and on the
+  evaluator to `mlops`)
 - creates the traces experiment, stored in Unity Catalog
 - registers the answer prompt
-- creates the Unity Gateway model services `chatbots_dev._platform.answer_haiku` (Haiku 4.5 with
-  a Sonnet 4.5 fallback) and `chatbots_dev._platform.guardrail_evaluator`
-- deploys the `chatbot-agent` endpoint
+- in prod only, checks the release gate (Part E)
+- deploys the `chatbot-agent` endpoint, tagged with `component`, `environment` and the git commit
+- waits until the endpoint is serving the new version, which can take 15 to 20 minutes
+- records the release in `platform_releases`: who deployed, the git commit, branch and
+  repository, and the configuration it ran with (catalog, workspace, endpoint, warehouse, usage
+  policy, a hash of the platform settings)
+- removes the agent versions the new one replaced, so the endpoint serves exactly one. Each
+  served version keeps compute running, and an endpoint holds at most 15
 - registers the production judges, drift monitors, metric views and the Genie space
-- prints a checklist of the Unity Gateway settings for step C2. Keep that output open.
+- prints the Unity Gateway settings that still have to be entered by hand in C2, and warns if
+  inference logging isn't set up in this environment's catalog yet. Keep that output open.
 
 ### B4. Deploy again and start the app [CLI]
 
 ```bash
-databricks bundle deploy -t dev --var warehouse_id=<warehouse_id> \
-  --var agent_principal=<agent_principal> --var usage_policy_id=<usage_policy_id>
-databricks bundle run chatbot_factory -t dev
+databricks bundle deploy -t qa
+databricks bundle run chatbot_factory -t qa
 ```
 
 ### B5. Give the app its catalog rights [UI]
 
 1. **Compute** › **Apps** › `chatbot-factory` › **Authorization** (or **Overview**). Copy the
    **service principal** Application ID. This is `<app_sp>`.
-2. **Catalog** › `chatbots_dev` › **Permissions** › **Grant**, to `<app_sp>`:
+2. **Catalog** › `qa_chatbot_factory` › **Permissions** › **Grant**, to `<app_sp>`:
    **USE CATALOG**, **USE SCHEMA**, **SELECT**, **MODIFY**, **CREATE SCHEMA**,
    **CREATE TABLE**, **READ VOLUME**, **WRITE VOLUME**, **EXECUTE**.
 3. If you created a usage policy (A9), give `<app_sp>` **User** on it.
@@ -300,18 +335,19 @@ databricks bundle run chatbot_factory -t dev
    job need the real questions.
 
    ```bash
-   databricks bundle run setup_platform -t dev
+   databricks bundle run setup_platform -t qa
    ```
 
 ### C2. Configure the answer model service [UI]
 
-In the workspace sidebar, click **AI Gateway** › **Models** tab › `chatbots_dev._platform.answer_haiku`.
+In the workspace sidebar, click **AI Gateway** › **Models** tab › `qa_chatbot_factory._platform.answer_haiku`.
 The exact values are also on **Admin** › **Setup checklist** in the app.
 
 **Permissions**
-1. Open the **Permissions** tab › **Grant**. Select the agent service principal
-   (`chatbot-factory-agent`), tick **EXECUTE**, then click **Grant**.
-2. Repeat for the `mlops` group (playground testing) and for `<jobs_run_as>`.
+1. `deploy_agent` grants **EXECUTE** to the agent service principal, the `mlops` group and
+   `<jobs_run_as>`. Open the **Permissions** tab and check all three are listed.
+2. Only if the job printed "EXECUTE not granted": click **Grant**, select each of the three,
+   tick **EXECUTE**, then **Grant**. Without it the agent can't call the model.
 
 **Rate limits**
 3. Find the **Rate limits** section (on the service page or under **Edit**). Add:
@@ -322,9 +358,9 @@ The exact values are also on **Admin** › **Setup checklist** in the app.
 
 **Inference table**
 5. Find **Inference table** (or **Inference logging**). Turn it on with **Catalog**
-   `chatbots_dev`, **Schema** `_platform` and **Table prefix** `gw_answer_haiku`. Save.
+   `qa_chatbot_factory`, **Schema** `_platform` and **Table prefix** `gw_answer_haiku`. Save.
 6. Copy the full table name the page shows, for example
-   `chatbots_dev._platform.gw_answer_haiku_payload`. This is `<inference_table>`.
+   `qa_chatbot_factory._platform.gw_answer_haiku_payload`. This is `<inference_table>`.
 
 **Guardrail policies.** Open the **Policies** tab › **New policy** and create one policy per row:
 
@@ -332,7 +368,7 @@ The exact values are also on **Admin** › **Setup checklist** in the app.
 |---|---|---|---|---|
 | **Unsafe Content** (`system.ai.block_unsafe_content`) | Input and Output | **Enforce** | default | Harmful content |
 | **Jailbreak** (`system.ai.block_jailbreak`) | Input | **Enforce** | default | Jailbreak and prompt injection |
-| **Hallucination** (`system.ai.block_hallucination`) | Output | **Log** | `chatbots_dev._platform.guardrail_evaluator` | Grounding check. Watch it for two weeks, then switch to Enforce |
+| **Hallucination** (`system.ai.block_hallucination`) | Output | **Log** | `qa_chatbot_factory._platform.guardrail_evaluator` | Grounding check. Watch it for two weeks, then switch to Enforce |
 | **Sensitive data** (`system.ai.detect_sensitive_data`) | Input and Output | **Enforce** (block or redact) | n/a | SSNs, cards, IBANs and other IDs |
 
 For each policy:
@@ -343,7 +379,7 @@ For each policy:
 10. Tick the **Phase** from the table.
 11. Choose the **Mode**.
 12. For Hallucination only, open **Advanced options** and set the evaluator model service to
-    `chatbots_dev._platform.guardrail_evaluator`.
+    `qa_chatbot_factory._platform.guardrail_evaluator`.
 13. Leave **Rank** as is, then click **Create policy**.
 
 What this gives you:
@@ -357,25 +393,26 @@ What this gives you:
 
 **Tag**
 14. On the service's **Overview** (or **Details**) tab › **Tags**, add `component` =
-    `chatbot-factory`.
+    `chatbot-factory` and `environment` = `qa` (or `prod`).
 
 ### C3. Configure the guardrail evaluator [UI]
 
-**AI Gateway** › **Models** › `chatbots_dev._platform.guardrail_evaluator`:
+**AI Gateway** › **Models** › `qa_chatbot_factory._platform.guardrail_evaluator`:
 
-1. **Permissions** › **Grant** › `mlops` › **EXECUTE**. If the policy attach step says the
-   evaluator needs query access, also grant it to whoever attached the policies.
-2. **Inference table** on, with **Catalog** `chatbots_dev`, **Schema** `_platform` and **Table
+1. **Permissions**: `deploy_agent` grants **EXECUTE** to `mlops`; check it's listed. If the
+   policy attach step says the evaluator needs query access, also grant it to whoever attached
+   the policies.
+2. **Inference table** on, with **Catalog** `qa_chatbot_factory`, **Schema** `_platform` and **Table
    prefix** `gw_guardrail_evaluator`. Copy the full table name. This is
    `<evaluator_inference_table>`.
-3. **Tags**: `component` = `chatbot-factory`.
+3. **Tags**: `component` = `chatbot-factory` and `environment` = `qa` (or `prod`).
 4. No rate limits or policies here.
 
 ### C4. Unified trace table [UI] (metastore admin)
 
 1. **AI Gateway** › **Govern** › **Traces** › **Set up tracing**.
-2. Choose catalog `chatbots_dev`, schema `_platform` › **Save**.
-3. Copy the table name, for example `chatbots_dev._platform.unity_gateway_otel_spans`. This is
+2. Choose catalog `qa_chatbot_factory`, schema `_platform` › **Save**.
+3. Copy the table name, for example `qa_chatbot_factory._platform.unity_gateway_otel_spans`. This is
    `<trace_table>`.
 
 ### C5. Record the table names and finish observability [App] + [CLI]
@@ -393,7 +430,7 @@ What this gives you:
 3. Rerun only the observability task:
 
    ```bash
-   databricks bundle run deploy_agent -t dev --only observability
+   databricks bundle run deploy_agent -t qa --only observability
    ```
 
    If your CLI doesn't support `--only`, open **Jobs** › **[factory] deploy shared agent** ›
@@ -424,13 +461,13 @@ The app links to it from **Monitoring**.
 1. **Compute** › **Apps** › `chatbot-factory` › **Edit** › **Configure** step.
 2. Confirm **Compute size** is **Medium**.
 3. Tick **Enable horizontal scaling** and set **Number of instances** to **2** for prod (1 for
-   dev) › **Save**. The app is stateless, so any instance can serve any user.
+   QA) › **Save**. The app is stateless, so any instance can serve any user.
 
 ### C9. Review queue access [UI]
 
 Review queues live in the traces experiment, on the **Reviews** tab.
 
-1. **Experiments** › `/Shared/chatbot-factory/dev/traces` › **Permissions**. Give each
+1. **Experiments** › `/Shared/chatbot-factory/qa/traces` › **Permissions**. Give each
    chatbot's Reviewer **Can read**, and `mlops` **Can manage**. Give the app's service principal (`<app_sp>`) **Can edit**, so
    All chatbots › Gaps can send questions to review queues.
 2. Traces are stored in Unity Catalog, and only `mlops` and `security` can read the trace
@@ -506,8 +543,8 @@ Application ID in **Admin** › **Platform** under `access.trusted_callers`, the
 |---|---|
 | MLflow › traces experiment › **Traces** | One trace per question with spans: retrieve, prompt.build, answer.attempt_1 (tokens, time to first token, cost), guardrail checks |
 | **Monitoring** › **Guardrails** | The jailbreak block (Unity Gateway policy blocked) and the refusal |
-| `SELECT * FROM chatbots_dev._platform.guardrail_events ORDER BY ts DESC` | Rows for the block and refusal, with trace_id |
-| `SELECT * FROM chatbots_dev._platform.v_guardrail_verdicts ORDER BY event_time DESC` | Hallucination verdicts for each answer (Log mode) |
+| `SELECT * FROM qa_chatbot_factory._platform.guardrail_events ORDER BY ts DESC` | Rows for the block and refusal, with trace_id |
+| `SELECT * FROM qa_chatbot_factory._platform.v_guardrail_verdicts ORDER BY event_time DESC` | Hallucination verdicts for each answer (Log mode) |
 | `SELECT * FROM system.ai_gateway.usage WHERE request_tags['bot_id'] = '<bot_id>'` | Tokens per request, tagged with the chatbot |
 | **Monitoring** (next day) | Speed, cost, quality and drift charts filling in |
 
@@ -521,12 +558,65 @@ thumbs-down feedback. If its flags are mostly right, edit the policy in C2 and c
 
 ## Part E: Promote the platform to prod
 
-1. In dev, check that the commit you're promoting passed:
-   `databricks bundle run run_evals -t dev --params bot_id=all`.
-2. Repeat A5 (catalog `chatbots`), A9/A10 if they're per environment, and Parts B–D with
-   `-t prod`, using a service principal as the deploy identity.
-3. `deploy_agent` in prod refuses to run unless dev quality checks passed for this exact
-   platform version and git commit.
+Prod is its own workspace with its own catalog (`prod_chatbot_factory`), model services,
+inference tables, secret scopes and usage policy. Everything in Parts A–D is done again there.
+
+1. In QA, a chatbot has to pass its quality check on the exact commit you're promoting. The
+   check runs the chatbot's approved test questions through the deployed agent and judges the
+   answers, so it is the end-to-end test of that build:
+
+   ```bash
+   databricks bundle run run_evals -t qa --params bot_id=all
+   ```
+
+2. Make the QA catalog readable from the prod workspace. The release gate reads
+   `qa_chatbot_factory._platform.eval_runs` and `bots` from the prod deploy job, so both
+   workspaces must share a metastore, the catalog must be bound to the prod workspace (read-only
+   is enough), and the prod deploy identity needs `USE CATALOG`, `USE SCHEMA` and `SELECT` on
+   those two tables.
+3. In the prod workspace, repeat Part A (catalog `prod_chatbot_factory`, its own usage policy tagged
+   `environment` = `prod`, and `.databricks/bundle/prod/variable-overrides.json`), then Parts B–D
+   with `-t prod`, using a service principal as the deploy identity. Deploy the same git commit.
+4. `deploy_agent` in prod stops at the release gate unless, for this exact platform version and
+   git commit:
+   - every live QA chatbot passed its latest quality check, and
+   - at least one QA chatbot passed. An empty or untested QA doesn't count as a pass.
+
+   It also stops if the git commit is unknown (deploy from a git checkout) or the QA catalog
+   can't be read. The message lists every reason.
+
+---
+
+## Moving an existing `dev` deployment to the `qa` target
+
+The bundle target that used to be `dev` is now `qa`. A deployment made with `-t dev` is tracked
+under the old name, so deploying with `-t qa` would try to create the app and jobs a second
+time. Do this once, in the QA workspace:
+
+1. **Before** updating your checkout (while it still has the `dev` target), release the app
+   from the old deployment and remove the old jobs. The app has to survive, because its
+   service principal owns the platform schema and holds the grants from B5 and C1:
+
+   ```bash
+   databricks bundle deployment unbind chatbot_factory -t dev
+   databricks bundle destroy -t dev
+   ```
+
+   `destroy` lists what it will delete. Check that it lists only jobs, not the app. It doesn't
+   touch the catalog, the agent endpoint, the model services or the experiment.
+2. In the workspace browser, open **Shared** › `chatbot-factory` and rename the folder `dev` to
+   `qa`, so the existing traces experiment keeps being used at its new path.
+3. Update the checkout, create `.databricks/bundle/qa/variable-overrides.json` (A11), then adopt
+   the existing app and deploy:
+
+   ```bash
+   databricks bundle deployment bind chatbot_factory chatbot-factory -t qa
+   databricks bundle deploy -t qa
+   databricks bundle run deploy_agent -t qa
+   ```
+
+From then on the environment is recorded as `qa` in logs, traces, tags and release records.
+Rows written earlier keep `dev`.
 
 ---
 

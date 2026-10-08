@@ -102,6 +102,33 @@ def ensure_model_service(w, settings, label: str) -> str:
     return full
 
 
+def grant_execute(w, settings, label: str, principals: list[str]) -> str:
+    """Grant EXECUTE on a model service (a Unity Catalog securable) so those principals can
+    call it; returns the service name. Adding a grant that already exists is a no-op."""
+    full = service_name(settings, label)
+    w.api_client.do("PATCH", f"/api/2.1/unity-catalog/permissions/model_service/{full}",
+                    body={"changes": [{"principal": p, "add": ["EXECUTE"]} for p in principals]})
+    return full
+
+
+def logging_problems(settings, table_exists) -> list[str]:
+    """Inference (payload) logging can only be switched on in the Unity Gateway UI, so this checks
+    the result: each service's inference table must be recorded in the settings, sit in this
+    environment's own catalog and platform schema, and exist."""
+    home = f"{settings.catalog}.{settings.platform_schema}."
+    problems = []
+    for label, key in (("answer", "unity_gateway.inference_table"),
+                       ("guardrail evaluator", "unity_gateway.evaluator_inference_table")):
+        table = settings.get(key)
+        if not table:
+            problems.append(f"{label} service: no inference table recorded in {key} (docs/SETUP.md, C2/C3/C5)")
+        elif not table.lower().startswith(home.lower()):
+            problems.append(f"{label} service: inference table {table} is outside this environment's {home}*")
+        elif not table_exists(table):
+            problems.append(f"{label} service: inference table {table} does not exist yet")
+    return problems
+
+
 def ui_checklist(settings) -> list[dict]:
     """What MLOps sets in the Unity Gateway UI (no API today): per answer service the EXECUTE grant,
     rate limits, inference table and service policies (phase, Enforce/Log, evaluator); and the
@@ -129,6 +156,7 @@ def ui_checklist(settings) -> list[dict]:
 def request_tags(log: dict) -> dict[str, str]:
     """Per-request tags -> system.ai_gateway.usage.request_tags, for per-bot usage and cost (GW-4)."""
     tags = {"bot_id": log.get("bot_id"), "release_id": log.get("release_id"), "channel": log.get("channel"),
+            "environment": log.get("environment"),
             "request_id": log.get("request_id"), "conversation_id": log.get("conversation_id"),
             "synthetic": str(bool(log.get("synthetic"))).lower()}
     return {"Databricks-Ai-Gateway-Request-Tags": json.dumps({k: str(v) for k, v in tags.items() if v})}

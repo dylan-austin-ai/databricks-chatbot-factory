@@ -60,3 +60,39 @@ def test_confidential_gets_dedicated_index(cfg):
 def test_config_roundtrip(cfg):
     import json
     assert BotConfig.from_dict(json.loads(cfg.to_json())) == cfg
+
+
+def test_environment_comes_from_the_deployment(monkeypatch):
+    from factory.config import PlatformSettings
+
+    monkeypatch.delenv("FACTORY_ENV", raising=False)
+    assert PlatformSettings.load().get("environment") == "prod"   # packaged default
+    monkeypatch.setenv("FACTORY_ENV", "qa")
+    assert PlatformSettings.load().get("environment") == "qa"
+    assert PlatformSettings.load({"environment": "prod"}).get("environment") == "qa"   # saved settings can't override it
+
+
+def test_gateway_calls_are_tagged_with_the_environment():
+    import json
+
+    from factory.gateway import request_tags
+
+    header = request_tags({"bot_id": "b", "channel": "candidate", "environment": "qa", "request_id": "r1"})
+    tags = json.loads(header["Databricks-Ai-Gateway-Request-Tags"])
+    assert tags["environment"] == "qa" and tags["channel"] == "candidate"
+
+
+def test_deployment_scope_rejects_unsafe_values(settings, fake_sql, monkeypatch):
+    import pytest
+    from types import SimpleNamespace
+
+    from factory.config import PlatformSettings
+    from factory.controlplane import ControlPlane
+
+    w = SimpleNamespace(get_workspace_id=lambda: 1234567890)
+    monkeypatch.setenv("FACTORY_ENV", "qa")
+    assert ControlPlane(fake_sql, PlatformSettings.load(), w).deployment_scope() == {
+        "environment": "qa", "workspace_id": "1234567890"}
+    monkeypatch.setenv("FACTORY_ENV", "qa' OR 1=1 --")
+    with pytest.raises(ValueError):
+        ControlPlane(fake_sql, PlatformSettings.load(), w).deployment_scope()

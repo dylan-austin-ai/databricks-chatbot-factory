@@ -154,9 +154,13 @@ CREATE TABLE IF NOT EXISTS {catalog}.{platform}.eval_runs (
 );
 
 -- Platform (agent/app code) deployments: exact commit per environment (REL-7)
+-- One row per agent deployment: what source was deployed and with which configuration (REL-7,
+-- REL-8). Columns added after the first release are also listed in ControlPlane.MIGRATIONS.
 CREATE TABLE IF NOT EXISTS {catalog}.{platform}.platform_releases (
   release_id STRING, platform_version STRING, git_commit STRING, environment STRING,
-  model_version STRING, gate_enforced BOOLEAN, deployed_by STRING, ts TIMESTAMP
+  model_version STRING, gate_enforced BOOLEAN, deployed_by STRING, ts TIMESTAMP,
+  git_branch STRING, git_origin STRING,
+  config_json STRING      /* catalog, workspace, endpoint, warehouse, usage policy, settings hash */
 );
 
 CREATE TABLE IF NOT EXISTS {catalog}.{platform}.strategy_results (

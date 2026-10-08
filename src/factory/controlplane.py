@@ -1,6 +1,7 @@
 """Control-plane access: settings overrides, bot records, audit log."""
 from __future__ import annotations
 
+import hashlib
 import json
 import uuid
 from pathlib import Path
@@ -78,6 +79,11 @@ class ControlPlane:
             self.alert(bot_id, "runtime_publish_failed", "high", f"Runtime publish failed: {e}")
 
     # Setup ------------------------------------------------------------------
+    # Columns added to tables that may already exist: CREATE TABLE IF NOT EXISTS won't add them.
+    MIGRATIONS = {
+        "platform_releases": {"git_branch": "STRING", "git_origin": "STRING", "config_json": "STRING"},
+    }
+
     def ensure(self) -> None:
         tags = self.s.get("tags")
         for stmt in render(
@@ -86,6 +92,21 @@ class ControlPlane:
             tag_chatbot=tags["chatbot_name"], shared_value=tags["shared_value"],
         ):
             self.sql.execute(stmt)
+        for table, columns in self.MIGRATIONS.items():
+            have = {str(r.get("col_name", "")).lower() for r in self.sql.query(f"DESCRIBE TABLE {self.s.fq(table)}")}
+            missing = [f"{name} {kind}" for name, kind in columns.items() if name.lower() not in have]
+            if missing:
+                self.sql.execute(f"ALTER TABLE {self.s.fq(table)} ADD COLUMNS ({', '.join(missing)})")
+
+    def deployment_scope(self) -> dict[str, str]:
+        """This deployment's environment and workspace ID, as values for SQL templates. The
+        account-wide system tables hold every workspace's usage, so cost views filter on these."""
+        scope = {"environment": str(self.s.get("environment") or ""),
+                 "workspace_id": str(self.w.get_workspace_id()) if self.w is not None else ""}
+        for name, value in scope.items():
+            if not all(ch.isalnum() or ch in "_-" for ch in value):
+                raise ValueError(f"Unsafe {name}: {value!r}")
+        return scope
 
     def ensure_views(self) -> None:
         tags = self.s.get("tags")
@@ -93,6 +114,7 @@ class ControlPlane:
             "dashboard_views.sql",
             catalog=ident(self.s.catalog), platform=ident(self.s.platform_schema),
             tag_chatbot=tags["chatbot_name"], shared_value=tags["shared_value"],
+            **self.deployment_scope(),
         ):
             self.sql.execute(stmt)
 
@@ -124,21 +146,30 @@ class ControlPlane:
 
     # Platform releases (REL-7, REL-8) ------------------------------------------
     def record_platform_release(self, platform_version: str, git_commit: str, environment: str,
-                                model_version: str, gate_enforced: bool, deployed_by: str) -> str:
+                                model_version: str, gate_enforced: bool, deployed_by: str,
+                                git_branch: str = "", git_origin: str = "", config: dict | None = None) -> str:
         """One row per agent deployment; returns its release_id.
+
+        `config` is what the deployment ran with (catalog, workspace, endpoint, warehouse, usage
+        policy and so on); a hash of the effective platform settings is added to it, so two
+        deployments can be compared exactly.
 
         The id is generated here and the row is written with INSERT ... SELECT and named
         columns: Databricks SQL rejects its uuid function inside a parameterized VALUES clause, and naming
         the columns keeps the insert valid if the table gains columns later.
         """
         release_id = str(uuid.uuid4())
+        settings_json = json.dumps(self.s.as_dict(), sort_keys=True, default=str)
+        config = {**(config or {}), "settings_sha256": hashlib.sha256(settings_json.encode()).hexdigest()}
         self.sql.execute(
             f"INSERT INTO {self.s.fq('platform_releases')} "
             "(release_id, platform_version, git_commit, environment, model_version, gate_enforced, "
-            "deployed_by, ts) "
-            "SELECT :id, :pv, :gc, :env, :mv, CAST(:gate AS BOOLEAN), :who, current_timestamp()",
+            "deployed_by, ts, git_branch, git_origin, config_json) "
+            "SELECT :id, :pv, :gc, :env, :mv, CAST(:gate AS BOOLEAN), :who, current_timestamp(), "
+            ":branch, :origin, :config",
             {"id": release_id, "pv": platform_version, "gc": git_commit, "env": environment,
-             "mv": model_version, "gate": gate_enforced, "who": deployed_by},
+             "mv": model_version, "gate": gate_enforced, "who": deployed_by,
+             "branch": git_branch, "origin": git_origin, "config": json.dumps(config, sort_keys=True)},
         )
         return release_id
 

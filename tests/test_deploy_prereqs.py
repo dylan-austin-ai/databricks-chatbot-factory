@@ -166,3 +166,114 @@ def test_model_service_other_errors_are_not_swallowed(settings):
     with pytest.raises(PermissionDenied):
         ensure_model_service(SimpleNamespace(api_client=api), settings, "haiku")
     assert api.calls == ["GET"]
+
+
+# --- release gate ---------------------------------------------------------------------------
+
+def test_gate_passes_when_required_bots_passed():
+    from factory.preflight import gate_problems
+
+    bots = [{"bot_id": "claims", "required": True, "passed": True},
+            {"bot_id": "draft", "required": False, "passed": False}]
+    assert gate_problems(bots, "1.0.0", "abc123") == []
+
+
+def test_gate_is_not_vacuous_on_an_empty_or_untested_qa():
+    from factory.preflight import gate_problems
+
+    assert any("no chatbot in QA has passed" in p for p in gate_problems([], "1.0.0", "abc123"))
+    untested = [{"bot_id": "draft", "required": False, "passed": False}]
+    assert len(gate_problems(untested, "1.0.0", "abc123")) == 1
+
+
+def test_gate_names_every_required_bot_that_has_not_passed():
+    from factory.preflight import gate_problems
+
+    bots = [{"bot_id": "claims", "required": True, "passed": False},
+            {"bot_id": "hr", "required": True, "passed": True}]
+    problems = gate_problems(bots, "1.0.0", "abc123")
+    assert len(problems) == 1 and "'claims'" in problems[0]
+
+
+def test_gate_needs_a_git_commit():
+    from factory.preflight import gate_problems
+
+    assert "git commit is unknown" in gate_problems([{"bot_id": "a", "required": True, "passed": True}], "1.0.0", "")[0]
+
+
+# --- model service permissions and logging ----------------------------------------------------
+
+def test_execute_is_granted_through_the_permissions_api(settings):
+    from factory.gateway import grant_execute
+
+    calls = []
+    api = SimpleNamespace(do=lambda method, path, **kw: calls.append((method, path, kw)))
+    name = grant_execute(SimpleNamespace(api_client=api), settings, "haiku", ["agent-sp", "mlops"])
+    assert name == "chatbots_test._platform.answer_haiku"
+    assert calls == [("PATCH", "/api/2.1/unity-catalog/permissions/model_service/chatbots_test._platform.answer_haiku",
+                      {"body": {"changes": [{"principal": "agent-sp", "add": ["EXECUTE"]},
+                                            {"principal": "mlops", "add": ["EXECUTE"]}]}})]
+
+
+def test_inference_logging_must_be_in_this_environments_catalog():
+    from factory.config import PlatformSettings
+    from factory.gateway import logging_problems
+
+    def load(answer, evaluator):
+        return PlatformSettings.load({"catalog": "qa_chatbot_factory", "unity_gateway.inference_table": answer,
+                                      "unity_gateway.evaluator_inference_table": evaluator})
+
+    good = load("qa_chatbot_factory._platform.gw_answer_haiku_payload",
+                "qa_chatbot_factory._platform.gw_guardrail_evaluator_payload")
+    assert logging_problems(good, lambda t: True) == []
+    assert len(logging_problems(good, lambda t: False)) == 2            # recorded but not created
+    assert len(logging_problems(load("", ""), lambda t: True)) == 2      # not recorded
+    wrong = load("prod_chatbot_factory._platform.gw_answer_haiku_payload",
+                 "qa_chatbot_factory._platform.gw_guardrail_evaluator_payload")
+    problems = logging_problems(wrong, lambda t: True)
+    assert len(problems) == 1 and "outside this environment" in problems[0]
+
+
+# --- endpoint housekeeping --------------------------------------------------------------------
+
+class _Endpoints:
+    def __init__(self, served):
+        self.served, self.waits = served, 0
+
+    def wait_get_serving_endpoint_not_updating(self, name, timeout=None):
+        self.waits += 1
+        entities = [SimpleNamespace(entity_name="c.s.agent", entity_version=v) for v in self.served]
+        return SimpleNamespace(config=SimpleNamespace(served_entities=entities))
+
+
+def test_wait_until_serving_requires_the_new_version():
+    import pytest
+
+    from factory.serving import wait_until_serving
+
+    wait_until_serving(SimpleNamespace(serving_endpoints=_Endpoints(["4", "5"])), "ep", "c.s.agent", 5)
+    with pytest.raises(RuntimeError, match="not serving"):
+        wait_until_serving(SimpleNamespace(serving_endpoints=_Endpoints(["4"])), "ep", "c.s.agent", 5)
+
+
+def test_old_versions_are_removed_one_update_at_a_time():
+    from factory.serving import remove_old_versions
+
+    deleted = []
+    agents = SimpleNamespace(
+        get_deployments=lambda model: [SimpleNamespace(model_version=v) for v in ("3", "4", "5")],
+        delete_deployment=lambda model, model_version: deleted.append((model, model_version)))
+    endpoints = _Endpoints(["5"])
+    removed = remove_old_versions(SimpleNamespace(serving_endpoints=endpoints), agents, "ep", "c.s.agent", 5)
+    assert removed == ["3", "4"]
+    assert deleted == [("c.s.agent", 3), ("c.s.agent", 4)]   # always with an explicit version
+    assert endpoints.waits == 2
+
+
+def test_ai_search_endpoint_gets_the_usage_policy(settings):
+    vsc = FakeVsc()
+    created = {}
+    vsc.create_endpoint = lambda **kw: created.update(kw)
+    ensure_shared_index(vsc, settings, usage_policy_id="pol-qa")
+    assert created == {"name": settings.get("ai_search.endpoint"), "endpoint_type": "STANDARD",
+                       "usage_policy_id": "pol-qa"}

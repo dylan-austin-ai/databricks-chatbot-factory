@@ -68,7 +68,7 @@ import sys  # noqa: E402
 
 smoke = subprocess.run(
     [sys.executable, str(ROOT / "jobs" / "run_evals.py"), f"--catalog={settings.catalog}",
-     f"--bot_id={cfg.bot_id}", "--channel=live", "--trigger=smoke", f"--environment={a.environment or 'dev'}",
+     f"--bot_id={cfg.bot_id}", "--channel=live", "--trigger=smoke", f"--environment={a.environment or 'qa'}",
      f"--limit={settings.get('quality.smoke_questions', 5)}"], capture_output=True, text=True)
 passed = smoke.returncode == 0
 sql.execute(f"UPDATE {settings.fq('releases')} SET smoke_passed = CAST(:p AS BOOLEAN) WHERE release_id = :r",

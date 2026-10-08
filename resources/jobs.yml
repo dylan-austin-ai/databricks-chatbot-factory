@@ -26,6 +26,7 @@ resources:
           python_file: ../jobs/setup_platform.py
           parameters:
           - --catalog=${var.catalog}
+          - --environment=${bundle.target}
           - --agent_principal=${var.agent_principal}
           - --usage_policy_id=${var.usage_policy_id}
           - --git_commit=${bundle.git.commit}
@@ -61,6 +62,7 @@ resources:
           python_file: ../jobs/provision_bot.py
           parameters:
           - --catalog={{job.parameters.catalog}}
+          - --environment=${bundle.target}
           - --bot_id={{job.parameters.bot_id}}
           - --actor={{job.parameters.actor}}
           - --ingest_job_id=${resources.jobs.ingest_bot.id}
@@ -72,6 +74,7 @@ resources:
           python_file: ../jobs/compare_strategies.py
           parameters:
           - --catalog={{job.parameters.catalog}}
+          - --environment=${bundle.target}
           - --bot_id={{job.parameters.bot_id}}
           - --git_commit=${bundle.git.commit}
         depends_on:
@@ -132,6 +135,7 @@ resources:
           python_file: ../jobs/ingest_bot.py
           parameters:
           - --catalog={{job.parameters.catalog}}
+          - --environment=${bundle.target}
           - --bot_id={{job.parameters.bot_id}}
           - --doc_ids={{job.parameters.doc_ids}}
           - --reparse={{job.parameters.reparse}}
@@ -146,6 +150,7 @@ resources:
           python_file: ../jobs/compare_strategies.py
           parameters:
           - --catalog={{job.parameters.catalog}}
+          - --environment=${bundle.target}
           - --bot_id={{job.parameters.bot_id}}
           - --git_commit=${bundle.git.commit}
         depends_on:
@@ -231,6 +236,7 @@ resources:
           python_file: ../jobs/reindex.py
           parameters:
           - --catalog={{job.parameters.catalog}}
+          - --environment=${bundle.target}
           - --parser={{job.parameters.parser}}
           - --extensions={{job.parameters.extensions}}
           - --git_commit=${bundle.git.commit}
@@ -309,6 +315,7 @@ resources:
           python_file: ../jobs/maintenance.py
           parameters:
           - --catalog={{job.parameters.catalog}}
+          - --environment=${bundle.target}
           - --purge_bot_id={{job.parameters.purge_bot_id}}
           - --actor={{job.parameters.actor}}
           - --git_commit=${bundle.git.commit}
@@ -336,6 +343,7 @@ resources:
           python_file: ../jobs/drift.py
           parameters:
           - --catalog=${var.catalog}
+          - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
     git_sync:
       tags:
@@ -364,6 +372,7 @@ resources:
           python_file: ../jobs/git_sync.py
           parameters:
           - --catalog=${var.catalog}
+          - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
     deploy_agent:
       tags:
@@ -393,11 +402,13 @@ resources:
           - --warehouse_id=${var.warehouse_id}
           - --endpoint=${var.agent_endpoint}
           - --require_gate=${var.release_gate}
-          - --dev_catalog=${var.dev_catalog}
+          - --qa_catalog=${var.qa_catalog}
           - --git_commit=${bundle.git.commit}
+          - --git_branch=${bundle.git.branch}
+          - --git_origin=${bundle.git.origin_url}
           - --environment=${bundle.target}
-          - --agent_sp_scope=chatbot-factory
-          - --identity_scope=chatbot-factory-identity
+          - --agent_sp_scope=${var.agent_sp_scope}
+          - --identity_scope=${var.identity_scope}
           - --agent_principal=${var.agent_principal}
           - --usage_policy_id=${var.usage_policy_id}
       - task_key: observability
@@ -518,6 +529,7 @@ resources:
           python_file: ../jobs/monitor.py
           parameters:
           - --catalog=${var.catalog}
+          - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
     monitor_after_hours:
       tags:
@@ -548,6 +560,7 @@ resources:
           python_file: ../jobs/monitor.py
           parameters:
           - --catalog=${var.catalog}
+          - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
     monitor_weekend:
       tags:
@@ -578,4 +591,5 @@ resources:
           python_file: ../jobs/monitor.py
           parameters:
           - --catalog=${var.catalog}
+          - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}

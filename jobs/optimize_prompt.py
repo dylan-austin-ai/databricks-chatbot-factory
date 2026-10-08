@@ -23,7 +23,7 @@ a = args("catalog", "action", "environment", "max_questions", "actor", "evals_jo
 spark, sql, settings, cp, w = context(a.catalog)
 s = settings
 mlflow.set_tracking_uri("databricks")
-mlflow.set_experiment(f"/Shared/chatbot-factory/{a.environment or 'dev'}/traces")
+mlflow.set_experiment(f"/Shared/chatbot-factory/{a.environment or 'qa'}/traces")
 name = f"{s.catalog}.{s.platform_schema}.answer_prompt"
 
 

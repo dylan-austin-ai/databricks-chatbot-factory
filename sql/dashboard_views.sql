@@ -84,6 +84,7 @@ SELECT u.usage_date,
        coalesce(u.custom_tags['{tag_chatbot}'], 'untagged') AS chatbot_name,
        CASE WHEN u.custom_tags['{tag_chatbot}'] = '{shared_value}' THEN 'fixed (shared)'
             ELSE 'bot-unique' END AS cost_type,
+       u.custom_tags['environment'] AS environment,
        u.custom_tags['team'] AS team, u.custom_tags['function'] AS business_function,
        u.billing_origin_product AS product, sum(u.usage_quantity) AS dbus,
        sum(u.usage_quantity * p.pricing.effective_list.default) AS list_cost_usd
@@ -92,6 +93,7 @@ LEFT JOIN system.billing.list_prices p
   ON u.sku_name = p.sku_name AND u.usage_start_time >= p.price_start_time
  AND (p.price_end_time IS NULL OR u.usage_start_time < p.price_end_time)
 WHERE u.custom_tags['{tag_chatbot}'] IS NOT NULL
+  AND u.workspace_id = '{workspace_id}'   -- billing covers the whole account; keep this workspace only
 GROUP BY ALL;
 
 -- Question topics, worst first (OBS-20): per bot and topic over the last 28 days

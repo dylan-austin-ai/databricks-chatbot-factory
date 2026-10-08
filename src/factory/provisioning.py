@@ -231,7 +231,8 @@ def grant_agent_access(sql: SqlRunner, settings: PlatformSettings, agent_princip
     sql.execute(f"GRANT SELECT ON TABLE {platform}.`user_access` TO {who}")
 
 
-def ensure_shared_index(vsc, settings: PlatformSettings, wait_minutes: int = 60) -> str:
+def ensure_shared_index(vsc, settings: PlatformSettings, wait_minutes: int = 60,
+                        usage_policy_id: str = "") -> str:
     """Platform setup: one AI Search endpoint + one shared index (ARC-4).
 
     Endpoint and index creation are asynchronous, so each is awaited before the next step uses
@@ -241,7 +242,9 @@ def ensure_shared_index(vsc, settings: PlatformSettings, wait_minutes: int = 60)
     timeout = timedelta(minutes=wait_minutes)
     ep = settings.get("ai_search.endpoint")
     if ep not in {e.get("name") for e in vsc.list_endpoints().get("endpoints", [])}:
-        vsc.create_endpoint(name=ep, endpoint_type="STANDARD")
+        # The usage policy puts the endpoint's cost under this environment's tags (CST-11).
+        policy = {"usage_policy_id": usage_policy_id} if usage_policy_id else {}
+        vsc.create_endpoint(name=ep, endpoint_type="STANDARD", **policy)
     vsc.wait_for_endpoint(ep, timeout=timeout)
     name = f"{settings.catalog}.{settings.platform_schema}.{settings.get('ai_search.shared_index')}"
     existing = {i.get("name") for i in vsc.list_indexes(ep).get("vector_indexes", [])}

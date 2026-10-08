@@ -198,7 +198,7 @@ def start_probe() -> bool:
 
 def trace_experiment_id() -> str | None:
     try:
-        name = f"/Shared/chatbot-factory/{os.environ.get('FACTORY_ENV', 'dev')}/traces"
+        name = f"/Shared/chatbot-factory/{os.environ.get('FACTORY_ENV', 'qa')}/traces"
         return app_client().experiments.get_by_name(name).experiment.experiment_id
     except Exception:  # noqa: BLE001 - not deployed yet
         return None

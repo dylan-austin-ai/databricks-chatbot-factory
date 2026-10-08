@@ -3,10 +3,14 @@
 
 -- Real gateway tokens per bot (request tags sent by the agent, GW-4)
 CREATE OR REPLACE VIEW {catalog}.{platform}.v_gateway_usage_by_bot AS
+-- system.ai_gateway.usage covers every workspace in the account, so only this environment's
+-- calls are counted: the agent tags each call with its environment.
 SELECT CAST(event_time AS DATE) AS day, request_tags['bot_id'] AS bot_id, request_tags['channel'] AS channel,
+       request_tags['environment'] AS environment,
        destination_model, count(*) AS requests, sum(input_tokens) AS input_tokens,
        sum(output_tokens) AS output_tokens
-FROM system.ai_gateway.usage WHERE request_tags['bot_id'] IS NOT NULL GROUP BY ALL;
+FROM system.ai_gateway.usage
+WHERE request_tags['bot_id'] IS NOT NULL AND request_tags['environment'] = '{environment}' GROUP BY ALL;
 
 -- Our token-based cost estimate vs gateway-reported tokens, per bot and day
 CREATE OR REPLACE VIEW {catalog}.{platform}.v_cost_reconciliation AS
@@ -21,4 +25,5 @@ LEFT JOIN (SELECT day, bot_id, sum(requests) AS requests, sum(input_tokens) AS i
 CREATE OR REPLACE VIEW {catalog}.{platform}.v_warehouse_by_bot AS
 SELECT CAST(start_time AS DATE) AS day, query_tags['bot_id'] AS bot_id, query_tags['source'] AS source,
        count(*) AS statements, sum(total_duration_ms) / 1000.0 AS seconds
-FROM system.query.history WHERE query_tags['component'] = 'chatbot-factory' GROUP BY ALL;
+FROM system.query.history
+WHERE query_tags['component'] = 'chatbot-factory' AND workspace_id = '{workspace_id}' GROUP BY ALL;

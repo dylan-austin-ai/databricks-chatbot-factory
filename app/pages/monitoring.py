@@ -38,7 +38,7 @@ last7 = daily.tail(7)
 host = app_client().config.host.rstrip("/")
 links, dashboard_id = [], None
 try:
-    exp = app_client().experiments.get_by_name(f"/Shared/chatbot-factory/{os.environ.get('FACTORY_ENV', 'dev')}/traces")
+    exp = app_client().experiments.get_by_name(f"/Shared/chatbot-factory/{os.environ.get('FACTORY_ENV', 'qa')}/traces")
     links.append(f"[Review queue]({host}/ml/experiments/{exp.experiment.experiment_id}/reviews) "
                  f"(`review_{cfg.bot_id}`: failed and thumbs-down answers waiting for a person)")
     links.append(f"[Traces in MLflow]({host}/ml/experiments/{exp.experiment.experiment_id}/traces) "

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -48,7 +49,12 @@ class PlatformSettings:
         nested: dict = {}
         for dotted, value in (overrides or {}).items():
             _set_path(nested, dotted, value)
-        return cls(_deep_merge(data, nested))
+        data = _deep_merge(data, nested)
+        # The environment is a fact about the deployment (the bundle target), so it always wins
+        # over the default and over saved settings. Jobs, the app and the agent all get FACTORY_ENV.
+        if os.environ.get("FACTORY_ENV"):
+            data["environment"] = os.environ["FACTORY_ENV"]
+        return cls(data)
 
     def get(self, dotted: str, default: Any = None) -> Any:
         node: Any = self._data
