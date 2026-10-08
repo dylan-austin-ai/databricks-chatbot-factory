@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 
+from databricks.sdk.errors import NotFound
+
 API = "/api/2.1/unity-catalog/model-services"
 
 
@@ -63,9 +65,7 @@ def ensure_model_service(w, settings, label: str) -> str:
     body = service_config(settings, label)
     try:
         w.api_client.do("GET", f"{API}/{full}")
-    except Exception as e:  # noqa: BLE001 - not found -> create
-        if "NOT_FOUND" not in str(e).upper() and "404" not in str(e) and "DOES NOT EXIST" not in str(e).upper():
-            raise
+    except NotFound:  # the SDK's 404, including ResourceDoesNotExist -> create
         catalog, schema, sid = full.split(".")
         w.api_client.do("POST", API, query={"parent": f"schemas/{catalog}.{schema}", "model_service_id": sid},
                         body=body)

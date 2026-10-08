@@ -99,3 +99,48 @@ def test_preflight_reports_every_missing_piece_together(settings):
     assert any("SQL warehouse 'wh1'" in p for p in problems)
     assert any("'chatbot-factory'" in p and "agent-sp-client-secret" in p for p in problems)
     assert any("'chatbot-factory-identity'" in p and "(A7)" in p for p in problems)
+
+
+class _GatewayApi:
+    """Model-service REST stand-in: GET raises `missing` until the service is created."""
+
+    def __init__(self, missing=None):
+        self.calls, self.missing = [], missing
+
+    def do(self, method, path, **kwargs):
+        self.calls.append(method)
+        if method == "GET" and self.missing is not None:
+            raise self.missing
+        return {}
+
+
+def test_model_service_is_created_on_sdk_not_found(settings):
+    from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+
+    from factory.gateway import ensure_model_service
+
+    for error in (NotFound("Resource not found"), ResourceDoesNotExist("gone")):
+        api = _GatewayApi(missing=error)
+        name = ensure_model_service(SimpleNamespace(api_client=api), settings, "haiku")
+        assert api.calls == ["GET", "POST"]
+        assert name == "chatbots_test._platform.answer_haiku"
+
+
+def test_model_service_is_updated_when_it_exists(settings):
+    from factory.gateway import ensure_model_service
+
+    api = _GatewayApi()
+    ensure_model_service(SimpleNamespace(api_client=api), settings, "haiku")
+    assert api.calls == ["GET", "PATCH"]
+
+
+def test_model_service_other_errors_are_not_swallowed(settings):
+    import pytest
+    from databricks.sdk.errors import PermissionDenied
+
+    from factory.gateway import ensure_model_service
+
+    api = _GatewayApi(missing=PermissionDenied("no access"))
+    with pytest.raises(PermissionDenied):
+        ensure_model_service(SimpleNamespace(api_client=api), settings, "haiku")
+    assert api.calls == ["GET"]
