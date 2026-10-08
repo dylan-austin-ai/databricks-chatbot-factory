@@ -356,6 +356,9 @@ class ChatbotAgent(ResponsesAgent):
             return out
 
     # Main -----------------------------------------------------------------
+    # MLflow warns that this decorator is unnecessary on a ResponsesAgent. It is kept on purpose:
+    # it names the root span "chatbot.answer", which the Traces page explains by that name
+    # (factory/flow.py). The automatic span would be called "predict".
     @mlflow.trace(name="chatbot.answer", span_type="AGENT")
     def predict(self, request: ResponsesAgentRequest) -> ResponsesAgentResponse:
         started = time.time()

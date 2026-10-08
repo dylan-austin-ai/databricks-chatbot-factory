@@ -22,6 +22,7 @@ inference tables; usage lands in system.ai_gateway.usage tagged per bot (GW-1..6
 """
 import argparse
 import getpass
+import inspect
 import os
 import sys
 from pathlib import Path
@@ -193,7 +194,7 @@ from databricks import agents  # noqa: E402
 version = info.registered_model_version
 sec = a.identity_scope
 deploy_kwargs = dict(
-    endpoint_name=a.endpoint, scale_to_zero_enabled=False,
+    endpoint_name=a.endpoint, scale_to_zero=False,
     environment_vars={
         "FACTORY_CATALOG": a.catalog, "FACTORY_WAREHOUSE_ID": a.warehouse_id,
         "FACTORY_ENV": a.environment, "FACTORY_GIT_COMMIT": a.git_commit,
@@ -212,12 +213,11 @@ deploy_kwargs = dict(
           "platform_version": PLATFORM_VERSION},
 )
 if a.usage_policy_id:  # serverless usage policy tags on the endpoint's billing (CST-11)
-    deploy_kwargs["budget_policy_id"] = a.usage_policy_id
-try:
-    agents.deploy(model_name, version, **deploy_kwargs)
-except TypeError:  # older databricks-agents without budget_policy_id
-    deploy_kwargs.pop("budget_policy_id", None)
-    agents.deploy(model_name, version, **deploy_kwargs)
+    # usage_policy_id replaced budget_policy_id. agents.deploy ignores unknown keywords instead
+    # of rejecting them, so pick the name this version actually has.
+    known = inspect.signature(agents.deploy).parameters
+    deploy_kwargs["usage_policy_id" if "usage_policy_id" in known else "budget_policy_id"] = a.usage_policy_id
+agents.deploy(model_name, version, **deploy_kwargs)
 from mlflow import MlflowClient  # noqa: E402
 MlflowClient().set_registered_model_alias(model_name, "champion", version)
 
