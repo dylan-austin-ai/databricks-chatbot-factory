@@ -244,7 +244,14 @@ A2 that isn't on yet. Turn it on and rerun this step; nothing else is affected.
 databricks bundle run deploy_agent -t dev
 ```
 
-This does six things:
+The job prints numbered steps. It first checks the prerequisites from Part A that it can't
+build (catalog, SQL warehouse, model endpoints, both secret scopes) and stops with the full
+list if any are missing. It then makes sure everything the agent depends on exists, in order,
+before deploying it: the control plane tables, the AI Search endpoint and shared index, and the
+agent's settings file. On a new workspace the AI Search step waits for the endpoint and index to
+finish provisioning, which can take 15 minutes or more.
+
+It then does six things:
 
 - creates the traces experiment, stored in Unity Catalog
 - registers the answer prompt

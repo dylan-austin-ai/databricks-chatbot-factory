@@ -1,0 +1,101 @@
+"""Deploy prerequisites: ordering of the shared index build, agent grants, preflight checks."""
+from types import SimpleNamespace
+
+from factory.preflight import deploy_problems
+from factory.provisioning import ensure_shared_index, grant_agent_access
+
+
+class FakeIndex:
+    def __init__(self, log):
+        self.log = log
+
+    def wait_until_ready(self, timeout=None):
+        self.log.append("wait_index")
+
+
+class FakeVsc:
+    def __init__(self, endpoints=(), indexes=()):
+        self.log, self.endpoints, self.indexes = [], list(endpoints), list(indexes)
+
+    def list_endpoints(self):
+        return {"endpoints": [{"name": n} for n in self.endpoints]}
+
+    def create_endpoint(self, name, endpoint_type):
+        self.log.append("create_endpoint")
+
+    def wait_for_endpoint(self, name, timeout=None):
+        self.log.append("wait_endpoint")
+
+    def list_indexes(self, name):
+        return {"vector_indexes": [{"name": n} for n in self.indexes]}
+
+    def create_delta_sync_index(self, **kwargs):
+        self.log.append("create_index")
+
+    def get_index(self, endpoint, name):
+        return FakeIndex(self.log)
+
+
+def test_shared_index_waits_for_endpoint_then_index(settings):
+    vsc = FakeVsc()
+    name = ensure_shared_index(vsc, settings)
+    assert vsc.log == ["create_endpoint", "wait_endpoint", "create_index", "wait_index"]
+    assert name == "chatbots_test._platform.shared_chunks_index"
+
+
+def test_shared_index_still_waits_when_everything_exists(settings):
+    vsc = FakeVsc(endpoints=[settings.get("ai_search.endpoint")],
+                  indexes=["chatbots_test._platform.shared_chunks_index"])
+    ensure_shared_index(vsc, settings)
+    assert vsc.log == ["wait_endpoint", "wait_index"]
+
+
+def test_grant_agent_access(settings, fake_sql):
+    grant_agent_access(fake_sql, settings, "agent-sp-id")
+    assert len(fake_sql.statements) == 5
+    assert all("TO `agent-sp-id`" in s for s, _ in fake_sql.statements)
+    assert fake_sql.find(r"READ VOLUME ON VOLUME `chatbots_test`\.`_platform`\.`runtime`")
+    assert fake_sql.find(r"WRITE VOLUME ON VOLUME `chatbots_test`\.`_platform`\.`logs`")
+
+
+def test_grant_agent_access_without_principal_does_nothing(settings, fake_sql):
+    grant_agent_access(fake_sql, settings, "")
+    assert fake_sql.statements == []
+
+
+def _workspace(missing=(), secrets=None):
+    secrets = secrets if secrets is not None else {
+        "chatbot-factory": ["agent-sp-client-id", "agent-sp-client-secret"],
+        "chatbot-factory-identity": ["pseudonym-hmac-key", "identity-fernet-key"],
+    }
+
+    def getter(kind):
+        def get(name):
+            if name in missing:
+                raise LookupError(f"{kind} {name} does not exist")
+            return name
+        return SimpleNamespace(get=get)
+
+    def list_secrets(scope):
+        if scope not in secrets:
+            raise LookupError(f"scope {scope} does not exist")
+        return [SimpleNamespace(key=k) for k in secrets[scope]]
+
+    return SimpleNamespace(catalogs=getter("catalog"), warehouses=getter("warehouse"),
+                           serving_endpoints=getter("endpoint"),
+                           secrets=SimpleNamespace(list_secrets=list_secrets))
+
+
+def test_preflight_passes_when_everything_exists(settings):
+    assert deploy_problems(_workspace(), settings, "wh1", "chatbot-factory-identity", "chatbot-factory") == []
+
+
+def test_preflight_reports_every_missing_piece_together(settings):
+    w = _workspace(missing={"chatbots_test", "wh1"},
+                   secrets={"chatbot-factory": ["agent-sp-client-id"]})
+    problems = deploy_problems(w, settings, "wh1", "chatbot-factory-identity", "chatbot-factory")
+    assert len(problems) == 4
+    assert any("Catalog 'chatbots_test'" in p and "(A5)" in p for p in problems)
+    assert any("SQL warehouse 'wh1'" in p for p in problems)
+    assert any("'chatbot-factory'" in p and "agent-sp-client-secret" in p for p in problems)
+    assert any("'chatbot-factory-identity'" in p and "(A7)" in p for p in problems)

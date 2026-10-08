@@ -6,6 +6,7 @@ steps and resumes where it failed. Every step is also safe to re-run.
 from __future__ import annotations
 
 import io
+from datetime import timedelta
 from typing import Callable
 
 from .config import BotConfig, PlatformSettings
@@ -218,11 +219,30 @@ PROGRESS_MESSAGES = {
 }
 
 
-def ensure_shared_index(vsc, settings: PlatformSettings) -> None:
-    """Platform setup: one AI Search endpoint + one shared index (ARC-4)."""
+def grant_agent_access(sql: SqlRunner, settings: PlatformSettings, agent_principal: str) -> None:
+    """What the agent's service principal needs at runtime: read its config, write its logs."""
+    if not agent_principal:
+        return
+    platform, who = ident(settings.catalog, settings.platform_schema), principal(agent_principal)
+    sql.execute(f"GRANT USE CATALOG ON CATALOG {ident(settings.catalog)} TO {who}")
+    sql.execute(f"GRANT USE SCHEMA ON SCHEMA {platform} TO {who}")
+    sql.execute(f"GRANT READ VOLUME ON VOLUME {platform}.`runtime` TO {who}")
+    sql.execute(f"GRANT WRITE VOLUME ON VOLUME {platform}.`logs` TO {who}")
+    sql.execute(f"GRANT SELECT ON TABLE {platform}.`user_access` TO {who}")
+
+
+def ensure_shared_index(vsc, settings: PlatformSettings, wait_minutes: int = 60) -> str:
+    """Platform setup: one AI Search endpoint + one shared index (ARC-4).
+
+    Endpoint and index creation are asynchronous, so each is awaited before the next step uses
+    it: the index is only created on an online endpoint, and this returns the index name only
+    once the index exists in Unity Catalog and can be queried.
+    """
+    timeout = timedelta(minutes=wait_minutes)
     ep = settings.get("ai_search.endpoint")
     if ep not in {e.get("name") for e in vsc.list_endpoints().get("endpoints", [])}:
         vsc.create_endpoint(name=ep, endpoint_type="STANDARD")
+    vsc.wait_for_endpoint(ep, timeout=timeout)
     name = f"{settings.catalog}.{settings.platform_schema}.{settings.get('ai_search.shared_index')}"
     existing = {i.get("name") for i in vsc.list_indexes(ep).get("vector_indexes", [])}
     if name not in existing:
@@ -233,6 +253,8 @@ def ensure_shared_index(vsc, settings: PlatformSettings) -> None:
             embedding_model_endpoint_name=settings.get("models.embedding_endpoint"),
             columns_to_sync=INDEX_COLUMNS,
         )
+    vsc.get_index(ep, name).wait_until_ready(timeout=timeout)
+    return name
 
 
 def index_name_for(settings: PlatformSettings, cfg: BotConfig) -> str:

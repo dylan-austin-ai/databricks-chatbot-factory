@@ -10,7 +10,7 @@ Grants (PRV-1, REL-10, GOV-10):
 from _bootstrap import ACTOR, args, context, vector_client
 
 from factory.controlplane import render
-from factory.provisioning import ensure_shared_index, principal
+from factory.provisioning import ensure_shared_index, grant_agent_access, principal
 from factory.sql import ident
 
 a = args("catalog", "agent_principal")
@@ -41,10 +41,7 @@ if support:  # masked by ABAC policies for anyone outside Security and MLOps
     for v in ("v_bot_activity", "v_monitoring", "v_guardrails", "v_alerts_open", "v_releases", "v_eval_latest",
               "v_observability_daily", "v_quality_daily"):
         sql.execute(f"GRANT SELECT ON VIEW {platform}.{ident(v)} TO {principal(support)}")
-if a.agent_principal:
-    sql.execute(f"GRANT READ VOLUME ON VOLUME {platform}.`runtime` TO {principal(a.agent_principal)}")
-    sql.execute(f"GRANT WRITE VOLUME ON VOLUME {platform}.`logs` TO {principal(a.agent_principal)}")
-    sql.execute(f"GRANT SELECT ON TABLE {platform}.`user_access` TO {principal(a.agent_principal)}")
+grant_agent_access(sql, s, a.agent_principal)
 
 # Governance (GOV-10..12) and cost views over system tables (CST-9/10). Each statement is tried
 # on its own: features an account hasn't enabled are reported, not fatal.
