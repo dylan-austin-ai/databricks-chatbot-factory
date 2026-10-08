@@ -114,6 +114,13 @@ for mv in ("mv_chatbot_usage", "mv_chatbot_quality"):
             sql.execute(f"GRANT SELECT ON VIEW {s.fq(mv)} TO `{grp}`")
         except Exception as e:  # noqa: BLE001
             print(f"Grant on {mv} skipped: {e}")
+# The Genie agent reads v_observability_daily, one of the dashboard views setup_platform creates.
+# Create them here too (CREATE OR REPLACE, same definitions) so this task doesn't depend on that
+# job having run first.
+try:
+    cp.ensure_views()
+except Exception as e:  # noqa: BLE001 - e.g. no access to the system billing tables one view reads
+    print(f"Dashboard views incomplete: {str(e)[:200]}")
 obs = dict(s.get("observability", {}))
 if not obs.get("genie_space_id"):
     try:
