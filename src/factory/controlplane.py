@@ -14,13 +14,42 @@ SQL_DIR = Path(__file__).resolve().parents[2] / "sql"
 
 
 def split_statements(sql_text: str) -> list[str]:
-    """Split a DDL file on semicolons, dropping comment-only fragments."""
-    out = []
-    for raw in sql_text.split(";"):
-        lines = [ln for ln in raw.splitlines() if not ln.strip().startswith("--")]
-        stmt = "\n".join(lines).strip()
+    """Split a DDL file into statements on semicolons.
+
+    Semicolons inside quoted strings ('...', "..."), backtick identifiers and comments don't
+    end a statement. Line comments (-- ...) are dropped; block comments are kept.
+    """
+    out, buf, i, n = [], [], 0, len(sql_text)
+
+    def flush() -> None:
+        stmt = "".join(buf).strip()  # text inside strings is left exactly as written
         if stmt:
             out.append(stmt)
+        buf.clear()
+
+    while i < n:
+        ch = sql_text[i]
+        if ch in "'\"`":  # quoted run; '' closes and reopens, so doubling needs no special case
+            end = i + 1
+            while end < n and sql_text[end] != ch:
+                end += 2 if sql_text[end] == "\\" and ch != "`" else 1
+            buf.append(sql_text[i:end + 1])
+            i = end + 1
+        elif sql_text.startswith("--", i):
+            end = sql_text.find("\n", i)
+            i = n if end == -1 else end
+        elif sql_text.startswith("/*", i):
+            end = sql_text.find("*/", i + 2)
+            end = n if end == -1 else end + 2
+            buf.append(sql_text[i:end])
+            i = end
+        elif ch == ";":
+            flush()
+            i += 1
+        else:
+            buf.append(ch)
+            i += 1
+    flush()
     return out
 
 

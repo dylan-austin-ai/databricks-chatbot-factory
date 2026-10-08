@@ -70,3 +70,47 @@ def test_tags_applied(settings, cfg, fake_sql):
     tagged = fake_sql.find("SET TAGS")
     assert all("'chatbot_name' = 'claims_chatbot'" in t for t in tagged)
     assert any("ALTER SCHEMA" in t for t in tagged)
+
+
+def test_split_ignores_semicolons_in_strings_and_comments():
+    from factory.controlplane import split_statements
+
+    text = """
+    -- header comment; with a semicolon
+    CREATE SCHEMA s COMMENT 'Managed by the app; no manual edits';
+    CREATE TABLE t (
+      a INT, b INT,   -- first; second
+      c STRING        /* block; comment */
+    );
+    SELECT 'it''s; fine', "double; quoted", `odd;name`, 'back\\'slash; too' FROM t;
+    SELECT 1
+    """
+    stmts = split_statements(text)
+    assert len(stmts) == 4
+    assert stmts[0] == "CREATE SCHEMA s COMMENT 'Managed by the app; no manual edits'"
+    assert stmts[1].startswith("CREATE TABLE t (") and stmts[1].endswith(")")
+    assert "first; second" not in stmts[1] and "c STRING" in stmts[1]
+    assert "'it''s; fine'" in stmts[2] and '"double; quoted"' in stmts[2] and "`odd;name`" in stmts[2]
+    assert stmts[3] == "SELECT 1"
+
+
+def test_string_that_looks_like_a_comment_is_kept():
+    from factory.controlplane import split_statements
+
+    assert split_statements("SELECT '-- not a comment; really' AS x;") == ["SELECT '-- not a comment; really' AS x"]
+
+
+def test_every_rendered_statement_is_whole(settings):
+    import re
+
+    values = dict(catalog="`c`", platform="`_platform`", schema="`b`", display_name="B",
+                  tag_chatbot="chatbot_name", shared_value="shared-platform",
+                  security="`security`", admins="`mlops`", extra="")
+    starts = re.compile(r"^(CREATE|ALTER|GRANT|REVOKE|DROP|INSERT|MERGE|COMMENT|SET|WITH|SELECT|REFRESH)\b", re.I)
+    for name in ("controlplane_ddl.sql", "bot_schema_ddl.sql", "dashboard_views.sql", "governance.sql",
+                 "system_views.sql", "metric_views.sql"):
+        for stmt in render(name, **values):
+            assert starts.match(stmt), f"{name}: fragment {stmt[:60]!r}"
+            assert stmt.count("(") == stmt.count(")"), f"{name}: unbalanced {stmt[:60]!r}"
+    schema = render("controlplane_ddl.sql", **values)[0]
+    assert schema.endswith("Managed by the app; no manual edits (LCY-5, REL-10).'")
