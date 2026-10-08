@@ -9,7 +9,7 @@
 import mlflow
 from _bootstrap import args, context
 
-from factory.tracing import judge_filters
+from factory.tracing import judge_filters, start_production_scorer
 
 a = args("catalog", "environment", "warehouse_id")
 spark, sql, settings, cp, w = context(a.catalog)
@@ -45,6 +45,7 @@ scorers = {
     "knowledge_retention": ("multi_turn", KnowledgeRetention, {}),
 }
 rate = float(s.get("quality.judge_sample_rate", 0.2))
+skipped = []
 for name, (switch, cls, kw) in scorers.items():
     for critical, sample in ((True, 1.0), (False, rate)):
         reg = f"{name}_{'critical' if critical else 'sampled'}"
@@ -56,9 +57,14 @@ for name, (switch, cls, kw) in scorers.items():
             scorer = cls(name=name, model=judge_model, **kw)
         except TypeError:  # this MLflow version's built-in takes no model: Databricks-managed judge
             scorer = cls(name=name, **kw)
-        scorer.register(name=reg).start(sampling_config=ScorerSamplingConfig(
-            sample_rate=sample, filter_string=judge_filters(critical, switch)))
-        print(f"Scorer {reg}: {sample:.0%}")
+        if start_production_scorer(scorer, reg, ScorerSamplingConfig(
+                sample_rate=sample, filter_string=judge_filters(critical, switch))):
+            print(f"Scorer {reg}: {sample:.0%}")
+        else:
+            skipped.append(reg)
+if skipped:
+    print(f"WARNING: {len(skipped)} production scorers are not running on this MLflow version: "
+          + ", ".join(skipped))
 
 # 2. Drift monitors ------------------------------------------------------------------------
 from databricks.sdk.service.catalog import (MonitorCronSchedule, MonitorInferenceLog,  # noqa: E402

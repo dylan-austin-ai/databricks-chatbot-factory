@@ -70,3 +70,43 @@ def test_pca_2d_separates_clusters():
     xy = pca_2d(np.vstack([a, b]))
     assert xy.shape == (40, 2)
     assert (xy[:20, 0].mean() > 0) != (xy[20:, 0].mean() > 0)  # the two topics land apart
+
+
+class _Scorer:
+    def __init__(self, error=None):
+        self.error, self.started = error, None
+
+    def register(self, name):
+        if self.error:
+            raise self.error
+        self.registered = name
+        return self
+
+    def start(self, sampling_config):
+        self.started = sampling_config
+
+
+def test_production_scorer_is_registered_and_started():
+    from factory.tracing import start_production_scorer
+
+    scorer = _Scorer()
+    assert start_production_scorer(scorer, "safety_sampled", "cfg") is True
+    assert scorer.registered == "safety_sampled" and scorer.started == "cfg"
+
+
+def test_scorer_this_mlflow_cannot_register_is_skipped(capsys):
+    from factory.tracing import start_production_scorer
+
+    scorer = _Scorer(NotImplementedError("KnowledgeRetention uses composition with last_turn_scorer"))
+    assert start_production_scorer(scorer, "knowledge_retention_sampled", "cfg") is False
+    out = capsys.readouterr().out
+    assert "knowledge_retention_sampled" in out and "skipped" in out
+
+
+def test_other_scorer_failures_are_raised():
+    import pytest
+
+    from factory.tracing import start_production_scorer
+
+    with pytest.raises(RuntimeError):
+        start_production_scorer(_Scorer(RuntimeError("quota exceeded")), "safety_sampled", "cfg")

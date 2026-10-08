@@ -85,6 +85,19 @@ def judge_filters(critical: bool, judge: str) -> str:
             f"AND tags.critical = '{'true' if critical else 'false'}'")
 
 
+def start_production_scorer(scorer, registered_name: str, sampling_config) -> bool:
+    """Register a scorer for production monitoring and start it. Returns False, without raising,
+    when this MLflow version can't register that scorer: some built-ins (for example
+    KnowledgeRetention, which is composed of other scorers) raise NotImplementedError on
+    serialization. Any other failure is raised."""
+    try:
+        scorer.register(name=registered_name).start(sampling_config=sampling_config)
+    except NotImplementedError as e:
+        print(f"Scorer {registered_name}: skipped, this MLflow version can't register it ({e})")
+        return False
+    return True
+
+
 def assessment_value(value) -> float | None:
     """Normalize a judge result (bool, yes/no, pass/fail, number) to 1.0/0.0 or a number."""
     if isinstance(value, bool):
