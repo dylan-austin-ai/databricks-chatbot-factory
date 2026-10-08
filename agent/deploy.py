@@ -238,11 +238,8 @@ for t in ("spans", "annotations", "logs", "metrics"):
         spark.sql(f"GRANT SELECT ON TABLE {table} TO `{who}`")
 
 # Platform release record (REL-7, REL-8)
-spark.sql(
-    f"INSERT INTO `{a.catalog}`.`{s.platform_schema}`.platform_releases VALUES "
-    "(uuid(), :pv, :gc, :env, :mv, :gate, :who, current_timestamp())",
-    args={"pv": PLATFORM_VERSION, "gc": a.git_commit, "env": a.environment, "mv": str(version),
-          "gate": a.require_gate == "true", "who": getpass.getuser()})
+cp.record_platform_release(PLATFORM_VERSION, a.git_commit, a.environment, str(version),
+                           a.require_gate == "true", getpass.getuser())
 print(f"Deployed {model_name} v{version} to {a.endpoint} (platform {PLATFORM_VERSION})")
 
 print("Set these in the Unity Gateway UI if not already set (docs/SETUP.md, Part C):")

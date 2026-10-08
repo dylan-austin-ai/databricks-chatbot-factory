@@ -114,3 +114,29 @@ def test_every_rendered_statement_is_whole(settings):
             assert stmt.count("(") == stmt.count(")"), f"{name}: unbalanced {stmt[:60]!r}"
     schema = render("controlplane_ddl.sql", **values)[0]
     assert schema.endswith("Managed by the app; no manual edits (LCY-5, REL-10).'")
+
+
+def test_platform_release_insert_uses_select_and_a_generated_id(settings, fake_sql):
+    import uuid
+
+    from factory.controlplane import ControlPlane
+
+    rid = ControlPlane(fake_sql, settings).record_platform_release("1.0.0", "abc123", "dev", "7", True, "deployer")
+    (stmt, params), = fake_sql.statements
+    assert stmt.startswith("INSERT INTO chatbots_test._platform.platform_releases (release_id, platform_version,")
+    assert " SELECT :id, :pv, :gc, :env, :mv, CAST(:gate AS BOOLEAN), :who, current_timestamp()" in stmt
+    assert "VALUES" not in stmt and "uuid()" not in stmt
+    assert uuid.UUID(rid) and params == {"id": rid, "pv": "1.0.0", "gc": "abc123", "env": "dev",
+                                         "mv": "7", "gate": True, "who": "deployer"}
+
+
+def test_no_sql_generates_ids_with_uuid_function():
+    """Databricks SQL rejects uuid() in a parameterized VALUES clause; ids are generated in Python."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    files = [f for d in ("src", "app", "agent", "jobs", "sql") for f in (root / d).rglob("*")
+             if f.suffix in (".py", ".sql")]
+    assert files
+    offenders = [str(f.relative_to(root)) for f in files if "uuid()" in f.read_text()]
+    assert offenders == []

@@ -122,6 +122,26 @@ class ControlPlane:
              "target": target, "detail": json.dumps(detail or {})},
         )
 
+    # Platform releases (REL-7, REL-8) ------------------------------------------
+    def record_platform_release(self, platform_version: str, git_commit: str, environment: str,
+                                model_version: str, gate_enforced: bool, deployed_by: str) -> str:
+        """One row per agent deployment; returns its release_id.
+
+        The id is generated here and the row is written with INSERT ... SELECT and named
+        columns: Databricks SQL rejects its uuid function inside a parameterized VALUES clause, and naming
+        the columns keeps the insert valid if the table gains columns later.
+        """
+        release_id = str(uuid.uuid4())
+        self.sql.execute(
+            f"INSERT INTO {self.s.fq('platform_releases')} "
+            "(release_id, platform_version, git_commit, environment, model_version, gate_enforced, "
+            "deployed_by, ts) "
+            "SELECT :id, :pv, :gc, :env, :mv, CAST(:gate AS BOOLEAN), :who, current_timestamp()",
+            {"id": release_id, "pv": platform_version, "gc": git_commit, "env": environment,
+             "mv": model_version, "gate": gate_enforced, "who": deployed_by},
+        )
+        return release_id
+
     # Bots ---------------------------------------------------------------
     def existing_bot_ids(self) -> set[str]:
         return {r["bot_id"] for r in self.sql.query(f"SELECT bot_id FROM {self.s.fq('bots')}")}
