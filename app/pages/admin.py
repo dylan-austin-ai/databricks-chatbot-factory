@@ -16,7 +16,7 @@ from common import JOB_IDS, STATE_LABEL, app_client, cp, current_user, is_admin,
 from factory.explain import help_text
 from factory.config import DEFAULT_JUDGES, DEFAULT_OBSERVABILITY
 from factory.gateway import ui_checklist
-from factory.lifecycle import State
+from factory.lifecycle import State, TransitionError, retire_path
 from factory.provisioning import Provisioner
 
 if not is_admin():
@@ -213,39 +213,70 @@ with tabs[1]:  # Chatbots ------------------------------------------------------
 
 with tabs[2]:  # Lifecycle (LCY-6/7) -------------------------------------------------------
     keep = int(s.get("soft_delete_retention_days", 90))
-    st.caption(f"Archived chatbots stop answering and keep everything. Deleted chatbots are purged "
-               f"automatically after {keep} days (documents, chunks and test questions removed; audit "
-               "history, request logs and traces kept for 7 years). Deleted chatbots can be restored until purged.")
-    inactive = [b for b in control.list_bots(include_deleted=True) if b["state"] in ("archived", "deleted", "purged")]
-    if not inactive:
-        st.info("No archived or deleted chatbots.")
-    for b in inactive:
+    st.caption("**Archive** stops a chatbot answering and keeps everything; it can be restored. **Delete** also "
+               f"hides it, and its data is removed automatically after {keep} days; until then it can be restored. "
+               "**Delete completely** removes its documents, sections, test questions and search entries now and "
+               "can't be undone. Audit history, request logs and traces are always kept for 7 years.")
+
+    def retire(bot_id: str, state: str, target: str) -> None:
+        """Archive or delete from any state, through the allowed state changes."""
+        for step in retire_path(state, target):
+            control.set_state(bot_id, step, user)
+        if target == State.DELETED.value:
+            provisioner().remove_trigger(bot_id)
+
+    everything = control.list_bots(include_deleted=True)
+    groups = {"Active": [b for b in everything if b["state"] not in ("archived", "deleted", "purged")],
+              "Archived": [b for b in everything if b["state"] == "archived"],
+              "Deleted": [b for b in everything if b["state"] == "deleted"],
+              "Removed completely": [b for b in everything if b["state"] == "purged"]}
+    view = st.segmented_control("Show", list(groups), default="Active", key="lifecycle_view",
+                                format_func=lambda g: f"{g} ({len(groups[g])})") or "Active"
+    if not groups[view]:
+        st.info("No chatbots here.")
+    for b in groups[view]:
         k, state = b["bot_id"], b["state"]
-        c1, c2, c3 = st.columns([4, 2, 3])
+        c1, c2, c3 = st.columns([4, 2, 2])
         left = ""
         if state == "deleted" and b.get("deleted_at"):
             deleted = pd.to_datetime(b["deleted_at"], utc=True)
-            left = f" · purge in {max(0, keep - (datetime.now(timezone.utc) - deleted).days)} days"
+            left = f" · removed completely in {max(0, keep - (datetime.now(timezone.utc) - deleted).days)} days"
         c1.markdown(f"**{b['display_name']}** `{k}`  \n{b['owner_user']} · {STATE_LABEL.get(state, state)}{left}")
-        if state == "archived":
+        if state == "purged":
+            c2.caption("Record kept for audit")
+            continue
+        if view == "Active":
+            try:
+                retire_path(state, State.ARCHIVED.value)
+                if c2.button("Archive", key=f"ar2_{k}"):
+                    retire(k, state, State.ARCHIVED.value)
+                    st.rerun()
+            except TransitionError:  # never finished setup: nothing to keep answering from
+                c2.caption("Not set up: delete only")
+            if c3.button("Delete", key=f"de2_{k}"):
+                retire(k, state, State.DELETED.value)
+                st.rerun()
+        elif state == "archived":
             if c2.button("Restore", key=f"ra_{k}"):
                 control.set_state(k, State.TESTING.value, user)
                 provisioner().create_trigger(control.get_config(k))
                 st.rerun()
             if c3.button("Delete", key=f"de_{k}"):
-                control.set_state(k, State.DELETED.value, user)
-                provisioner().remove_trigger(k)
+                retire(k, state, State.DELETED.value)
                 st.rerun()
         elif state == "deleted":
             if c2.button("Restore", key=f"rd_{k}"):
                 control.set_state(k, State.ARCHIVED.value, user)
                 st.rerun()
-            confirm = c3.text_input("Type the technical name to purge now", key=f"pc_{k}", label_visibility="collapsed",
-                                    placeholder=f"type {k} to purge now")
-            if confirm == k and c3.button("Purge now", key=f"pu_{k}", type="primary"):
+        with st.expander(f"Delete {b['display_name']} completely"):
+            st.write("Removes this chatbot's documents, sections, test questions and search entries now. "
+                     "This can't be undone.")
+            confirm = st.text_input("Type the technical name to confirm", key=f"pc_{k}", placeholder=k)
+            if st.button("Delete completely", key=f"pu_{k}", type="primary", disabled=confirm != k):
+                retire(k, state, State.DELETED.value)
                 run_job("maintenance", purge_bot_id=k, actor=user)
                 control.audit(user, k, "purge_requested", k)
-                st.success("Purge started.")
+                st.success("Deleting. It moves to **Removed completely** when the cleanup job finishes.")
 
 with tabs[3]:  # Reports ---------------------------------------------------------------------
     days = st.segmented_control("Period", [7, 30, 90], default=30, format_func=lambda d: f"{d} days", key="rep") or 30

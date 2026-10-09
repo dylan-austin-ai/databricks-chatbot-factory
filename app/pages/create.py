@@ -12,13 +12,16 @@ from html import escape as esc
 import pandas as pd
 import streamlit as st
 
-from common import all_groups, app_client, check_emails, cp, current_user, docs, run_job, settings, sql, user_groups
+from common import (STATE_LABEL, all_groups, app_client, check_emails, cp, current_user, docs, is_owner, run_job,
+                    settings, sql, user_groups)
 from factory.config import EVERYONE, MAX_TESTERS, BotConfig
 from factory.explain import help_text
 from factory.guardrails import platform_rules
 from factory.lifecycle import State
 from factory.naming import NamingError, validate
+from factory.ingestion import BotPaths
 from factory.provisioning import Provisioner
+from factory.wizard import UNFINISHED_STATES, answers_from_config
 from ui import html, steps
 
 STEPS = ["Name and purpose", "People", "Who can use it", "Documents", "Answers and safety", "Alerts and review"]
@@ -53,23 +56,45 @@ def config() -> BotConfig:
     )
 
 
+def saved_documents(bot_id: str) -> int:
+    """Documents already stored for a chatbot whose setup is being resumed (0 if none yet)."""
+    try:
+        return int(sql().query(f"SELECT count(*) AS n FROM {BotPaths(s, bot_id).t('manifest')} "
+                               "WHERE status <> 'superseded'")[0]["n"])
+    except Exception:  # noqa: BLE001 - setup stopped before the chatbot's tables existed
+        return 0
+
+
 def create(cfg: BotConfig) -> None:
+    """Create the chatbot, or carry on creating one whose setup stopped. Every part is safe to
+    repeat: the saved answers are updated, finished setup steps are skipped and files already
+    stored are recognised."""
     user = current_user()
-    with st.status("Creating workspace…", expanded=True) as status:
-        control = cp()
-        control.save_config(cfg, user, "created", state=State.DRAFT.value)
-        Provisioner(sql(), s, control, app_client()).run(
-            cfg, user, progress=st.write, only=["create_objects", "tag_objects", "grant_access", "write_config"])
-        for name, data in w.get("files", {}).items():
-            exp = w.get("expiry", {}).get(name)  # per document: a date, or valid until replaced (DCL-1)
-            res = docs().register(cfg.bot_id, name, data, user, no_expiry=not exp,
-                                  expires_at=str(exp) if exp else None, doc_owner=cfg.owner_user)
-            if not res.ok:
-                st.warning(f"**{name}** wasn't added: {' '.join(res.reasons)}")
-        st.write("Reading documents, checking quality, writing test questions and choosing the best "
-                 "search method. This continues in the background.")
-        run_job("provision", bot_id=cfg.bot_id, actor=user)
-        status.update(label="Your chatbot is being built", state="complete")
+    control = cp()
+    try:
+        with st.status("Creating workspace…", expanded=True) as status:
+            existing = control.get_bot(cfg.bot_id)
+            control.save_config(cfg, user, "setup resumed" if existing else "created",
+                                state=None if existing else State.DRAFT.value)
+            w["resume"] = cfg.bot_id  # restore point: from here the wizard continues this chatbot
+            Provisioner(sql(), s, control, app_client()).run(
+                cfg, user, progress=st.write, only=["create_objects", "tag_objects", "grant_access", "write_config"])
+            for name, data in w.get("files", {}).items():
+                exp = w.get("expiry", {}).get(name)  # per document: a date, or valid until replaced (DCL-1)
+                res = docs().register(cfg.bot_id, name, data, user, no_expiry=not exp,
+                                      expires_at=str(exp) if exp else None, doc_owner=cfg.owner_user)
+                if not res.ok:
+                    st.warning(f"**{name}** wasn't added: {' '.join(res.reasons)}")
+            st.write("Reading documents, checking quality, writing test questions and choosing the best "
+                     "search method. This continues in the background.")
+            run_job("provision", bot_id=cfg.bot_id, actor=user)
+            status.update(label="Your chatbot is being built", state="complete")
+    except Exception as e:  # noqa: BLE001 - keep the answers and say how to carry on
+        st.error(f"Setup stopped before it finished: {type(e).__name__}: {str(e)[:400]}")
+        st.info("Your answers are saved. Change anything that needs fixing and press **Create chatbot** "
+                "again; steps that already finished are skipped. If you leave this page, the chatbot is "
+                "listed under **Unfinished chatbots** on **Create a chatbot**.")
+        st.stop()
     st.session_state["bot_id"] = cfg.bot_id
     st.session_state.pop("wizard", None)
     st.page_link("pages/documents.py", label="Next: check your documents", icon=":material/description:")
@@ -77,6 +102,15 @@ def create(cfg: BotConfig) -> None:
 
 
 def name_fields(problems: list[str]) -> None:
+    if w.get("resume"):  # the chatbot already exists under this name; the technical name can't change
+        st.text_input("What should we call your chatbot?", w.get("display_name", ""), disabled=True,
+                      help="The name was fixed when setup started.")
+        w["purpose"] = st.text_area("In one sentence, what will it help people with?", w.get("purpose", ""),
+                                    help=help_text("purpose"))
+        st.caption(f"Technical name: `{w['bot_id']}` (can't be changed later)")
+        if not w["purpose"]:
+            problems.append("Add a purpose.")
+        return
     w["display_name"] = st.text_input("What should we call your chatbot?", w.get("display_name", ""),
                                       placeholder="Claims Chatbot")
     w["purpose"] = st.text_area("In one sentence, what will it help people with?", w.get("purpose", ""),
@@ -157,9 +191,32 @@ def who_can_use(problems: list[str]) -> None:
         problems.append("Add at least one group or person.")
 
 
+def has_documents() -> bool:
+    """Files chosen now, or already stored for a chatbot whose setup is being resumed."""
+    return bool(w.get("files")) or bool(w.get("resume") and saved_documents(w["resume"]))
+
+
 # Path choice ---------------------------------------------------------------------------------
 if not w.get("mode"):
     st.title("Create a chatbot")
+    if w.get("resume"):
+        st.info(f"You're finishing the setup of **{w.get('display_name')}**. Pick a path below to carry on.")
+        if st.button("Start a new chatbot instead", type="tertiary"):
+            st.session_state["wizard"] = {"step": 0}
+            st.rerun()
+    unfinished = [b for b in cp().list_bots() if b["state"] in UNFINISHED_STATES and is_owner(b)
+                  and b["bot_id"] != w.get("resume")]
+    if unfinished:
+        with st.container(border=True):
+            st.subheader("Unfinished chatbots")
+            st.caption("Setup started but didn't finish. Your answers were saved, so you can pick up where it stopped.")
+            for b in unfinished:
+                c1, c2 = st.columns([5, 2])
+                c1.markdown(f"**{b['display_name']}** `{b['bot_id']}`  \n"
+                            f"{STATE_LABEL.get(b['state'], b['state'])} · {b['owner_user']}")
+                if c2.button("Continue setup", key=f"resume_{b['bot_id']}", type="primary"):
+                    st.session_state["wizard"] = answers_from_config(cp().get_config(b["bot_id"]))
+                    st.rerun()
     st.write("Choose how much you want to set up yourself. You can switch at any time and change any setting later.")
     a, b = st.columns(2)
     with a.container(border=True):
@@ -208,7 +265,7 @@ if w["mode"] == "fast":
             "- **Test questions:** written for you; approve 50 before launch",
             "- **Documents:** internal, valid until replaced"]))
     cfg = config()
-    if not w.get("files"):
+    if not has_documents():
         problems.append("Upload at least one document.")
     problems += [] if problems else cfg.validate()
     for p in problems:
@@ -221,7 +278,8 @@ if w["mode"] == "fast":
         create(cfg)
     st.stop()
 
-st.caption("New chatbot · advanced mode" + (f" · `{w['bot_id']}`" if w.get("bot_id") else ""))
+st.caption(("Finishing setup" if w.get("resume") else "New chatbot") + " · advanced mode"
+           + (f" · `{w['bot_id']}`" if w.get("bot_id") else ""))
 st.title(STEPS[w["step"]])
 if st.button("Switch to fast path", type="tertiary"):
     w["mode"] = "fast"
@@ -306,7 +364,10 @@ elif step == "Documents":
     radio("Test questions", {"Write them for me": "generate", "I'll write my own": "manual",
                              "Later": "skip"}, "golden_set_mode", "generate", horizontal=True,
           help=help_text("test_questions"))
-    if not (w.get("files") or w.get("source_uri")):
+    if w.get("resume") and saved_documents(w["resume"]):
+        st.caption(f"{saved_documents(w['resume'])} document(s) are already stored for this chatbot. "
+                   "Add more here, or later on the Documents page.")
+    if not (has_documents() or w.get("source_uri")):
         problems.append("Add documents (or a link) to continue.")
 
 elif step == "Answers and safety":
@@ -349,7 +410,8 @@ else:  # Alerts and review (budgets are set by MLOps in Admin, WIZ-13)
             ("Owner", 1, f"{cfg.owner_user} ({cfg.owner_group})"), ("Reviewer", 1, cfg.reviewer),
             ("Who can use it", 2, "Through another app" if cfg.access_mode == "middleware"
              else ", ".join(cfg.allowed_principals)),
-            ("Documents", 3, f"{len(w.get('files', {}))} file(s), {cfg.sensitivity}"),
+            ("Documents", 3, f"{len(w.get('files', {})) + (saved_documents(w['resume']) if w.get('resume') else 0)}"
+                             f" file(s), {cfg.sensitivity}"),
             ("Extra topics to refuse", 4, ", ".join(cfg.refuse_topics) or "None"),
         ]:
             c1, c2, c3 = st.columns([2, 5, 1])

@@ -6,16 +6,57 @@ import json
 
 import streamlit as st
 
-from common import BADGE, app_client, current_user, docs, is_admin, pick_bot, run_job, settings, sql
+from common import (ALL_BOTS, BADGE, app_client, cp, current_user, docs, is_admin, pick_owned_bot, run_job,
+                    settings, sql)
 from factory.explain import help_text
 from factory.documents import FLAG_REASONS
 from factory.ingestion import BotPaths
 
 st.title("Documents", help=help_text("documents"))
-bot, cfg = pick_bot()
-if not bot:
+# Documents are visible to a chatbot's owner (the owner person or a member of the owner group)
+# and to MLOps. Reviewers and testers don't see them here.
+choice, owned = pick_owned_bot()
+if choice is None:
     st.stop()
 s, user, D = settings(), current_user(), docs()
+
+if choice == ALL_BOTS:
+    found, not_ready = [], []
+    for b in owned:
+        try:
+            for r in sql().query(f"""SELECT doc_name, doc_version, readability, status, expires_at, no_expiry,
+                                            uploaded_by FROM {BotPaths(s, b['bot_id']).t('manifest')}
+                                     WHERE status <> 'superseded'"""):
+                found.append({"Chatbot": b["display_name"], "Document": r["doc_name"], "Version": r["doc_version"],
+                              "Readability": BADGE.get(r["readability"]),
+                              "Status": (r["status"] or "").replace("_", " "),
+                              "Expires": "Until replaced" if str(r["no_expiry"]).lower() != "false"
+                              else str(r["expires_at"] or ""), "Uploaded by": r["uploaded_by"]})
+        except Exception:  # noqa: BLE001 - setup hasn't created this chatbot's document table yet
+            not_ready.append(b["display_name"])
+    st.caption(f"Documents across {len(owned)} chatbot(s) you "
+               + ("administer" if is_admin() else "own")
+               + ". Choose one chatbot in the sidebar to review, add or change its documents.")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Chatbots", len(owned))
+    c2.metric("Documents", len(found))
+    c3.metric("Need review", len([r for r in found if r["Status"] == "pending review"]))
+    if found:
+        statuses = sorted({r["Status"] for r in found})
+        keep = st.multiselect("Status", statuses, default=statuses)
+        find = st.text_input("Search by document or chatbot name", "").strip().lower()
+        shown = [r for r in found if r["Status"] in keep
+                 and (not find or find in r["Document"].lower() or find in r["Chatbot"].lower())]
+        st.dataframe(sorted(shown, key=lambda r: (r["Chatbot"], r["Document"])), hide_index=True,
+                     use_container_width=True)
+    else:
+        st.info("No documents yet.")
+    if not_ready:
+        st.caption("Setup not finished, so no documents to show yet: " + ", ".join(sorted(not_ready)))
+    st.stop()
+
+bot = next(b for b in owned if b["bot_id"] == choice)
+cfg = cp().get_config(choice)
 p = BotPaths(s, cfg.bot_id)
 
 rows = sql().query(f"""

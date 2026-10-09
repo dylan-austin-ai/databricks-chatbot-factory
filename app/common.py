@@ -183,6 +183,40 @@ def my_bots() -> list[dict]:
     return [b for b in cp().list_bots() if can_manage(b)]
 
 
+def is_owner(bot: dict) -> bool:
+    """The owner person, a member of the owner group, or MLOps. Unlike can_manage, a reviewer
+    or tester is not an owner."""
+    u = current_user()
+    return is_admin() or u == bot.get("owner_user") or bot.get("owner_group") in user_groups(u)
+
+
+def owned_bots() -> list[dict]:
+    """Chatbots whose documents this person may see: their own, or all of them for MLOps."""
+    return [b for b in cp().list_bots() if is_owner(b)]
+
+
+ALL_BOTS = "__all__"
+
+
+def pick_owned_bot() -> tuple[str | None, list[dict]]:
+    """Sidebar picker over the chatbots this person owns, with an "all" entry first. Returns the
+    chosen bot_id (ALL_BOTS for all of them, None when they own none) and the owned chatbots."""
+    bots = owned_bots()
+    if not bots:
+        st.info("You don't own any chatbots yet. Create one from **Create a chatbot**.")
+        return None, []
+    ids = [ALL_BOTS] + [b["bot_id"] for b in bots]
+    names = {b["bot_id"]: b["display_name"] for b in bots}
+    names[ALL_BOTS] = "All chatbots" if is_admin() else "All my chatbots"
+    current = st.session_state.get("docs_bot_id") or st.session_state.get("bot_id")
+    choice = st.sidebar.selectbox("Chatbot", ids, index=ids.index(current) if current in ids else 0,
+                                  format_func=lambda i: names[i])
+    st.session_state["docs_bot_id"] = choice
+    if choice != ALL_BOTS:
+        st.session_state["bot_id"] = choice
+    return choice, bots
+
+
 def pick_bot(label: str = "Chatbot") -> tuple[dict, BotConfig] | tuple[None, None]:
     bots = my_bots()
     if not bots:

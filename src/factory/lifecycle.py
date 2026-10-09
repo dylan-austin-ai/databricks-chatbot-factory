@@ -26,10 +26,10 @@ class State(str, Enum):
 
 TRANSITIONS: dict[State, set[State]] = {
     State.DRAFT: {State.PROVISIONING, State.DELETED},
-    State.PROVISIONING: {State.TESTING, State.PROVISION_FAILED},
+    State.PROVISIONING: {State.TESTING, State.PROVISION_FAILED, State.DELETED},  # DELETED: a stuck setup
     State.PROVISION_FAILED: {State.PROVISIONING, State.DELETED},
     State.TESTING: {State.PENDING_APPROVAL, State.PROVISIONING, State.ARCHIVED},
-    State.PENDING_APPROVAL: {State.LIVE, State.TESTING},
+    State.PENDING_APPROVAL: {State.LIVE, State.TESTING, State.ARCHIVED},
     State.LIVE: {State.PAUSED, State.BUDGET_PAUSED, State.ARCHIVED, State.TESTING},  # TESTING: first smoke test failed
     State.PAUSED: {State.LIVE, State.ARCHIVED},
     State.BUDGET_PAUSED: {State.LIVE, State.PAUSED, State.ARCHIVED},
@@ -51,3 +51,21 @@ def check_transition(current: str, target: str) -> None:
     guards the state machine."""
     if State(target) not in TRANSITIONS[State(current)]:
         raise TransitionError(f"A chatbot can't move from {current} to {target}.")
+
+
+def retire_path(current: str, target: str) -> list[str]:
+    """The state changes that take a chatbot from `current` to `target` ("archived" or "deleted")
+    without passing through any working state, e.g. live -> deleted is [archived, deleted].
+    Empty when it is already there. Raises TransitionError when there is no such route: a
+    chatbot that was never set up can be deleted but not archived."""
+    goal = State(target)
+    if goal not in (State.ARCHIVED, State.DELETED):
+        raise ValueError(f"retire_path only goes to archived or deleted, not {target}")
+    start = State(current)
+    if start == goal:
+        return []
+    if goal in TRANSITIONS[start]:
+        return [goal.value]
+    if goal == State.DELETED and State.ARCHIVED in TRANSITIONS[start]:
+        return [State.ARCHIVED.value, State.DELETED.value]
+    raise TransitionError(f"A chatbot can't move from {current} to {target}.")
