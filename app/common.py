@@ -108,14 +108,21 @@ def docs() -> Documents:
 
 @st.cache_data(ttl=300)
 def user_groups(email: str) -> set[str]:
-    """Groups of the signed-in person, cached per person for 5 minutes. Read with their own token
-    when the request carries one, else looked up by the app's service principal; every outcome
-    is logged by factory.access, and a failed lookup grants nothing."""
-    has_token = bool(st.context.headers.get("X-Forwarded-Access-Token")) and email == current_user()
+    """Groups of the signed-in person, cached per person for 5 minutes, read with their own
+    token. A missing token, a failed call or a token for a different account grants nothing;
+    every outcome is logged by factory.access.
+
+    The directory lookup exists only for local development: it is used when FACTORY_DEV_USER is
+    set and the request did not come through the Databricks Apps proxy (no sign-in header), and
+    it runs with the developer's own credentials. The deployed app never uses it."""
+    headers = st.context.headers
+    has_token = bool(headers.get("X-Forwarded-Access-Token")) and email == current_user()
+    local_dev = bool(os.environ.get("FACTORY_DEV_USER")) and not headers.get("X-Forwarded-Email")
     return resolve_groups(
         email,
         (lambda: user_client().current_user.me()) if has_token else None,
-        lambda e: app_client().users.list(filter=f'userName eq "{e}"', attributes="userName,groups"))
+        (lambda e: app_client().users.list(filter=f'userName eq "{e}"', attributes="userName,groups"))
+        if local_dev else None)
 
 
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
