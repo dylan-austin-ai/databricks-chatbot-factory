@@ -49,7 +49,8 @@ def config() -> BotConfig:
         history_mode=w.get("history_mode", "session"), identity_mode=w.get("identity_mode", "named"),
         sensitivity=w.get("sensitivity", "internal"), source_type=w.get("source_type", "upload"),
         source_uri=w.get("source_uri", ""),
-        golden_set_mode=w.get("golden_set_mode", "generate"), reviewer=w.get("reviewer", ""),
+        golden_set_mode=w.get("golden_set_mode", "generate"), setup_mode=w.get("mode") or "",
+        reviewer=w.get("reviewer", ""),
         testers=w.get("testers", []), team=w.get("owner_group", ""),
         answer_model=s.get("models.default_answer_model"), limit_quotes=w.get("limit_quotes", False),
         alert_prefs={"traffic": bool(w.get("traffic_alerts", True))},
@@ -193,6 +194,17 @@ def who_can_use(problems: list[str]) -> None:
         problems.append("Add at least one group or person.")
 
 
+def resuming() -> None:
+    """Says which unfinished chatbot the wizard is continuing, with a way out to a new one."""
+    if not w.get("resume"):
+        return
+    c1, c2 = st.columns([4, 2])
+    c1.info(f"You're finishing the setup of **{w.get('display_name')}**. Its answers were saved.")
+    if c2.button("Start a new chatbot instead"):
+        st.session_state["wizard"] = {"step": 0}
+        st.rerun()
+
+
 def has_documents() -> bool:
     """Files chosen now, or already stored for a chatbot whose setup is being resumed."""
     return bool(w.get("files")) or bool(w.get("resume") and saved_documents(w["resume"]))
@@ -201,11 +213,9 @@ def has_documents() -> bool:
 # Path choice ---------------------------------------------------------------------------------
 if not w.get("mode"):
     st.title("Create a chatbot")
+    resuming()
     if w.get("resume"):
-        st.info(f"You're finishing the setup of **{w.get('display_name')}**. Pick a path below to carry on.")
-        if st.button("Start a new chatbot instead", type="tertiary"):
-            st.session_state["wizard"] = {"step": 0}
-            st.rerun()
+        st.caption("Pick a path below to carry on. Either one keeps the answers you already gave.")
     unfinished = [b for b in cp().list_bots() if b["state"] in UNFINISHED_STATES and is_owner(b)
                   and b["bot_id"] != w.get("resume")]
     if unfinished:
@@ -239,8 +249,9 @@ if not w.get("mode"):
     st.stop()
 
 if w["mode"] == "fast":
-    st.caption("New chatbot · fast path")
+    st.caption(("Finishing setup" if w.get("resume") else "New chatbot") + " · fast path")
     st.title("Four questions and your documents")
+    resuming()
     if st.button("Switch to advanced mode", type="tertiary"):
         w["mode"] = "advanced"
         st.rerun()
@@ -286,6 +297,7 @@ st.title(STEPS[w["step"]])
 if st.button("Switch to fast path", type="tertiary"):
     w["mode"] = "fast"
     st.rerun()
+resuming()
 steps(w["step"], STEPS)
 
 

@@ -10,13 +10,13 @@ from factory.ingestion import BotPaths
 from ui import bar, html
 
 st.title("Test questions", help=help_text("test_questions"))
-st.caption("These questions check your chatbot before launch and after every change. "
+bot, cfg = pick_bot()  # test questions always belong to one chatbot
+if not bot:
+    st.stop()
+st.caption(f"These questions check **{cfg.display_name}** before launch and after every change. "
            "Approve the ones that are right; edit or delete the rest.")
 st.info("Add a few questions of your own, the way real users would ask them. \"Hard\" questions "
         "test tricky content like tables, footnotes and answers spread across pages.")
-bot, cfg = pick_bot()
-if not bot:
-    st.stop()
 p, user = BotPaths(settings(), cfg.bot_id), current_user()
 
 rows = sql().query(f"SELECT * FROM {p.t('golden_set')} WHERE active ORDER BY kind, origin, question")

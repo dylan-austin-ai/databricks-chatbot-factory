@@ -18,6 +18,7 @@ from factory.config import BotConfig, PlatformSettings  # noqa: E402
 from factory.controlplane import ControlPlane  # noqa: E402
 from factory.documents import Documents  # noqa: E402
 from factory.sql import WarehouseRunner  # noqa: E402
+from factory.wizard import UNFINISHED_STATES  # noqa: E402
 
 CATALOG = os.environ.get("FACTORY_CATALOG", "chatbots")
 WAREHOUSE_ID = os.environ.get("FACTORY_WAREHOUSE_ID", "")
@@ -198,19 +199,30 @@ def owned_bots() -> list[dict]:
 ALL_BOTS = "__all__"
 
 
+def _choose_chatbot(ids: list[str], names: dict[str, str], current: str | None) -> str:
+    """The chatbot picker shown at the top of a page, under its title. It sits in the page rather
+    than the sidebar so it is always clear which chatbot the page is showing."""
+    column, _ = st.columns([2, 3])
+    return column.selectbox("Chatbot", ids, index=ids.index(current) if current in ids else 0,
+                            format_func=lambda i: names[i],
+                            help="Everything below is for the chatbot chosen here.")
+
+
+def _label(bot: dict) -> str:
+    return f"{bot['display_name']} ({STATE_LABEL.get(bot['state'], bot['state'])})"
+
+
 def pick_owned_bot() -> tuple[str | None, list[dict]]:
-    """Sidebar picker over the chatbots this person owns, with an "all" entry first. Returns the
-    chosen bot_id (ALL_BOTS for all of them, None when they own none) and the owned chatbots."""
+    """Picker over the chatbots this person owns, with an "all" entry first. Returns the chosen
+    bot_id (ALL_BOTS for all of them, None when they own none) and the owned chatbots."""
     bots = owned_bots()
     if not bots:
         st.info("You don't own any chatbots yet. Create one from **Create a chatbot**.")
         return None, []
-    ids = [ALL_BOTS] + [b["bot_id"] for b in bots]
-    names = {b["bot_id"]: b["display_name"] for b in bots}
+    names = {b["bot_id"]: _label(b) for b in bots}
     names[ALL_BOTS] = "All chatbots" if is_admin() else "All my chatbots"
     current = st.session_state.get("docs_bot_id") or st.session_state.get("bot_id")
-    choice = st.sidebar.selectbox("Chatbot", ids, index=ids.index(current) if current in ids else 0,
-                                  format_func=lambda i: names[i])
+    choice = _choose_chatbot([ALL_BOTS] + [b["bot_id"] for b in bots], names, current)
     st.session_state["docs_bot_id"] = choice
     if choice != ALL_BOTS:
         st.session_state["bot_id"] = choice
@@ -218,16 +230,21 @@ def pick_owned_bot() -> tuple[str | None, list[dict]]:
 
 
 def pick_bot(label: str = "Chatbot") -> tuple[dict, BotConfig] | tuple[None, None]:
+    """For pages that only make sense for one chatbot (test questions, launch, monitoring,
+    traces): choose it at the top of the page. The choice carries over between pages."""
     bots = my_bots()
     if not bots:
         st.info("You don't have any chatbots yet. Create one from **Create a chatbot**.")
         return None, None
-    ids = [b["bot_id"] for b in bots]
-    default = ids.index(st.session_state["bot_id"]) if st.session_state.get("bot_id") in ids else 0
-    choice = st.sidebar.selectbox("Current chatbot", ids, index=default,
-                          format_func=lambda i: next(b["display_name"] for b in bots if b["bot_id"] == i))
+    choice = _choose_chatbot([b["bot_id"] for b in bots], {b["bot_id"]: _label(b) for b in bots},
+                             st.session_state.get("bot_id"))
     st.session_state["bot_id"] = choice
+    st.session_state["docs_bot_id"] = choice
     bot = next(b for b in bots if b["bot_id"] == choice)
+    if bot["state"] in UNFINISHED_STATES:  # its tables don't exist yet, so there is nothing to show
+        st.info(f"**{bot['display_name']}** isn't set up yet, so there's nothing here for it. "
+                "Finish its setup under **Unfinished chatbots** on **Create a chatbot**, or choose another chatbot.")
+        return None, None
     return bot, cp().get_config(choice)
 
 

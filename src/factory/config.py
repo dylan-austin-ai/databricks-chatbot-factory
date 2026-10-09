@@ -126,6 +126,7 @@ class BotConfig:
     source_uri: str = ""                # repo URL or SharePoint path
     sync_schedule: str = ""             # cron for live sources
     golden_set_mode: str = "generate"   # Q12: generate | manual | skip
+    setup_mode: str = ""                # wizard path it was created on (fast | advanced); "" = not recorded
     reviewer: str = ""                  # Q13 (LCY-4)
     testers: list[str] = field(default_factory=list)  # up to 10 candidate testers (REL-1)
     team: str = ""                      # team tag, derived from owner group

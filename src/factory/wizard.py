@@ -13,12 +13,16 @@ UNFINISHED_STATES = ("draft", "provision_failed")
 
 
 def answers_from_config(cfg: BotConfig) -> dict:
-    """The wizard's answer dictionary for a saved chatbot, opened on the review step."""
+    """The wizard's answer dictionary for a saved chatbot. Advanced mode opens on the review
+    step; the fast path is a single page."""
     allowed = list(cfg.allowed_principals or [])
     channels = set(cfg.channels or ["chat"])
     reviewer_is_person = "@" in (cfg.reviewer or "")
     return {
-        "mode": "advanced", "step": 5, "resume": cfg.bot_id,
+        # Reopen on the path it was started on. Chatbots saved before the path was recorded get
+        # the path choice, so a fast-path chatbot isn't forced into advanced mode.
+        "mode": cfg.setup_mode if cfg.setup_mode in ("fast", "advanced") else None,
+        "step": 5, "resume": cfg.bot_id,
         "bot_id": cfg.bot_id, "display_name": cfg.display_name, "purpose": cfg.purpose,
         "owner_user": cfg.owner_user, "owner_group": cfg.owner_group,
         "business_function": cfg.business_function, "access_mode": cfg.access_mode,

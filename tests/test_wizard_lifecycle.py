@@ -11,6 +11,7 @@ def test_saved_config_refills_the_wizard(cfg):
     cfg.channels = ["chat", "api"]
     cfg.testers = ["sam@corp.com"]
     cfg.alert_prefs = {"traffic": False}
+    cfg.setup_mode = "advanced"
     a = answers_from_config(cfg)
     assert (a["resume"], a["bot_id"], a["mode"], a["step"]) == ("claims_chatbot", "claims_chatbot", "advanced", 5)
     assert a["display_name"] == "Claims Chatbot" and a["purpose"].startswith("Answers adjusters")
@@ -80,3 +81,24 @@ def test_retire_path_only_retires():
         retire_path("archived", "live")
     with pytest.raises(TransitionError):
         retire_path("purged", "deleted")
+
+
+def test_wizard_reopens_on_the_path_the_chatbot_was_started_on(cfg):
+    cfg.setup_mode = "fast"
+    assert answers_from_config(cfg)["mode"] == "fast"
+    cfg.setup_mode = "advanced"
+    assert answers_from_config(cfg)["mode"] == "advanced"
+    cfg.setup_mode = ""              # saved before the path was recorded: let the owner choose
+    assert answers_from_config(cfg)["mode"] is None
+    cfg.setup_mode = "something-else"
+    assert answers_from_config(cfg)["mode"] is None
+
+
+def test_setup_mode_survives_a_save_and_old_configs_still_load(cfg):
+    import json
+
+    cfg.setup_mode = "fast"
+    assert BotConfig.from_dict(json.loads(cfg.to_json())).setup_mode == "fast"
+    old = json.loads(cfg.to_json())
+    del old["setup_mode"]
+    assert BotConfig.from_dict(old).setup_mode == ""
