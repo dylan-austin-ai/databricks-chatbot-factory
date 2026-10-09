@@ -47,7 +47,7 @@ class Pipeline:
     # Selection ------------------------------------------------------------
     def docs_needing_parse(self, p: BotPaths) -> list[dict]:
         return self.sql.query(f"""
-            SELECT m.doc_id, m.doc_version, m.parser, m.page_count, m.doc_name
+            SELECT m.doc_id, m.doc_version, m.parser, m.page_count, m.doc_name, m.file_path, m.page_range
             FROM {p.t('manifest')} m
             LEFT ANTI JOIN {p.t('parsed_elements')} pe
               ON pe.doc_id = m.doc_id AND pe.doc_version = m.doc_version
@@ -60,7 +60,8 @@ class Pipeline:
         p = BotPaths(self.s, cfg.bot_id)
         if doc_ids and reparse:
             targets = self.sql.query(
-                f"SELECT doc_id, doc_version, parser, page_count, doc_name FROM {p.t('manifest')} "
+                f"SELECT doc_id, doc_version, parser, page_count, doc_name, file_path, page_range "
+                f"FROM {p.t('manifest')} "
                 f"WHERE doc_id IN ({_in(len(doc_ids))}) AND status <> 'superseded'",
                 doc_params(doc_ids))
         else:
@@ -72,8 +73,12 @@ class Pipeline:
             self.log(f"Processing {len(ids)} document(s)")
             params = doc_params(ids)
             if not rechunk_only:  # rechunk_only: manual override saved (QA-11)
-                if any(t["parser"] == "ai_parse_document" for t in targets):
-                    self.sql.execute(parse_binary_sql(p, len(ids)), params)
+                # One statement per document version: the parser's options must be constants.
+                for t in targets:
+                    if t["parser"] == "ai_parse_document":
+                        self.sql.execute(
+                            parse_binary_sql(p, t["doc_id"], t["doc_version"], t["file_path"], t.get("page_range")),
+                            {"d": t["doc_id"], "v": int(t["doc_version"])})
                 if any(t["parser"] == "text_reader" for t in targets):
                     self.sql.execute(parse_text_sql(p, len(ids)), params)
             for stmt in chunk_sql(p, self.s, len(ids)):
