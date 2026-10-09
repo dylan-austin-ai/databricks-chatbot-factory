@@ -116,8 +116,9 @@ doc = names[doc_id]
 qa = json.loads(doc["qa_json"] or "{}")
 
 st.subheader(doc["doc_name"])
+valid = "valid until replaced" if str(doc["no_expiry"]).lower() != "false" else f"expires {doc['expires_at'] or 'not set'}"
 st.caption(f"Version {doc['doc_version']} · uploaded by {doc['uploaded_by']} · "
-           f"{doc['chunk_count'] or 0} sections · review by {doc['review_by']}")
+           f"{doc['chunk_count'] or 0} sections · {valid}")
 for m in qa.get("messages", []):
     (st.error if doc["readability"] == "red" else st.warning if doc["readability"] == "yellow"
      else st.caption)(m)

@@ -185,3 +185,20 @@ def test_metric_view_yaml_parses_with_backticked_names():
         sources.append(spec["source"])
     assert sources == ["`qa_chatbot_factory`.`_platform`.request_log",
                        "`qa_chatbot_factory`.`_platform`.judge_results"]
+
+
+def test_documents_page_only_reads_columns_the_manifest_has():
+    """The page indexes manifest rows by column name; a name the table lacks is a KeyError."""
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    ddl = (root / "sql" / "bot_schema_ddl.sql").read_text()
+    manifest = ddl[ddl.index(".manifest ("):]
+    manifest = manifest[:manifest.index("TBLPROPERTIES")]
+    columns = set(re.findall(r"^\s+([a-z_]+) [A-Z]+", manifest, re.M))
+    assert {"doc_id", "doc_name", "status", "no_expiry"} <= columns
+    page = (root / "app" / "pages" / "documents.py").read_text()
+    used = set(re.findall(r"""(?:doc|names\[d\]|r)\[["']([a-z_]+)["']\]""", page))
+    used -= {"bot_id", "display_name"}          # chatbot rows, not manifest rows
+    assert used and used - columns == set(), f"not in the manifest table: {sorted(used - columns)}"
