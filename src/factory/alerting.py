@@ -56,7 +56,7 @@ def ensure_bot_alerts(w, settings: PlatformSettings, cfg: BotConfig | None, ware
     for name, query, cron in specs:
         alert = dsql.AlertV2(
             display_name=name, query_text=query, warehouse_id=warehouse_id,
-            custom_subject=f"Chatbot alert: {label}",
+            custom_summary=f"Chatbot alert: {label}",
             custom_description="{{QUERY_RESULT_TABLE}}",
             evaluation=dsql.AlertV2Evaluation(
                 source=dsql.AlertV2OperandColumn(name="n"),
