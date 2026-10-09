@@ -47,15 +47,26 @@ def _ext(name: str) -> str:
 
 def _pdf_checks(data: bytes) -> tuple[int | None, list[str]]:
     reasons = []
-    head = data[:2048] + data[-4096:]
-    if b"/Encrypt" in data[-65536:] or b"/Encrypt" in head:
-        reasons.append("This PDF is password protected. Please upload an unprotected copy.")
+    # A PDF can be encrypted and still open for anyone: an owner password that only restricts
+    # printing, copying or page extraction leaves the open password empty. Those are accepted.
+    # Only a file that really needs a password to open is refused, so open it to find out.
+    pages, needs_password = None, None
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(io.BytesIO(data))
+        needs_password = bool(reader.is_encrypted) and not reader.decrypt("")
+        if not needs_password:
+            pages = len(reader.pages)
+    except Exception:  # noqa: BLE001 - unreadable here; fall back to the cheap checks below
+        pass
+    if needs_password:
+        reasons.append("This PDF needs a password to open. Please upload a copy that opens without one.")
+    elif needs_password is None and (b"/Encrypt" in data[-65536:] or b"/Encrypt" in data[:2048]):
+        reasons.append("This PDF is encrypted and we couldn't check whether it opens without a password. "
+                       "Please upload an unprotected copy.")
     if b"%%EOF" not in data[-2048:]:
         reasons.append("This PDF looks damaged or incomplete. Please re-export it and try again.")
-    try:
-        from pypdf import PdfReader  # optional, more accurate
-        pages = len(PdfReader(io.BytesIO(data)).pages)
-    except Exception:
+    if pages is None:
         pages = len(re.findall(rb"/Type\s*/Page(?!s)", data)) or None
     return pages, reasons
 

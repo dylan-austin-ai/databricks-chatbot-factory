@@ -482,6 +482,7 @@ dependencies = [
 
 [package.optional-dependencies]
 app = [
+    { name = "cryptography" },
     { name = "mlflow-skinny", extra = ["databricks"] },
     { name = "opentelemetry-distro" },
     { name = "opentelemetry-exporter-otlp-proto-grpc" },
@@ -494,6 +495,7 @@ app = [
     { name = "streamlit" },
 ]
 dev = [
+    { name = "cryptography" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -503,6 +505,7 @@ dev = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "cryptography" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -512,6 +515,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", marker = "extra == 'app'", specifier = ">=42" },
+    { name = "cryptography", marker = "extra == 'dev'", specifier = ">=42" },
     { name = "databricks-sdk", specifier = ">=0.60" },
     { name = "mlflow-skinny", extras = ["databricks"], marker = "extra == 'app'", specifier = ">=3.14" },
     { name = "numpy", marker = "extra == 'dev'", specifier = ">=1.26" },
@@ -533,6 +538,7 @@ provides-extras = ["dev", "app"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "cryptography", specifier = ">=42" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "pypdf", specifier = ">=4" },
     { name = "pytest", specifier = ">=8" },

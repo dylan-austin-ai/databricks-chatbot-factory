@@ -80,3 +80,44 @@ def test_scan_blocks_restricted_and_flags_personal():
 
 def test_luhn():
     assert luhn_ok("4111111111111111") and not luhn_ok("4111111111111112")
+
+
+def _real_pdf(user_password=None, owner_password=None, pages=2):
+    """A real PDF from pypdf, optionally encrypted. An owner password with an empty user password
+    is the "restricted but opens freely" case (for example Page Extraction: Not Allowed)."""
+    import io
+
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    for _ in range(pages):
+        writer.add_blank_page(width=200, height=200)
+    if owner_password is not None or user_password is not None:
+        writer.encrypt(user_password=user_password or "", owner_password=owner_password or "owner-secret",
+                       algorithm="AES-256", permissions_flag=0)
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+def test_restricted_pdf_that_opens_without_a_password_is_accepted(settings):
+    data = _real_pdf(owner_password="owner-secret")
+    assert b"/Encrypt" in data                       # it is encrypted in the technical sense
+    r = validate_file("policy.pdf", data, _settings(settings))
+    assert r.ok and r.reasons == [] and r.page_count == 2
+
+
+def test_pdf_that_needs_a_password_to_open_is_rejected(settings):
+    r = validate_file("policy.pdf", _real_pdf(user_password="open-me"), _settings(settings))
+    assert not r.ok and any("needs a password to open" in x for x in r.reasons)
+
+
+def test_plain_pdf_is_accepted_and_counted(settings):
+    r = validate_file("policy.pdf", _real_pdf(pages=3), _settings(settings))
+    assert r.ok and r.page_count == 3
+
+
+def test_unreadable_pdf_with_an_encryption_marker_is_still_rejected(settings):
+    """When the file can't be opened to check, the marker alone is enough to refuse it."""
+    r = validate_file("policy.pdf", minimal_pdf(encrypted=True), _settings(settings))
+    assert not r.ok and any("couldn't check" in x and "password" in x for x in r.reasons)

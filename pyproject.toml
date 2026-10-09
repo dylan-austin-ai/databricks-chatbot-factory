@@ -7,7 +7,7 @@ requires-python = ">=3.10"
 dependencies = ["pyyaml>=6", "databricks-sdk>=0.60", "openai>=1.40", "tzdata>=2024.1"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pypdf>=4", "numpy>=1.26"]
+dev = ["pytest>=8", "pypdf>=4", "cryptography>=42", "numpy>=1.26"]
 # Everything the Streamlit app needs at runtime. Mirrors requirements.txt, which
 # Databricks Apps installs from; keep the two in step.
 app = [
@@ -15,6 +15,7 @@ app = [
     "pandas>=2",
     "pillow>=10",
     "pypdf>=4",
+    "cryptography>=42",
     "mlflow-skinny[databricks]>=3.14",
     "opentelemetry-distro>=0.48b0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.27",
@@ -24,7 +25,7 @@ app = [
 
 # Installed by default with `uv sync`.
 [dependency-groups]
-dev = ["pytest>=8", "pypdf>=4", "numpy>=1.26"]
+dev = ["pytest>=8", "pypdf>=4", "cryptography>=42", "numpy>=1.26"]
 
 [build-system]
 requires = ["setuptools>=68"]
