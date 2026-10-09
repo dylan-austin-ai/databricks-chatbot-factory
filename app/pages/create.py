@@ -12,8 +12,8 @@ from html import escape as esc
 import pandas as pd
 import streamlit as st
 
-from common import (STATE_LABEL, all_groups, app_client, check_emails, cp, current_user, docs, is_owner, run_job,
-                    settings, sql, user_groups)
+from common import (STATE_LABEL, all_groups, app_client, check_emails, cp, current_user, docs, is_owner,
+                    remember_upload, run_job, settings, show_upload_report, sql, user_groups)
 from factory.config import EVERYONE, MAX_TESTERS, BotConfig
 from factory.explain import help_text
 from factory.guardrails import platform_rules
@@ -79,12 +79,13 @@ def create(cfg: BotConfig) -> None:
             w["resume"] = cfg.bot_id  # restore point: from here the wizard continues this chatbot
             Provisioner(sql(), s, control, app_client()).run(
                 cfg, user, progress=st.write, only=["create_objects", "tag_objects", "grant_access", "write_config"])
-            for name, data in w.get("files", {}).items():
-                exp = w.get("expiry", {}).get(name)  # per document: a date, or valid until replaced (DCL-1)
-                res = docs().register(cfg.bot_id, name, data, user, no_expiry=not exp,
-                                      expires_at=str(exp) if exp else None, doc_owner=cfg.owner_user)
-                if not res.ok:
-                    st.warning(f"**{name}** wasn't added: {' '.join(res.reasons)}")
+            expiry = w.get("expiry", {})  # per document: a date, or valid until replaced (DCL-1)
+            report = docs().upload_many(cfg.bot_id, [
+                {"name": name, "data": data, "no_expiry": not expiry.get(name),
+                 "expires_at": str(expiry[name]) if expiry.get(name) else None, "doc_owner": cfg.owner_user}
+                for name, data in w.get("files", {}).items()], user)
+            remember_upload(cfg.bot_id, report)  # shown here and again on the Documents page
+            st.write(f"{len([r for r in report if r['ok']])} of {len(report)} file(s) stored.")
             st.write("Reading documents, checking quality, writing test questions and choosing the best "
                      "search method. This continues in the background.")
             run_job("provision", bot_id=cfg.bot_id, actor=user)
@@ -97,6 +98,7 @@ def create(cfg: BotConfig) -> None:
         st.stop()
     st.session_state["bot_id"] = cfg.bot_id
     st.session_state.pop("wizard", None)
+    show_upload_report(cfg.bot_id)
     st.page_link("pages/documents.py", label="Next: check your documents", icon=":material/description:")
     st.stop()
 

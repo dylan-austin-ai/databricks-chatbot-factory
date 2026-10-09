@@ -6,8 +6,8 @@ import json
 
 import streamlit as st
 
-from common import (ALL_BOTS, BADGE, app_client, cp, current_user, docs, is_admin, pick_owned_bot, run_job,
-                    settings, sql)
+from common import (ALL_BOTS, BADGE, app_client, cp, current_user, docs, is_admin, pick_owned_bot, remember_upload,
+                    run_job, settings, show_upload_report, sql)
 from factory.explain import help_text
 from factory.documents import FLAG_REASONS
 from factory.ingestion import BotPaths
@@ -86,24 +86,36 @@ if pending and st.button("Approve all Good documents"):
     st.success(f"Approved {n} document(s).")
     st.rerun()
 
-with st.expander("Add documents"):
-    files = st.file_uploader("Drag and drop", accept_multiple_files=True, key="add_docs")
+show_upload_report(cfg.bot_id)
+with st.container(border=True):
+    st.subheader("Add documents")
+    st.caption("Add files at any time. A file with the same name as an existing document becomes its new "
+               "version. New files go into the test version and reach users after approval on the Launch page.")
+    ing = s.get("ingestion")
+    kinds = ing["parse_extensions"] + ing["text_extensions"] + (
+        ing["tabular_extensions"] if ing.get("enable_tabular") else [])
+    batch = st.session_state.setdefault("add_docs_batch", 0)  # a new key empties the uploader after an upload
+    files = st.file_uploader("Drag and drop, or browse", accept_multiple_files=True, type=kinds,
+                             key=f"add_docs_{batch}")
     keep = st.checkbox("These stay valid until I upload a new version", value=True, key="add_noexp")
     exp = None if keep else st.date_input("They expire on", key="add_exp")
-    if files and st.button("Upload"):
-        added = []
-        for f in files:
-            res = D.register(cfg.bot_id, f.name, f.getvalue(), user,
-                             no_expiry=keep, expires_at=str(exp) if exp else None)
-            if res.ok:
-                added.append(f.name)
-            else:
-                st.warning(f"**{f.name}** wasn't added: {' '.join(res.reasons)}")
-        if added:
-            if not settings().get("ingestion.auto_trigger", True):  # otherwise the file-arrival trigger runs it
-                run_job("ingest", bot_id=cfg.bot_id)
-            st.success(f"Added {len(added)} file(s). Reading starts within a minute; same-named files "
-                       "become new versions.")
+    if st.button("Upload", type="primary", disabled=not files):
+        report = D.upload_many(cfg.bot_id, [
+            {"name": f.name, "data": f.getvalue(), "no_expiry": keep, "expires_at": str(exp) if exp else None}
+            for f in files], user)
+        remember_upload(cfg.bot_id, report)
+        if any(item["ok"] for item in report) and not s.get("ingestion.auto_trigger", True):
+            run_job("ingest", bot_id=cfg.bot_id)  # otherwise the file-arrival trigger starts reading
+        st.session_state["add_docs_batch"] = batch + 1
+        st.rerun()
+
+missing = D.not_uploaded(cfg.bot_id)
+if missing:
+    with st.expander(f"Not uploaded in the last 30 days: {len(missing)} file(s)"):
+        st.caption("Someone tried to add these and they were refused, and no file with that name has been "
+                   "added since. Fix the problem and upload them again above.")
+        st.dataframe([{"File": m["file_name"], "Why": " ".join(m["reasons"]), "Tried by": m["by"],
+                       "When": str(m["when"])[:16]} for m in missing], hide_index=True, use_container_width=True)
 
 st.divider()
 names = {r["doc_id"]: r for r in rows}

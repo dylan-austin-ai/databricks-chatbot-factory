@@ -3,6 +3,7 @@ override, hard delete (DOC-1..13, QA-4, QA-9, QA-11, ING-2)."""
 from __future__ import annotations
 
 import io
+import json
 import uuid
 
 from .config import PlatformSettings
@@ -75,6 +76,47 @@ class Documents:
         self.cp.audit(actor, bot_id, "doc_uploaded", doc_id,
                       {"name": file_name, "version": version, "source": source})
         return res
+
+    def upload_many(self, bot_id: str, files: list[dict], actor: str) -> list[dict]:
+        """Register several files and report on every one of them, so nothing is dropped
+        silently. Each entry of `files` has `name`, `data` and any other `register` arguments.
+        Returns one row per file: name, ok, reasons, and duplicate (already stored, so nothing
+        was lost). A file that fails for a technical reason is reported and recorded too, and
+        the rest of the batch still goes ahead."""
+        report = []
+        for f in files:
+            extra = {k: v for k, v in f.items() if k not in ("name", "data")}
+            try:
+                res = self.register(bot_id, f["name"], f["data"], actor, **extra)
+                report.append({"name": f["name"], "ok": res.ok, "reasons": list(res.reasons),
+                               "duplicate": bool(res.duplicate_of)})
+            except Exception as e:  # noqa: BLE001 - one bad file must not hide the others
+                reason = f"We couldn't store this file ({type(e).__name__}). Please try again."
+                self.cp.audit(actor, bot_id, "upload_failed", f["name"], {"reasons": [reason]})
+                report.append({"name": f["name"], "ok": False, "reasons": [reason], "duplicate": False})
+        return report
+
+    def not_uploaded(self, bot_id: str, days: int = 30) -> list[dict]:
+        """Files someone tried to add in the last `days` that are still not in the chatbot: the
+        attempt was refused or failed and no file of that name has been stored since. Exact
+        duplicates are left out, because that content is already there."""
+        p = BotPaths(self.s, bot_id)
+        rows = self.sql.query(
+            f"""SELECT a.ts, a.actor, a.target AS file_name, a.detail_json
+                FROM {self.s.fq('audit_log')} a
+                WHERE a.bot_id = :b AND a.action IN ('upload_rejected', 'upload_failed')
+                  AND a.ts >= current_timestamp() - INTERVAL {int(days)} DAYS
+                  AND NOT EXISTS (SELECT 1 FROM {p.t('manifest')} m
+                                  WHERE m.doc_name = a.target AND m.uploaded_at > a.ts)
+                ORDER BY a.ts DESC""", {"b": bot_id})
+        out, seen = [], set()
+        for r in rows:
+            reasons = (json.loads(r.get("detail_json") or "{}") or {}).get("reasons", [])
+            if r["file_name"] in seen or (reasons and all("exact duplicate" in x for x in reasons)):
+                continue
+            seen.add(r["file_name"])  # newest attempt per file
+            out.append({"file_name": r["file_name"], "when": r["ts"], "by": r["actor"], "reasons": reasons})
+        return out
 
     def _set_status(self, bot_id: str, doc_id: str, status: str, active: bool, actor: str,
                     action: str, reason: str | None = None) -> None:

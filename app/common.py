@@ -231,6 +231,36 @@ def pick_bot(label: str = "Chatbot") -> tuple[dict, BotConfig] | tuple[None, Non
     return bot, cp().get_config(choice)
 
 
+def remember_upload(bot_id: str, report: list[dict]) -> None:
+    """Keep the result of an upload so it is still on screen after the page reloads or changes."""
+    st.session_state["upload_report"] = {"bot_id": bot_id, "report": report}
+
+
+def show_upload_report(bot_id: str) -> None:
+    """What happened to each file in the last upload for this chatbot: added, already there, or
+    not added and why. Stays until dismissed, so a refused file can't go unnoticed."""
+    saved = st.session_state.get("upload_report")
+    if not saved or saved["bot_id"] != bot_id:
+        return
+    report = saved["report"]
+    added = [r for r in report if r["ok"]]
+    already = [r for r in report if not r["ok"] and r["duplicate"]]
+    refused = [r for r in report if not r["ok"] and not r["duplicate"]]
+    with st.container(border=True):
+        st.markdown(f"**Last upload: {len(added)} of {len(report)} file(s) added**")
+        if refused:
+            st.error(f"{len(refused)} file(s) were **not** added:\n\n"
+                     + "\n".join(f"- **{r['name']}**: {' '.join(r['reasons'])}" for r in refused))
+        if already:
+            st.info(f"{len(already)} file(s) were skipped because the same content is already there: "
+                    + ", ".join(r["name"] for r in already))
+        if added:
+            st.success("Added: " + ", ".join(r["name"] for r in added))
+        if st.button("Dismiss", key="dismiss_upload_report"):
+            st.session_state.pop("upload_report", None)
+            st.rerun()
+
+
 def run_job(kind: str, **params) -> int | None:
     job_id = JOB_IDS.get(kind)
     if not job_id:
