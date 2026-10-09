@@ -48,9 +48,10 @@ resources:
             metrics_table: ${var.catalog}._platform.app_otel_metrics
             traces_table: ${var.catalog}._platform.app_otel_spans
       user_api_scopes:          # user authorization: chat calls run as the signed-in user (GOV-4)
+        # iam.current-user:read, which the group check uses, can't be listed here: the API rejects
+        # it as an explicit scope. Databricks assigns it to app user tokens by default.
         - serving.serving-endpoints
         - sql
-        - iam.current-user:read   # read the signed-in person's own groups (admin, owner, reviewer checks)
       resources:
         - name: sql-warehouse
           sql_warehouse:
