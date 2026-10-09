@@ -50,6 +50,7 @@ resources:
       user_api_scopes:          # user authorization: chat calls run as the signed-in user (GOV-4)
         - serving.serving-endpoints
         - sql
+        - iam.current-user:read   # read the signed-in person's own groups (admin, owner, reviewer checks)
       resources:
         - name: sql-warehouse
           sql_warehouse:

@@ -1,6 +1,7 @@
 """Shared app plumbing: identity, services, permissions, job triggers."""
 from __future__ import annotations
 
+import logging
 import os
 import re
 import sys
@@ -12,6 +13,7 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from factory.access import resolve_groups  # noqa: E402
 from factory.config import BotConfig, PlatformSettings  # noqa: E402
 from factory.controlplane import ControlPlane  # noqa: E402
 from factory.documents import Documents  # noqa: E402
@@ -106,11 +108,14 @@ def docs() -> Documents:
 
 @st.cache_data(ttl=300)
 def user_groups(email: str) -> set[str]:
-    try:
-        users = list(app_client().users.list(filter=f'userName eq "{email}"', attributes="groups"))
-        return {g.display for u in users for g in (u.groups or []) if g.display}
-    except Exception:  # noqa: BLE001
-        return set()
+    """Groups of the signed-in person, cached per person for 5 minutes. Read with their own token
+    when the request carries one, else looked up by the app's service principal; every outcome
+    is logged by factory.access, and a failed lookup grants nothing."""
+    has_token = bool(st.context.headers.get("X-Forwarded-Access-Token")) and email == current_user()
+    return resolve_groups(
+        email,
+        (lambda: user_client().current_user.me()) if has_token else None,
+        lambda e: app_client().users.list(filter=f'userName eq "{e}"', attributes="userName,groups"))
 
 
 EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -144,6 +149,14 @@ def check_emails(emails: list[str], what: str) -> list[str]:
 
 def is_admin() -> bool:
     return settings().get("access.admin_group") in user_groups(current_user())
+
+
+# Access decisions are logged at INFO (who was resolved, how, which groups), and the default log
+# level would drop them. Send them to the app's log even when nothing else configured logging.
+_access_log = logging.getLogger("factory.access")
+_access_log.setLevel(logging.INFO)
+if not logging.getLogger().handlers and not _access_log.handlers:
+    _access_log.addHandler(logging.StreamHandler())
 
 
 def is_tester(bot: dict) -> bool:
