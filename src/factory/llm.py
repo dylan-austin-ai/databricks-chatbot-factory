@@ -57,13 +57,27 @@ def chat(client, endpoint: str, messages: list[dict], max_tokens: int = 1500,
     }
 
 
+def image_type(data: bytes) -> str:
+    """Media type from the image's own bytes. Page images from the document reader are usually
+    JPEG, and the model rejects an image whose declared type doesn't match its content."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/png"
+
+
 def chat_json(client, endpoint: str, prompt: str, max_tokens: int = 3000,
               images: list[bytes] | None = None, retries: int = 1) -> Any:
     content: Any = prompt
     if images:
         content = [{"type": "text", "text": prompt}] + [
             {"type": "image_url",
-             "image_url": {"url": "data:image/png;base64," + base64.b64encode(img).decode()}}
+             "image_url": {"url": f"data:{image_type(img)};base64," + base64.b64encode(img).decode()}}
             for img in images
         ]
     messages = [{"role": "user", "content": content}]
