@@ -4,6 +4,7 @@ approval on the Launch page (REL-5)."""
 import io
 import json
 
+import pandas as pd
 import streamlit as st
 
 from common import (ALL_BOTS, BADGE, app_client, cp, current_user, docs, is_admin, pick_owned_bot, remember_upload,
@@ -12,7 +13,7 @@ from factory.explain import help_text
 from factory.llm import openai_client
 from factory.qa import guidance, next_step, page_issues
 from factory.reread import propose_section_text
-from factory.documents import FLAG_REASONS
+from factory.documents import FLAG_REASONS, possible_duplicates
 from factory.ingestion import BotPaths, page_images, page_images_sql, page_order
 from ui import md_text
 
@@ -105,6 +106,70 @@ if pending:
             republish()
             st.success(f"Approved {n} document(s).")
             st.rerun()
+
+# Housekeeping for many documents at once: archive, restore, delete.
+dupes = possible_duplicates(rows)
+with st.expander(f"Manage all documents: archive, restore or delete several at once ({len(rows)})",
+                 expanded=bool(dupes)):
+    if dupes:
+        st.warning(f"**{len(dupes)} document(s) look like copies of another one**, judging by their file names "
+                   "(see the last column). A file uploaded under a different name is kept as a separate document, "
+                   "so a re-upload can leave the old copy behind. Tick the ones you don't want and archive or "
+                   "delete them.")
+    st.caption("Tick documents, then choose what to do with them. **Archive** takes a document out of the chatbot "
+               "and keeps it, so it can be restored. **Delete** removes the file, its text and its sections for "
+               "good.")
+    show = st.radio("Show", ["In use or waiting", "Archived", "Everything"], horizontal=True, key="manage_show")
+    listed = [r for r in rows if show == "Everything" or (r["status"] == "archived") == (show == "Archived")]
+    table = pd.DataFrame([{
+        "Select": False, "Document": r["doc_name"], "Version": r["doc_version"],
+        "Status": (r["status"] or "").replace("_", " "), "Readability": BADGE.get(r["readability"]),
+        "Pages": r["page_count"], "Uploaded": str(r["uploaded_at"] or "")[:16], "Uploaded by": r["uploaded_by"],
+        "Looks like a copy of": ", ".join(dupes.get(r["doc_id"], [])), "doc_id": r["doc_id"]} for r in listed])
+    if table.empty:
+        st.info("No documents in this view.")
+    else:
+        edited = st.data_editor(
+            table, hide_index=True, use_container_width=True,
+            # A fresh key after every action clears the ticks: the rows change, and old ticks would
+            # otherwise land on different documents.
+            key=f"manage_{show}_{st.session_state.setdefault('manage_round', 0)}",
+            disabled=[c for c in table.columns if c != "Select"], column_config={"doc_id": None})
+        chosen_ids = edited.loc[edited["Select"], "doc_id"].tolist()
+        names_by_id = {r["doc_id"]: r["doc_name"] for r in rows}
+        st.markdown(f"**{len(chosen_ids)} selected**" + (": " + ", ".join(names_by_id[i] for i in chosen_ids[:8])
+                                                         + ("…" if len(chosen_ids) > 8 else "") if chosen_ids else ""))
+
+        def apply(action: str, done: str, reason: str = "") -> None:
+            outcome = D.change_many(cfg.bot_id, chosen_ids, action, user, is_admin=is_admin(), reason=reason)
+            failed = {i: why for i, why in outcome.items() if why}
+            republish()
+            st.session_state["manage_round"] += 1
+            st.session_state["manage_result"] = (
+                f"{done} {len(outcome) - len(failed)} document(s)."
+                + (" Not done: " + ", ".join(f"{names_by_id.get(i, i)} ({why})" for i, why in failed.items())
+                   if failed else ""))
+            st.rerun()
+
+        m1, m2 = st.columns(2)
+        if m1.button(f"Archive the {len(chosen_ids)} selected", disabled=not chosen_ids, key="manage_archive"):
+            apply("archive", "Archived")
+        if m2.button(f"Restore the {len(chosen_ids)} selected", disabled=not chosen_ids, key="manage_restore"):
+            apply("restore", "Restored")
+        if is_admin():
+            with st.container(border=True):
+                st.markdown("**Delete for good** (MLOps only)")
+                why = st.text_input("Why are these being deleted? Kept in the audit log.", key="manage_why",
+                                    placeholder="Duplicate uploads")
+                sure = st.checkbox(f"I understand the {len(chosen_ids)} selected document(s) can't be recovered",
+                                   key="manage_sure")
+                if st.button(f"Delete the {len(chosen_ids)} selected for good", type="primary", key="manage_delete",
+                             disabled=not (chosen_ids and sure and why.strip())):
+                    apply("delete", "Deleted", why)
+        else:
+            st.caption("Only MLOps can delete a document for good. Archive it and it stops being used.")
+if st.session_state.get("manage_result"):
+    st.success(st.session_state.pop("manage_result"))
 
 show_upload_report(cfg.bot_id)
 with st.container(border=True):

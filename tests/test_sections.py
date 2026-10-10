@@ -113,3 +113,51 @@ def test_new_chatbots_get_the_section_edits_table():
 
     ddl = render("bot_schema_ddl.sql", catalog="`c`", schema="`b`", display_name="B")
     assert any("CREATE TABLE IF NOT EXISTS `c`.`b`.chunk_edits" in s and "original_text STRING" in s for s in ddl)
+
+
+def test_copies_of_a_document_are_spotted_by_name():
+    from factory.documents import name_key, possible_duplicates
+
+    assert name_key("Benefits Guide.pdf") == name_key("benefits_guide (1).PDF") == name_key("Benefits Guide - decrypted.pdf")
+    assert name_key("Benefits Guide copy.pdf") == name_key("Benefits-Guide_unlocked.pdf") == "benefits guide"
+    assert name_key("Section 1.pdf") != name_key("Section 2.pdf")          # a numbered series is not a set of copies
+    assert name_key("Policy 2024.pdf") != name_key("Policy 2025.pdf")
+    rows = [{"doc_id": "a", "doc_name": "Benefits Guide.pdf"}, {"doc_id": "b", "doc_name": "Benefits Guide (decrypted).pdf"},
+            {"doc_id": "c", "doc_name": "Leave policy.pdf"}, {"doc_id": "d", "doc_name": "Section 1.pdf"},
+            {"doc_id": "e", "doc_name": "Section 2.pdf"}]
+    assert possible_duplicates(rows) == {"a": ["Benefits Guide (decrypted).pdf"], "b": ["Benefits Guide.pdf"]}
+
+
+def test_many_documents_can_be_archived_restored_or_deleted_at_once(settings):
+    docs, sql, cp = _docs(settings, [(r"SELECT file_path", [{"file_path": "/Volumes/x/a.pdf"}])])
+    assert docs.change_many("claims_chatbot", ["a", "b"], "archive", "ana@corp.com") == {"a": "", "b": ""}
+    assert [a for a in cp.audits if a[0] == "doc_archived"] == [("doc_archived", "a"), ("doc_archived", "b")]
+    assert docs.change_many("claims_chatbot", ["a"], "restore", "ana@corp.com") == {"a": ""}
+    assert docs.change_many("claims_chatbot", ["a", "b"], "delete", "admin@corp.com", is_admin=True,
+                            reason=" Duplicate uploads ") == {"a": "", "b": ""}
+    deletes = [s for s, _ in sql.statements if s.startswith("DELETE FROM")]
+    assert sum("`manifest`" in s for s in deletes) == 2 and sum("`chunk_edits`" in s for s in deletes) == 2
+    assert [a for a in cp.audits if a[0] == "doc_hard_deleted"] == [("doc_hard_deleted", "a"), ("doc_hard_deleted", "b")]
+
+
+def test_deleting_needs_an_admin_and_a_reason(settings):
+    docs, sql, _ = _docs(settings)
+    with pytest.raises(PermissionError):
+        docs.change_many("claims_chatbot", ["a"], "delete", "ana@corp.com", is_admin=False, reason="dupes")
+    with pytest.raises(ValueError):
+        docs.change_many("claims_chatbot", ["a"], "delete", "admin@corp.com", is_admin=True, reason="  ")
+    with pytest.raises(ValueError):
+        docs.change_many("claims_chatbot", ["a"], "shred", "admin@corp.com")
+    assert not [s for s, _ in sql.statements if s.startswith(("DELETE", "UPDATE"))]
+
+
+def test_one_failure_does_not_stop_the_rest(settings):
+    docs, _, _ = _docs(settings)
+
+    def archive(bot_id, doc_id, actor):
+        if doc_id == "bad":
+            raise RuntimeError("warehouse hiccup")
+
+    docs.archive = archive
+    assert docs.change_many("claims_chatbot", ["a", "bad", "c"], "archive", "ana@corp.com") == {
+        "a": "", "bad": "RuntimeError", "c": ""}

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import uuid
 
 from .config import PlatformSettings
@@ -12,6 +13,31 @@ from .ingestion import BotPaths
 from .validation import ValidationResult, validate_file
 
 FLAG_REASONS = ["Missing text", "Garbled table", "Wrong pages", "Contains sensitive info", "Other"]
+
+# Words people add to a file name when they save another copy of the same document.
+_COPY_WORDS = r"copy|copie|decrypted|unlocked|unprotected|unsecured|unrestricted|nopassword|no password|final|new|updated"
+
+
+def name_key(doc_name: str) -> str:
+    """A file name reduced to what identifies the document: no extension, no "(1)", no "copy" or
+    "decrypted", no punctuation. Two uploads with the same key are probably the same document."""
+    name = re.sub(r"\.[A-Za-z0-9]{1,5}$", "", (doc_name or "").lower())
+    name = re.sub(r"\(\d+\)|\[\d+\]", " ", name)
+    name = re.sub(r"[^a-z0-9]+", " ", name)                 # punctuation first, so "_unlocked" is a word
+    name = re.sub(rf"\b({_COPY_WORDS})\b", " ", name)
+    return re.sub(r"\s+", " ", name).strip()
+
+
+def possible_duplicates(rows: list[dict]) -> dict[str, list[str]]:
+    """{doc_id: [names of other documents that look like the same one]} for a chatbot's documents.
+    Based on file names only, so it is a hint to check, not a finding."""
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        key = name_key(r.get("doc_name", ""))
+        if key:
+            groups.setdefault(key, []).append(r)
+    return {r["doc_id"]: [o["doc_name"] for o in group if o["doc_id"] != r["doc_id"]]
+            for group in groups.values() if len({g["doc_id"] for g in group}) > 1 for r in group}
 
 
 class Documents:
@@ -324,12 +350,41 @@ class Documents:
                          "AND doc_version = CAST(:v AS INT) AND is_override", {"d": doc_id, "v": v})
         self.cp.audit(actor, bot_id, "doc_override_removed", doc_id)
 
+    def change_many(self, bot_id: str, doc_ids: list[str], action: str, actor: str,
+                    is_admin: bool = False, reason: str = "") -> dict[str, str]:
+        """Archive, restore or permanently delete several documents. Returns {doc_id: "" when done,
+        else why not}; one failure doesn't stop the rest. Deleting is for MLOps and needs a reason."""
+        if action not in ("archive", "restore", "delete"):
+            raise ValueError(f"Unknown action: {action}")
+        if action == "delete":
+            if not is_admin:
+                raise PermissionError("Only MLOps admins can permanently delete documents.")
+            if not (reason or "").strip():
+                raise ValueError("Give a reason for deleting; it is kept in the audit log.")
+        outcome: dict[str, str] = {}
+        for doc_id in doc_ids:
+            try:
+                if action == "archive":
+                    self.archive(bot_id, doc_id, actor)
+                elif action == "restore":
+                    self.restore(bot_id, doc_id, actor)
+                else:
+                    self.hard_delete(bot_id, doc_id, actor, is_admin, reason.strip())
+                outcome[doc_id] = ""
+            except Exception as e:  # noqa: BLE001 - report it and carry on with the others
+                outcome[doc_id] = f"{type(e).__name__}"
+        return outcome
+
     def hard_delete(self, bot_id, doc_id, actor, is_admin: bool, legal_reason: str):
         """Admin only, for legal or retention requests (DOC-10)."""
         if not is_admin:
             raise PermissionError("Only MLOps admins can permanently delete documents.")
         p = BotPaths(self.s, bot_id)
         rows = self.sql.query(f"SELECT file_path FROM {p.t('manifest')} WHERE doc_id = :d", {"d": doc_id})
+        try:  # hand edits of its sections go too; the table only exists once a section was edited
+            self.sql.execute(f"DELETE FROM {p.t('chunk_edits')} WHERE doc_id = :d", {"d": doc_id})
+        except Exception:  # noqa: BLE001
+            pass
         for t in ("chunked", "parsed_elements", "manifest"):
             self.sql.execute(f"DELETE FROM {p.t(t)} WHERE doc_id = :d", {"d": doc_id})
         if self.w is not None:
