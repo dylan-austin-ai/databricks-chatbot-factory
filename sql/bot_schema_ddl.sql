@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS {catalog}.{schema}.chunked (
   updated_at TIMESTAMP
 ) TBLPROPERTIES (delta.enableChangeDataFeed = true);
 
+-- Sections corrected by hand (QA-9): what the reader produced and what the owner changed it to,
+-- so an edit can be seen and undone. Also created on first use for chatbots that predate it.
+CREATE TABLE IF NOT EXISTS {catalog}.{schema}.chunk_edits (
+  chunk_id STRING NOT NULL, doc_id STRING, doc_version INT,
+  original_text STRING, original_embed STRING, edited_text STRING,
+  edited_by STRING, edited_at TIMESTAMP
+);
+
 -- Dedicated index source, confidential bots only (ARC-4); same shape as shared_chunks
 CREATE TABLE IF NOT EXISTS {catalog}.{schema}.index_source (
   chunk_id STRING NOT NULL, bot_id STRING, doc_id STRING, doc_version INT,

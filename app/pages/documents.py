@@ -9,7 +9,9 @@ import streamlit as st
 from common import (ALL_BOTS, BADGE, app_client, cp, current_user, docs, is_admin, pick_owned_bot, remember_upload,
                     run_job, settings, show_upload_report, sql)
 from factory.explain import help_text
+from factory.llm import openai_client
 from factory.qa import guidance, next_step, page_issues
+from factory.reread import propose_section_text
 from factory.documents import FLAG_REASONS
 from factory.ingestion import BotPaths, page_images, page_images_sql, page_order
 from ui import md_text
@@ -164,29 +166,63 @@ for n in notes:
     if n["kind"] == "info" and n["text"]:
         st.caption(n["text"] + (f" {n['next']}" if n["next"] else ""))
 
-a1, a2, a3 = st.columns(3)
-if doc["status"] in ("pending_review", "flagged") and a1.button("Approve this whole document", type="primary"):
-    try:
-        D.approve(cfg.bot_id, doc_id, user)
-        republish()
-        st.rerun()
-    except PermissionError as e:  # blocked for restricted data
-        st.error(str(e))
+# One decision per document: it is the whole document that goes into the chatbot or stays out.
+CHOICES = {"approve": "Approve: use this document in the chatbot",
+           "skip": "Skip for now: decide later",
+           "flag": "Flag for fixing: it needs work before it can be used"}
+NOW = {"approved": "approve", "flagged": "flag"}.get(doc["status"], "skip")
+blocked = doc["flag_reason"] == "Contains sensitive info"
+with st.container(border=True):
+    st.markdown("**Your decision for this document**")
+    st.caption("This is one decision for the whole document, every page and section together. It decides whether "
+               "the document goes into the chatbot's test version; nothing reaches users until the test version "
+               "is approved on the Launch page. Pick one of the three and save. You can change it later.")
+    if doc["status"] == "archived":
+        st.info("This document is archived, so it isn't used. Restore it to make a decision.")
+        if st.button("Restore"):
+            D.restore(cfg.bot_id, doc_id, user)
+            republish()
+            st.rerun()
+    elif blocked:
+        st.error("This document is blocked because it appears to contain restricted data, so it can't be approved "
+                 "or skipped. Remove the data from the source file and upload it as a new version.")
+    else:
+        st.markdown({"approve": ":green[**Now: approved.**] It is in the test version.",
+                     "flag": f":red[**Now: flagged for fixing**] ({doc['flag_reason'] or 'no reason given'}). "
+                             "It is not used.",
+                     "skip": ":orange[**Now: no decision yet.**] It is waiting for review and is not used."}[NOW])
+        choice = st.radio("Choose one", list(CHOICES), index=list(CHOICES).index(NOW), key=f"decision_{doc_id}",
+                          format_func=lambda c: CHOICES[c],
+                          captions=["It goes into the test version.",
+                                    "Nothing changes for the chatbot. It stays in Need review so you can come back.",
+                                    "It stays out, with a note of what is wrong so you know what to come back to."])
+        reason = None
+        if choice == "flag":  # only asked when flagging
+            reason = st.selectbox("What needs fixing?", FLAG_REASONS, key=f"flag_reason_{doc_id}",
+                                  index=FLAG_REASONS.index(doc["flag_reason"])
+                                  if doc["flag_reason"] in FLAG_REASONS else 0)
+        changed = choice != NOW or (choice == "flag" and reason != doc["flag_reason"])
+        if st.button("Save decision", type="primary", disabled=not changed):
+            try:
+                if choice == "approve":
+                    D.approve(cfg.bot_id, doc_id, user)
+                elif choice == "flag":
+                    D.flag(cfg.bot_id, doc_id, user, reason)
+                else:
+                    D.defer(cfg.bot_id, doc_id, user)
+                republish()
+                st.rerun()
+            except PermissionError as e:
+                st.error(str(e))
+        if not changed:
+            st.caption("Choose a different option to change the decision.")
 if doc["status"] != "archived":
-    reason = a2.selectbox("Flag reason", FLAG_REASONS, label_visibility="collapsed")
-    if a2.button("Flag for fixing"):
-        D.flag(cfg.bot_id, doc_id, user, reason)
-        republish()
-        st.rerun()
-    if a3.button("Archive (can be restored)"):
-        D.archive(cfg.bot_id, doc_id, user)
-        republish()
-        st.rerun()
-elif a3.button("Restore"):
-    D.restore(cfg.bot_id, doc_id, user)
-    republish()
-    st.rerun()
-st.caption("Approval covers the whole document, all pages at once. There is no page-by-page approval.")
+    with st.expander("Remove this document from the chatbot"):
+        st.caption("Archiving takes the document out altogether. It isn't deleted and can be restored.")
+        if st.button("Archive (can be restored)"):
+            D.archive(cfg.bot_id, doc_id, user)
+            republish()
+            st.rerun()
 
 tab_view, tab_chunks, tab_details, tab_fix = st.tabs(
     ["What the chatbot sees", "Sections", "Details", "Fix a problem"])
@@ -334,22 +370,80 @@ with tab_view:
                     st.rerun()
 
 with tab_chunks:
+    st.caption("Sections are the pieces the chatbot searches and quotes. Fix one section here without redoing "
+               "the document: correct its text, have the app read it again from the page image, or flag it so "
+               "it isn't used. Re-reading the whole document later rebuilds its sections and drops these fixes.")
     chunks = sql().query(f"""SELECT chunk_id, chunk_position, section, page_ids, chunk_to_retrieve, flagged
                              FROM {p.t('chunked')} WHERE doc_id = :d ORDER BY chunk_position""",
                          {"d": doc_id})
+    edits = D.edited_chunks(cfg.bot_id, doc_id)
     for c in chunks:
-        pages = ", ".join(str(int(x) + 1) for x in json.loads(c["page_ids"] or "[]")) \
-            if isinstance(c["page_ids"], str) else c["page_ids"]
+        cid = c["chunk_id"]
+        page_ids = [int(x) for x in (json.loads(c["page_ids"] or "[]") if isinstance(c["page_ids"], str)
+                                     else (c["page_ids"] or []))]
+        flagged = str(c["flagged"]).lower() == "true"
+        editing = st.session_state.get("editing_section") == cid
         with st.container(border=True):
-            st.caption(f"Section {int(c['chunk_position']) + 1} · page(s) {pages} · "
+            st.caption(f"Section {int(c['chunk_position']) + 1} · page(s) {', '.join(str(x + 1) for x in page_ids)} · "
                        f"{c['section'] or ''} · {len(c['chunk_to_retrieve'] or '')} characters"
-                       + (" · flagged" if str(c["flagged"]).lower() == "true" else ""))
-            st.markdown(md_text(c["chunk_to_retrieve"]))
-            flagged = str(c["flagged"]).lower() == "true"
-            if st.button("Unflag" if flagged else "Flag this section", key=c["chunk_id"]):
-                D.flag_chunk(cfg.bot_id, c["chunk_id"], user, not flagged)
-                republish()
-                st.rerun()
+                       + (" · **flagged, not used**" if flagged else "")
+                       + (f" · **edited by {edits[cid]['edited_by']}**" if cid in edits else ""))
+            if not editing:
+                st.markdown(md_text(c["chunk_to_retrieve"]))
+                b1, b2, b3, b4 = st.columns(4)
+                if b1.button("Edit the text", key=f"edit_{cid}"):
+                    st.session_state["editing_section"] = cid
+                    st.session_state.pop(f"proposal_{cid}", None)
+                    st.rerun()
+                if b2.button("Read it again from the page", key=f"reread_{cid}",
+                             help="The app looks at the page image and proposes a corrected version of this "
+                                  "section. You check it before anything is saved."):
+                    try:
+                        images = page_images(sql().query(page_images_sql(p), {"d": doc_id, "v": int(doc["doc_version"])}))
+                        pics = [app_client().files.download(images[x]).contents.read() for x in page_ids if x in images]
+                        with st.spinner("Reading the page again…"):
+                            st.session_state[f"proposal_{cid}"] = propose_section_text(
+                                openai_client(app_client()), s.get("models.generation_endpoint"), pics,
+                                c["chunk_to_retrieve"] or "")
+                        st.session_state["editing_section"] = cid
+                        st.rerun()
+                    except Exception as e:  # noqa: BLE001 - say so and leave the section as it is
+                        st.error(f"The section couldn't be read again ({type(e).__name__}). Nothing was changed. "
+                                 "You can still edit the text by hand. If this keeps happening, ask MLOps to check "
+                                 "that the app may call the reading model.")
+                if b3.button("Use this section again" if flagged else "Don't use this section", key=cid):
+                    D.flag_chunk(cfg.bot_id, cid, user, not flagged)
+                    republish()
+                    st.rerun()
+                if cid in edits and b4.button("Undo my edit", key=f"undo_{cid}"):
+                    D.restore_chunk(cfg.bot_id, cid, user)
+                    republish()
+                    st.rerun()
+            else:
+                proposal = st.session_state.get(f"proposal_{cid}")
+                if proposal:
+                    (st.info if proposal["changed"] else st.warning)(
+                        ("**This is the app's new reading of the section, not saved yet.** "
+                         + (md_text(proposal["note"]) + " " if proposal["note"] else "")
+                         + "Compare it with the page, change anything that is wrong, then save.")
+                        if proposal["changed"] else
+                        "The app read the page again and found nothing to change. You can still edit it yourself.")
+                new_text = st.text_area("Text of this section", value=(proposal or {}).get("text") or c["chunk_to_retrieve"] or "",
+                                        height=260, key=f"text_{cid}")
+                with st.expander("Text before your change"):
+                    st.markdown(md_text(c["chunk_to_retrieve"]))
+                s1, s2 = st.columns(2)
+                if s1.button("Save this section", type="primary", key=f"save_{cid}",
+                             disabled=not new_text.strip() or new_text.strip() == (c["chunk_to_retrieve"] or "").strip()):
+                    D.edit_chunk(cfg.bot_id, cid, new_text, user)
+                    republish()
+                    st.session_state.pop("editing_section", None)
+                    st.session_state.pop(f"proposal_{cid}", None)
+                    st.rerun()
+                if s2.button("Cancel", key=f"cancel_{cid}"):
+                    st.session_state.pop("editing_section", None)
+                    st.session_state.pop(f"proposal_{cid}", None)
+                    st.rerun()
 
 with tab_fix:
     st.caption("Three ways to fix a document that wasn't read well. Pick the one that fits.")

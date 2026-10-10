@@ -164,6 +164,90 @@ class Documents:
     def restore(self, bot_id, doc_id, actor):
         self._set_status(bot_id, doc_id, "approved", True, actor, "doc_restored")
 
+    def defer(self, bot_id, doc_id, actor):
+        """Put the decision off: back to waiting for review, out of the chatbot until someone
+        approves it. A document blocked for restricted data stays blocked."""
+        p = BotPaths(self.s, bot_id)
+        row = self.sql.query(f"SELECT flag_reason FROM {p.t('manifest')} WHERE doc_id = :d "
+                             "AND status <> 'superseded'", {"d": doc_id})
+        if row and row[0]["flag_reason"] == "Contains sensitive info":
+            raise PermissionError("This document contains restricted data. Upload a clean copy instead (ING-8).")
+        self._set_status(bot_id, doc_id, "pending_review", True, actor, "doc_deferred")
+
+    # Section-level fixes (QA-9) ------------------------------------------------------------
+    def _ensure_chunk_edits(self, p: BotPaths) -> None:
+        self.sql.execute(
+            f"""CREATE TABLE IF NOT EXISTS {p.t('chunk_edits')} (
+                chunk_id STRING NOT NULL, doc_id STRING, doc_version INT,
+                original_text STRING, original_embed STRING, edited_text STRING,
+                edited_by STRING, edited_at TIMESTAMP)""")
+
+    def edit_chunk(self, bot_id: str, chunk_id: str, text: str, actor: str) -> None:
+        """Replace one section's text with a corrected version. The reader's original is kept so
+        the edit can be undone. Re-reading the whole document rebuilds its sections and drops
+        section edits."""
+        text = (text or "").strip()
+        if not text:
+            raise ValueError("A section can't be empty. Flag it instead if it shouldn't be used.")
+        p = BotPaths(self.s, bot_id)
+        rows = self.sql.query(
+            f"SELECT doc_id, doc_version, chunk_to_retrieve, chunk_to_embed FROM {p.t('chunked')} "
+            "WHERE chunk_id = :c", {"c": chunk_id})
+        if not rows:
+            raise KeyError(chunk_id)
+        row = rows[0]
+        current, embed = row["chunk_to_retrieve"] or "", row["chunk_to_embed"] or ""
+        if text == current:
+            return
+        self._ensure_chunk_edits(p)
+        known = self.sql.query(f"SELECT edited_text FROM {p.t('chunk_edits')} WHERE chunk_id = :c", {"c": chunk_id})
+        # Keep the reader's text only the first time; later edits of an edited section keep that original.
+        if known and known[0]["edited_text"] == current:
+            self.sql.execute(
+                f"UPDATE {p.t('chunk_edits')} SET edited_text = :t, edited_by = :a, edited_at = current_timestamp() "
+                "WHERE chunk_id = :c", {"t": text, "a": actor, "c": chunk_id})
+        else:
+            self.sql.execute(f"DELETE FROM {p.t('chunk_edits')} WHERE chunk_id = :c", {"c": chunk_id})
+            self.sql.execute(
+                f"INSERT INTO {p.t('chunk_edits')} VALUES (:c, :d, CAST(:v AS INT), :o, :oe, :t, :a, current_timestamp())",
+                {"c": chunk_id, "d": row["doc_id"], "v": int(row["doc_version"]), "o": current, "oe": embed,
+                 "t": text, "a": actor})
+        # The search text carries a header before the section's words; keep the header, swap the words.
+        new_embed = embed.replace(current, text, 1) if current and current in embed else text
+        self.sql.execute(
+            f"UPDATE {p.t('chunked')} SET chunk_to_retrieve = :t, chunk_to_embed = :e, "
+            "updated_at = current_timestamp() WHERE chunk_id = :c", {"t": text, "e": new_embed, "c": chunk_id})
+        self.cp.audit(actor, bot_id, "chunk_edited", chunk_id, {"doc_id": row["doc_id"]})
+
+    def restore_chunk(self, bot_id: str, chunk_id: str, actor: str) -> bool:
+        """Undo a section edit: put back the text the reader produced. False if there was no edit."""
+        p = BotPaths(self.s, bot_id)
+        self._ensure_chunk_edits(p)
+        rows = self.sql.query(f"SELECT original_text, original_embed FROM {p.t('chunk_edits')} WHERE chunk_id = :c",
+                              {"c": chunk_id})
+        if not rows:
+            return False
+        self.sql.execute(
+            f"UPDATE {p.t('chunked')} SET chunk_to_retrieve = :t, chunk_to_embed = :e, "
+            "updated_at = current_timestamp() WHERE chunk_id = :c",
+            {"t": rows[0]["original_text"], "e": rows[0]["original_embed"], "c": chunk_id})
+        self.sql.execute(f"DELETE FROM {p.t('chunk_edits')} WHERE chunk_id = :c", {"c": chunk_id})
+        self.cp.audit(actor, bot_id, "chunk_edit_undone", chunk_id)
+        return True
+
+    def edited_chunks(self, bot_id: str, doc_id: str) -> dict[str, dict]:
+        """{chunk_id: {edited_by, edited_at}} for sections of this document whose current text is a
+        hand edit. An edit record left behind by a later re-read no longer matches and is ignored."""
+        p = BotPaths(self.s, bot_id)
+        try:
+            rows = self.sql.query(
+                f"""SELECT e.chunk_id, e.edited_by, e.edited_at FROM {p.t('chunk_edits')} e
+                    JOIN {p.t('chunked')} c ON c.chunk_id = e.chunk_id AND c.chunk_to_retrieve = e.edited_text
+                    WHERE e.doc_id = :d""", {"d": doc_id})
+        except Exception:  # noqa: BLE001 - the table is created on the first edit
+            return {}
+        return {r["chunk_id"]: {"edited_by": r["edited_by"], "edited_at": r["edited_at"]} for r in rows}
+
     def flag_chunk(self, bot_id, chunk_id, actor, flagged=True):
         p = BotPaths(self.s, bot_id)
         self.sql.execute(f"UPDATE {p.t('chunked')} SET flagged = CAST(:f AS BOOLEAN) WHERE chunk_id = :c",
