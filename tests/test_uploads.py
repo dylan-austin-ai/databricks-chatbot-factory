@@ -78,3 +78,14 @@ def test_not_uploaded_lists_refusals_that_are_still_missing(settings):
     query = sql.find(r"audit_log")[0]
     assert "'upload_rejected', 'upload_failed'" in query and "INTERVAL 30 DAYS" in query
     assert "NOT EXISTS" in query and "m.uploaded_at > a.ts" in query     # re-uploaded since: no longer listed
+
+
+def test_approve_all_waiting_skips_documents_blocked_for_restricted_data(settings):
+    sql = FakeSql(answers=[(r"SELECT doc_id FROM .*status = 'pending_review'", [{"doc_id": "a"}, {"doc_id": "b"}]),
+                           (r"SELECT flag_reason", [{"flag_reason": None}])])
+    docs, cp = _docs(settings, sql)
+    assert docs.bulk_approve_pending("claims_chatbot", "ana@corp.com") == 2
+    query = sql.find(r"SELECT doc_id FROM")[0]
+    assert "status = 'pending_review'" in query and "Contains sensitive info" in query
+    assert "readability" not in query                       # every badge, unlike the Good-only button
+    assert [a[1] for a in cp.audits if a[0] == "doc_approved"] == ["a", "b"]

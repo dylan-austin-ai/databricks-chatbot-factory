@@ -238,7 +238,7 @@ class Pipeline:
                                     q.get("difficulty", "easy"), q.get("question_type", "fact"))
             issues = out.get("extraction_issues") or []
             if issues:
-                self._append_qa_messages(p, d["doc_id"], [f"Reviewer note: {i}" for i in issues])
+                self._append_qa_messages(p, d["doc_id"], qa.reviewer_notes(issues))
         existing_oos = self.sql.query(
             f"SELECT count(*) AS n FROM {p.t('golden_set')} WHERE kind = 'out_of_scope'")[0]["n"]
         if int(existing_oos or 0) == 0:

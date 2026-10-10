@@ -9,9 +9,10 @@ import streamlit as st
 from common import (ALL_BOTS, BADGE, app_client, cp, current_user, docs, is_admin, pick_owned_bot, remember_upload,
                     run_job, settings, show_upload_report, sql)
 from factory.explain import help_text
-from factory.qa import guidance, next_step
+from factory.qa import guidance, next_step, page_issues
 from factory.documents import FLAG_REASONS
 from factory.ingestion import BotPaths, page_images, page_images_sql, page_order
+from ui import md_text
 
 st.title("Documents", help=help_text("documents"))
 # Documents are visible to a chatbot's owner (the owner person or a member of the owner group)
@@ -83,11 +84,25 @@ def republish():
     run_job("ingest", bot_id=cfg.bot_id, publish_only="true")
 
 
-if pending and st.button("Approve all Good documents"):
-    n = D.bulk_approve_green(cfg.bot_id, user)
-    republish()
-    st.success(f"Approved {n} document(s).")
-    st.rerun()
+if pending:
+    good = [r for r in pending if r["readability"] in ("green", "n/a")]
+    with st.container(border=True):
+        st.markdown(f"**Approve in one go** · {len(pending)} document(s) are waiting for review, "
+                    f"{len(good)} of them marked Good")
+        b1, b2 = st.columns(2)
+        if b1.button(f"Approve the {len(good)} Good document(s)", disabled=not good):
+            n = D.bulk_approve_green(cfg.bot_id, user)
+            republish()
+            st.success(f"Approved {n} document(s).")
+            st.rerun()
+        sure = b2.checkbox("I've checked the ones with warnings", key="approve_all_sure",
+                           help="Approves every document waiting for review, including those marked "
+                                "Check it or Problem. Documents blocked for restricted data are never approved.")
+        if b2.button(f"Approve all {len(pending)} waiting", type="primary", disabled=not sure):
+            n = D.bulk_approve_pending(cfg.bot_id, user)
+            republish()
+            st.success(f"Approved {n} document(s).")
+            st.rerun()
 
 show_upload_report(cfg.bot_id)
 with st.container(border=True):
@@ -144,10 +159,34 @@ for kind, heading, box in GROUPS:
     found = [n for n in notes if n["kind"] == kind]
     if found:
         box(f"**{heading}**\n\n" + "\n\n".join(
-            f"- {n['text']}\n\n  *What to do:* {n['next']}" for n in found))
+            f"- {md_text(n['text'])}\n\n  *What to do:* {n['next']}" for n in found))
 for n in notes:
     if n["kind"] == "info" and n["text"]:
         st.caption(n["text"] + (f" {n['next']}" if n["next"] else ""))
+
+a1, a2, a3 = st.columns(3)
+if doc["status"] in ("pending_review", "flagged") and a1.button("Approve this whole document", type="primary"):
+    try:
+        D.approve(cfg.bot_id, doc_id, user)
+        republish()
+        st.rerun()
+    except PermissionError as e:  # blocked for restricted data
+        st.error(str(e))
+if doc["status"] != "archived":
+    reason = a2.selectbox("Flag reason", FLAG_REASONS, label_visibility="collapsed")
+    if a2.button("Flag for fixing"):
+        D.flag(cfg.bot_id, doc_id, user, reason)
+        republish()
+        st.rerun()
+    if a3.button("Archive (can be restored)"):
+        D.archive(cfg.bot_id, doc_id, user)
+        republish()
+        st.rerun()
+elif a3.button("Restore"):
+    D.restore(cfg.bot_id, doc_id, user)
+    republish()
+    st.rerun()
+st.caption("Approval covers the whole document, all pages at once. There is no page-by-page approval.")
 
 tab_view, tab_chunks, tab_details, tab_fix = st.tabs(
     ["What the chatbot sees", "Sections", "Details", "Fix a problem"])
@@ -188,8 +227,28 @@ with tab_view:
         else:
             st.caption("The left side is the original page. The right side is what was read from that page, "
                        "split into blocks. Choose a block to see its full text and where it sits on the page.")
+            by_page, general = page_issues(qa.get("messages", []))
+            flagged_pages = sorted(pg for pg in by_page if pg in pages)
             page = pages[0] if len(pages) == 1 else st.select_slider(
-                "Page", options=pages, format_func=lambda x: str(x + 1))
+                "Page", options=pages, format_func=lambda x: f"{x + 1} ⚠" if x in by_page else str(x + 1))
+            if flagged_pages:
+                st.caption("Pages with possible issues (marked ⚠ on the slider): "
+                           + ", ".join(str(pg + 1) for pg in flagged_pages))
+            here = by_page.get(page, [])
+            with st.container(border=True):  # what was reported for the page on screen, so no scrolling
+                if here:
+                    st.markdown(f"**Possible issues on page {page + 1}**")
+                    for n in here:
+                        (st.error if n["kind"] == "problem" else st.warning if n["kind"] == "check" else st.info)(
+                            f"{md_text(n['text'])}\n\n*What to do:* {n['next']}")
+                else:
+                    st.markdown(f"**No issues were reported for page {page + 1}.**")
+                if general:
+                    with st.expander(f"{len(general)} note(s) about the whole document, with no page given"):
+                        for n in general:
+                            st.markdown(f"- {md_text(n['text'])}")
+                        st.caption("These don't point to a page. Notes written before page numbers were "
+                                   "recorded get them after the document is re-read.")
             page_els = [e for e in els if e["page"] == page]
 
             def body(e: dict) -> str:
@@ -209,9 +268,9 @@ with tab_view:
                     chosen = page_els[pick]
                     st.caption(f"Block {pick + 1} of {len(page_els)} · {chosen['type']} · full text")
                     if chosen["content"]:
-                        st.markdown(chosen["content"], unsafe_allow_html=False)
+                        st.markdown(md_text(chosen["content"]), unsafe_allow_html=False)
                     elif chosen.get("description"):
-                        st.markdown(f"*Description written for this {chosen['type']}:* {chosen['description']}",
+                        st.markdown(f"*Description written for this {chosen['type']}:* {md_text(chosen['description'])}",
                                     unsafe_allow_html=False)
                     else:
                         st.markdown("_(nothing was read from this block)_")
@@ -251,7 +310,7 @@ with tab_chunks:
             st.caption(f"Section {int(c['chunk_position']) + 1} · page(s) {pages} · "
                        f"{c['section'] or ''} · {len(c['chunk_to_retrieve'] or '')} characters"
                        + (" · flagged" if str(c["flagged"]).lower() == "true" else ""))
-            st.write(c["chunk_to_retrieve"])
+            st.markdown(md_text(c["chunk_to_retrieve"]))
             flagged = str(c["flagged"]).lower() == "true"
             if st.button("Unflag" if flagged else "Flag this section", key=c["chunk_id"]):
                 D.flag_chunk(cfg.bot_id, c["chunk_id"], user, not flagged)
@@ -284,28 +343,6 @@ with tab_fix:
         D.save_override(cfg.bot_id, doc_id, override, user)
         run_job("ingest", bot_id=cfg.bot_id, doc_ids=doc_id, rechunk_only="true", generate_golden="false")
         st.success("Saved. Sections will update shortly.")
-
-st.divider()
-a1, a2, a3 = st.columns(3)
-if doc["status"] in ("pending_review", "flagged") and a1.button("Approve", type="primary"):
-    D.approve(cfg.bot_id, doc_id, user)
-    republish()
-    st.rerun()
-if doc["status"] != "archived":
-    reason = a2.selectbox("Flag reason", FLAG_REASONS, label_visibility="collapsed")
-    if a2.button("Flag for fixing"):
-        D.flag(cfg.bot_id, doc_id, user, reason)
-        republish()
-        st.rerun()
-    if a3.button("Archive (can be restored)"):
-        D.archive(cfg.bot_id, doc_id, user)
-        republish()
-        st.rerun()
-else:
-    if a3.button("Restore"):
-        D.restore(cfg.bot_id, doc_id, user)
-        republish()
-        st.rerun()
 
 if is_admin():
     with st.expander("MLOps: permanently delete (legal/retention only)"):

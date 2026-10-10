@@ -43,6 +43,12 @@ def style() -> None:
     st.markdown(CSS, unsafe_allow_html=True)
 
 
+def md_text(text: str | None) -> str:
+    """Document or model text made safe to show with st.markdown: Streamlit reads the text between
+    two dollar signs as a formula, which garbles amounts like "$315 ... $500"."""
+    return (text or "").replace("$", "\\$")
+
+
 def pill(text: str, tone: str = "gray") -> str:
     bg, fg = TONE[tone]
     return f'<span class="cf-pill" style="background:{bg};color:{fg}">{escape(str(text))}</span>'

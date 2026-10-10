@@ -6,7 +6,7 @@ import streamlit as st
 
 from common import (APP_VERSION, OUTCOME_LABEL, STATE_LABEL, can_manage, cp, current_user, is_tester,
                     settings, sql, user_client)
-from ui import html, pill
+from ui import html, md_text, pill
 
 st.title("Chat")
 s, user = settings(), current_user()
@@ -54,7 +54,7 @@ for i, m in enumerate(conv["messages"]):
     with st.chat_message(m["role"]):
         if m.get("label"):
             html(pill(m["label"], "gray"))
-        st.markdown(m["content"])
+        st.markdown(md_text(m["content"]))
         for cf in m.get("conflicts", []):
             st.warning(f"**Sources disagree ({' and '.join(f'[{n}]' for n in cf.get('sources', []))}):** "
                        f"{cf.get('note', '')}")
@@ -63,7 +63,7 @@ for i, m in enumerate(conv["messages"]):
                 for c in m["citations"]:
                     where = f"page(s) {c['pages']}" + (f", section \"{c['section']}\"" if c.get("section") else "")
                     st.markdown(f"**[{c['n']}] {c['doc_name']}** (v{c.get('doc_version')}), {where}")
-                    st.markdown(f"> {c['excerpt']}")  # Markdown quote, rendered safely
+                    st.markdown(f"> {md_text(c['excerpt'])}")  # Markdown quote, rendered safely
         if m["role"] == "assistant" and m.get("request_id"):
             c1, c2, _ = st.columns([1, 1, 10])
             if c1.button("", icon=":material/thumb_up:", key=f"up_{i}", help="Helpful"):

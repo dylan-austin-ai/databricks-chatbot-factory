@@ -145,6 +145,16 @@ class Documents:
             self.approve(bot_id, r["doc_id"], actor)
         return len(rows)
 
+    def bulk_approve_pending(self, bot_id, actor) -> int:
+        """Approve every document waiting for review, whatever its badge. Documents blocked for
+        restricted data are flagged, not waiting, so they are never included."""
+        p = BotPaths(self.s, bot_id)
+        rows = self.sql.query(f"SELECT doc_id FROM {p.t('manifest')} WHERE status = 'pending_review' "
+                              "AND coalesce(flag_reason, '') <> 'Contains sensitive info'")
+        for r in rows:
+            self.approve(bot_id, r["doc_id"], actor)
+        return len(rows)
+
     def flag(self, bot_id, doc_id, actor, reason):
         self._set_status(bot_id, doc_id, "flagged", False, actor, "doc_flagged", reason)
 

@@ -145,3 +145,42 @@ def test_page_images_map_is_keyed_by_page_number():
     rows = [{"page": "1", "image_uri": "dbfs:/Volumes/c/s/v/p/b.jpg"}, {"page": 0, "image_uri": "/Volumes/c/s/v/p/a.jpg"},
             {"page": None, "image_uri": "/x"}, {"page": "2", "image_uri": None}]
     assert page_images(rows) == {1: "/Volumes/c/s/v/p/b.jpg", 0: "/Volumes/c/s/v/p/a.jpg"}
+
+
+def test_reviewer_notes_name_their_pages():
+    from factory.qa import pages_of, reviewer_notes
+
+    notes = reviewer_notes([{"issue": "The table is scrambled", "pages": [3, "2", 0, "x"]},
+                            {"issue": "Figure descriptions clutter the text", "pages": []},
+                            "Older plain note", {"issue": "  "}])
+    assert notes == ["Reviewer note (page 2, 3): The table is scrambled",
+                     "Reviewer note: Figure descriptions clutter the text", "Reviewer note: Older plain note"]
+    assert pages_of(notes[0]) == {1, 2} and pages_of(notes[1]) == set()
+    assert all(guidance(n)["kind"] == "opinion" for n in notes)
+
+
+def test_pages_of_reads_every_message_that_names_pages():
+    from factory.qa import pages_of
+
+    assert pages_of("We couldn't read page 4.") == {3}
+    assert pages_of("Page 7: the table lost its header row") == {6}
+    assert pages_of("No text was found on page(s) 1, 2, 10. They may be scanned images or blank.") == {0, 1, 9}
+    assert pages_of("Some parts of this document were hard to read.") == set()
+    assert pages_of("The file has 12 pages but only 10 were processed.") == set()
+
+
+def test_page_issues_separates_page_findings_from_whole_document_notes():
+    from factory.qa import page_issues
+
+    by_page, general = page_issues([
+        "We couldn't read page 2.", "Page 2: a footnote is missing", "Reviewer note (page 5): cut-off sentence",
+        "Some parts of this document were hard to read.", "Reviewer note: cluttered", "Extracted cleanly.",
+        "Visual check unavailable."])
+    assert sorted(by_page) == [1, 4]
+    assert [n["kind"] for n in by_page[1]] == ["problem", "opinion"] and all(n["next"] for n in by_page[1])
+    assert [n["text"] for n in general] == ["Some parts of this document were hard to read.", "Reviewer note: cluttered"]
+
+
+def test_the_reviewer_is_asked_for_page_numbers():
+    assert '"pages": [2, 3]' in qa.GOLDEN_SET_PROMPT and "page number(s) where" in qa.GOLDEN_SET_PROMPT
+    qa.GOLDEN_SET_PROMPT.format(purpose="p", n_easy=1, n_hard=1, doc_name="d", text="t")   # still formats

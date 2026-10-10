@@ -122,7 +122,7 @@ _GUIDE = [
     (r"Page \S+: ", "opinion",
      f"An automatic visual check compared this page with its text and raised this. {LOOK} If the text is right, "
      "ignore it and approve."),
-    (r"Reviewer note: ", "opinion",
+    (r"Reviewer note", "opinion",
      "The automatic reviewer's impression while writing test questions. It is a quality warning, not a confirmed "
      "fault in the file. Skim the document; if the content reads correctly, approve it."),
     (r"Visual check unavailable", "info",
@@ -142,6 +142,54 @@ def guidance(message: str) -> dict:
             text = "The automatic visual check couldn't run." if pattern.startswith("Visual check") else message
             return {"kind": kind, "text": text, "next": next_step}
     return {"kind": "check", "text": message, "next": f"{LOOK} If it reads correctly, press **Approve**."}
+
+
+def reviewer_notes(issues: list) -> list[str]:
+    """Stored messages for the automatic reviewer's remarks, each naming its page(s) when the
+    reviewer gave them: "Reviewer note (page 2, 3): ...". Accepts the older plain-text form."""
+    notes = []
+    for item in issues or []:
+        if isinstance(item, dict):
+            text = str(item.get("issue") or "").strip()
+            pages = sorted({int(p) for p in (item.get("pages") or []) if str(p).strip().isdigit() and int(p) > 0})
+        else:
+            text, pages = str(item).strip(), []
+        if text:
+            where = f" (page {', '.join(map(str, pages))})" if pages else ""
+            notes.append(f"Reviewer note{where}: {text}")
+    return notes
+
+
+def pages_of(message: str) -> set[int]:
+    """The 0-based pages a stored quality message is about; empty when it is about the whole
+    document or doesn't say."""
+    import re
+
+    message = message or ""
+    for pattern in (r"We couldn't read page (\d+)", r"^Page (\d+): ",
+                    r"No text was found on page\(s\) ([\d, ]+)", r"^Reviewer note \(page ([\d, ]+)\)"):
+        found = re.search(pattern, message)
+        if found:
+            return {int(n) - 1 for n in re.findall(r"\d+", found.group(1)) if int(n) > 0}
+    return set()
+
+
+def page_issues(messages: list[str]) -> tuple[dict[int, list[dict]], list[dict]]:
+    """Quality messages sorted for the review screen: {0-based page: [guidance]} for those that
+    name pages, and the rest (about the whole document, or with no page given). Messages that
+    only say everything is fine are left out."""
+    by_page: dict[int, list[dict]] = {}
+    general: list[dict] = []
+    for message in messages or []:
+        note = guidance(message)
+        if note["kind"] == "info":
+            continue
+        pages = pages_of(message)
+        for page in sorted(pages):
+            by_page.setdefault(page, []).append(note)
+        if not pages:
+            general.append(note)
+    return by_page, general
 
 
 def next_step(badge: str | None, status: str, messages: list[str]) -> str:
@@ -192,12 +240,14 @@ For every question give: the expected answer in 1-3 sentences, an exact supporti
 verbatim from the text (under 40 words), the 1-based page number(s) it comes from, difficulty
 ("easy" or "hard") and question_type (fact, table, number, footnote, figure, list, multi_section).
 3. Separately, note any signs the text was extracted badly: garbled tables, cut-off sentences,
-   missing sections, scrambled characters (QA-1).
+   missing sections, scrambled characters (QA-1). For each one give the 1-based page number(s) where
+   it shows, taken from the [page N] markers, so a person can go straight to it. Be specific about
+   what is wrong on that page; don't give general impressions of the whole document.
 
 Return JSON only:
 {{"questions": [{{"question": "...", "expected_answer": "...", "quote": "...", "expected_pages": [3],
                  "difficulty": "hard", "question_type": "table"}}],
-  "extraction_issues": ["..."]}}
+  "extraction_issues": [{{"issue": "...", "pages": [2, 3]}}]}}
 
 Document: {doc_name}
 <<<
