@@ -11,7 +11,7 @@ from common import (ALL_BOTS, BADGE, app_client, cp, current_user, docs, is_admi
 from factory.explain import help_text
 from factory.qa import guidance, next_step
 from factory.documents import FLAG_REASONS
-from factory.ingestion import BotPaths
+from factory.ingestion import BotPaths, page_order
 
 st.title("Documents", help=help_text("documents"))
 # Documents are visible to a chatbot's owner (the owner person or a member of the owner group)
@@ -195,8 +195,8 @@ with tab_view:
             try:
                 from PIL import Image, ImageDraw
                 folder = f"{p.images}/{doc_id}/v{doc['doc_version']}"
-                imgs = sorted(f.path for f in app_client().files.list_directory_contents(folder)
-                              if not f.is_directory)
+                imgs = sorted((f.path for f in app_client().files.list_directory_contents(folder)
+                               if not f.is_directory), key=page_order)
                 img = Image.open(io.BytesIO(app_client().files.download(imgs[page]).contents.read()))
                 coord = json.loads(page_els[pick]["coord"] or "[]") if page_els else []
                 if len(coord) == 4:

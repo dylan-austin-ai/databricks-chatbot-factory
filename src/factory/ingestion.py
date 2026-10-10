@@ -50,6 +50,12 @@ _PAGE_RANGE = re.compile(r"\d+(-\d+)?(,\d+(-\d+)?)*")
 _VOLUME_PATH = re.compile(r"[A-Za-z0-9_./-]+")
 
 
+def page_order(path: str) -> list:
+    """Sort key that puts page image files in page order: page_2 before page_10. Plain text
+    order would pair page 10's image with page 2's text."""
+    return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", path)]
+
+
 def sql_literal(value: str) -> str:
     """A SQL string literal for a value that has to be written into the statement itself."""
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"

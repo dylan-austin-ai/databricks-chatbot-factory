@@ -16,7 +16,8 @@ from . import guardrails, llm, qa, sensitive
 from .config import BotConfig, PlatformSettings
 from .controlplane import ControlPlane
 from .guardrails import platform_rules
-from .ingestion import BotPaths, chunk_sql, doc_params, parse_binary_sql, parse_text_sql, qa_metrics_sql
+from .ingestion import (BotPaths, chunk_sql, doc_params, page_order, parse_binary_sql, parse_text_sql,
+                        qa_metrics_sql)
 from .provisioning import sync_index
 from .releases import Releases
 from .sql import SqlRunner
@@ -170,14 +171,16 @@ class Pipeline:
             {"d": doc_id, "v": self._current_version(p, doc_id)})
         pages: dict[int, list[str]] = {}
         for r in rows:
-            pages.setdefault(r["page"] or 0, []).append(r["content"] or "")
+            # Page ids can arrive as text ("0"); the visual check looks pages up by number.
+            page = int(r["page"]) if r["page"] not in (None, "") else 0
+            pages.setdefault(page, []).append(r["content"] or "")
         return {k: "\n".join(v) for k, v in pages.items()}
 
     def visual_judge(self, p: BotPaths, doc_id: str) -> list[dict]:
         """QA-6: Sonnet compares each page image with its extracted text."""
         folder = f"{p.images}/{doc_id}/v{self._current_version(p, doc_id)}"
-        images = sorted(f.path for f in self.w.files.list_directory_contents(folder)
-                        if not f.is_directory)
+        images = sorted((f.path for f in self.w.files.list_directory_contents(folder)
+                         if not f.is_directory), key=page_order)
         texts = self._page_texts(p, doc_id)
         findings: list[dict] = []
         for page_idx, path in enumerate(images[:MAX_VISUAL_PAGES]):

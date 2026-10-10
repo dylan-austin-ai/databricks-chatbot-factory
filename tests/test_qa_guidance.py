@@ -75,3 +75,43 @@ def test_page_images_are_sent_with_their_real_type(monkeypatch):
     monkeypatch.setattr("factory.llm.chat", fake_chat)
     chat_json(None, "endpoint", "check this page", images=[b"\xff\xd8\xff\xe0jpegbytes"])
     assert sent["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def test_page_texts_are_keyed_by_page_number_even_when_ids_arrive_as_text(settings):
+    from conftest import FakeSql
+    from factory.ingestion import BotPaths
+    from factory.pipeline import Pipeline
+
+    rows = [{"page": "0", "content": "first page"}, {"page": "0", "content": "more"},
+            {"page": "1", "content": "second page"}, {"page": 2, "content": "third"}, {"page": None, "content": "loose"}]
+    sql = FakeSql(answers=[(r"SELECT doc_version FROM", [{"doc_version": 1}]), (r"variant_explode", rows)])
+    pipe = Pipeline.__new__(Pipeline)
+    pipe.sql = sql
+    texts = pipe._page_texts(BotPaths(settings, "claims_chatbot"), "abc123")
+    assert texts == {0: "first page\nmore\nloose", 1: "second page", 2: "third"}
+    assert all(isinstance(k, int) for k in texts)
+
+
+def test_visual_check_pairs_each_page_image_with_its_own_text(settings, monkeypatch):
+    from types import SimpleNamespace
+
+    from factory.ingestion import BotPaths
+    from factory.pipeline import Pipeline
+
+    names = [f"page_{i}.jpg" for i in (0, 1, 10, 2)]     # listing order is not page order
+    files = SimpleNamespace(
+        list_directory_contents=lambda folder: [SimpleNamespace(path=f"{folder}/{n}", is_directory=False) for n in names],
+        download=lambda path: SimpleNamespace(contents=SimpleNamespace(read=lambda: path.encode())))
+    pipe = Pipeline.__new__(Pipeline)
+    pipe.w, pipe.s, pipe._llm = SimpleNamespace(files=files), settings, object()
+    pipe._current_version = lambda p, d: 1
+    pipe._page_texts = lambda p, d: {0: "TEXT0", 1: "TEXT1", 2: "TEXT2", 3: "TEXT10"}
+    seen = []
+
+    def fake_chat_json(client, endpoint, prompt, images=None, max_tokens=0):
+        seen.append((images[0].decode().rsplit("/", 1)[1], prompt.split("<<<\n")[1].split("\n>>>")[0]))
+        return {"findings": []}
+
+    monkeypatch.setattr("factory.pipeline.llm.chat_json", fake_chat_json)
+    pipe.visual_judge(BotPaths(settings, "claims_chatbot"), "abc123")
+    assert seen == [("page_0.jpg", "TEXT0"), ("page_1.jpg", "TEXT1"), ("page_2.jpg", "TEXT2"), ("page_10.jpg", "TEXT10")]
