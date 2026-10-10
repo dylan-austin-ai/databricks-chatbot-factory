@@ -56,6 +56,28 @@ def page_order(path: str) -> list:
     return [int(part) if part.isdigit() else part for part in re.split(r"(\d+)", path)]
 
 
+def page_images_sql(p: BotPaths) -> str:
+    """Page number and image path for a document's latest parse; bind `d` (doc id) and `v`
+    (version). The reader records each page's image in its output, which is the only reliable
+    pairing: the image folder also holds images from earlier reads of the same version, and file
+    names don't sort in page order."""
+    return f"""
+    SELECT pg.value:id::INT AS page, pg.value:image_uri::STRING AS image_uri
+    FROM {p.t('parsed_elements')} pe, LATERAL variant_explode(pe.parsed:document:pages) pg
+    WHERE pe.doc_id = :d AND pe.doc_version = CAST(:v AS INT) AND pe.parsed IS NOT NULL
+    QUALIFY DENSE_RANK() OVER (ORDER BY pe.parsed_at DESC) = 1"""
+
+
+def page_images(rows: list[dict]) -> dict[int, str]:
+    """{0-based page number: volume path of its image} from page_images_sql rows."""
+    out: dict[int, str] = {}
+    for r in rows:
+        if r.get("page") in (None, "") or not r.get("image_uri"):
+            continue
+        out[int(r["page"])] = re.sub(r"^dbfs:", "", r["image_uri"])
+    return out
+
+
 def sql_literal(value: str) -> str:
     """A SQL string literal for a value that has to be written into the statement itself."""
     return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"

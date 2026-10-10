@@ -16,8 +16,8 @@ from . import guardrails, llm, qa, sensitive
 from .config import BotConfig, PlatformSettings
 from .controlplane import ControlPlane
 from .guardrails import platform_rules
-from .ingestion import (BotPaths, chunk_sql, doc_params, page_order, parse_binary_sql, parse_text_sql,
-                        qa_metrics_sql)
+from .ingestion import (BotPaths, chunk_sql, doc_params, page_images, page_images_sql, page_order,
+                        parse_binary_sql, parse_text_sql, qa_metrics_sql)
 from .provisioning import sync_index
 from .releases import Releases
 from .sql import SqlRunner
@@ -176,23 +176,32 @@ class Pipeline:
             pages.setdefault(page, []).append(r["content"] or "")
         return {k: "\n".join(v) for k, v in pages.items()}
 
+    def _page_images(self, p: BotPaths, doc_id: str) -> dict[int, str]:
+        """Image path per 0-based page, as recorded by the reader for the latest parse. Falls back
+        to the folder listing in page order for parses that recorded no image paths."""
+        version = self._current_version(p, doc_id)
+        images = page_images(self.sql.query(page_images_sql(p), {"d": doc_id, "v": int(version)}))
+        if images:
+            return images
+        folder = f"{p.images}/{doc_id}/v{version}"
+        listed = sorted((f.path for f in self.w.files.list_directory_contents(folder)
+                         if not f.is_directory), key=page_order)
+        return dict(enumerate(listed))
+
     def visual_judge(self, p: BotPaths, doc_id: str) -> list[dict]:
         """QA-6: Sonnet compares each page image with its extracted text."""
-        folder = f"{p.images}/{doc_id}/v{self._current_version(p, doc_id)}"
-        images = sorted((f.path for f in self.w.files.list_directory_contents(folder)
-                         if not f.is_directory), key=page_order)
+        images = self._page_images(p, doc_id)
         texts = self._page_texts(p, doc_id)
         findings: list[dict] = []
-        for page_idx, path in enumerate(images[:MAX_VISUAL_PAGES]):
-            img = self.w.files.download(path).contents.read()
+        for page in sorted(images)[:MAX_VISUAL_PAGES]:
+            img = self.w.files.download(images[page]).contents.read()
             out = llm.chat_json(self.llm, self.s.get("models.generation_endpoint"),
-                                qa.VISUAL_JUDGE_PROMPT.format(page=page_idx + 1,
-                                                              text=texts.get(page_idx, "")[:12000]),
+                                qa.VISUAL_JUDGE_PROMPT.format(page=page + 1,
+                                                              text=texts.get(page, "")[:12000]),
                                 images=[img], max_tokens=800)
             findings += out.get("findings", [])
         return findings
 
-    # Golden set (EVL-1, EVL-4, EVG-4, QA-1) -----------------------------------
     def _doc_text_with_pages(self, p: BotPaths, doc_id: str) -> str:
         rows = self.sql.query(f"""
             SELECT c.chunk_to_retrieve, c.page_ids FROM {p.t('chunked')} c

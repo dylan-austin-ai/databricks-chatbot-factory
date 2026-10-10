@@ -92,26 +92,56 @@ def test_page_texts_are_keyed_by_page_number_even_when_ids_arrive_as_text(settin
     assert all(isinstance(k, int) for k in texts)
 
 
-def test_visual_check_pairs_each_page_image_with_its_own_text(settings, monkeypatch):
+def _visual_pipe(settings, monkeypatch, image_rows, listed=()):
     from types import SimpleNamespace
 
-    from factory.ingestion import BotPaths
+    from conftest import FakeSql
     from factory.pipeline import Pipeline
 
-    names = [f"page_{i}.jpg" for i in (0, 1, 10, 2)]     # listing order is not page order
     files = SimpleNamespace(
-        list_directory_contents=lambda folder: [SimpleNamespace(path=f"{folder}/{n}", is_directory=False) for n in names],
+        list_directory_contents=lambda folder: [SimpleNamespace(path=f"{folder}/{n}", is_directory=False) for n in listed],
         download=lambda path: SimpleNamespace(contents=SimpleNamespace(read=lambda: path.encode())))
     pipe = Pipeline.__new__(Pipeline)
+    pipe.sql = FakeSql(answers=[(r"document:pages", image_rows)])
     pipe.w, pipe.s, pipe._llm = SimpleNamespace(files=files), settings, object()
     pipe._current_version = lambda p, d: 1
-    pipe._page_texts = lambda p, d: {0: "TEXT0", 1: "TEXT1", 2: "TEXT2", 3: "TEXT10"}
+    pipe._page_texts = lambda p, d: {0: "TEXT0", 1: "TEXT1", 2: "TEXT2", 9: "TEXT9"}
     seen = []
 
     def fake_chat_json(client, endpoint, prompt, images=None, max_tokens=0):
-        seen.append((images[0].decode().rsplit("/", 1)[1], prompt.split("<<<\n")[1].split("\n>>>")[0]))
+        page = int(prompt.split("Page number: ")[1].split("\n")[0])
+        seen.append((page, images[0].decode().rsplit("/", 1)[1], prompt.split("<<<\n")[1].split("\n>>>")[0]))
         return {"findings": []}
 
     monkeypatch.setattr("factory.pipeline.llm.chat_json", fake_chat_json)
+    return pipe, seen
+
+
+def test_visual_check_uses_the_image_the_reader_recorded_for_each_page(settings, monkeypatch):
+    from factory.ingestion import BotPaths
+
+    # File names carry no usable order, and an older read left extra images in the folder.
+    rows = [{"page": "9", "image_uri": "dbfs:/Volumes/c/b/v/page_images/d/v1/zz-last.jpg"},
+            {"page": "0", "image_uri": "/Volumes/c/b/v/page_images/d/v1/mm-first.jpg"},
+            {"page": "1", "image_uri": "/Volumes/c/b/v/page_images/d/v1/aa-second.jpg"}]
+    pipe, seen = _visual_pipe(settings, monkeypatch, rows, listed=["aa-second.jpg", "mm-first.jpg", "old-read.jpg"])
     pipe.visual_judge(BotPaths(settings, "claims_chatbot"), "abc123")
-    assert seen == [("page_0.jpg", "TEXT0"), ("page_1.jpg", "TEXT1"), ("page_2.jpg", "TEXT2"), ("page_10.jpg", "TEXT10")]
+    assert seen == [(1, "mm-first.jpg", "TEXT0"), (2, "aa-second.jpg", "TEXT1"), (10, "zz-last.jpg", "TEXT9")]
+
+
+def test_visual_check_falls_back_to_the_folder_in_page_order(settings, monkeypatch):
+    from factory.ingestion import BotPaths
+
+    pipe, seen = _visual_pipe(settings, monkeypatch, [], listed=["page_0.jpg", "page_1.jpg", "page_10.jpg", "page_2.jpg"])
+    pipe._page_texts = lambda p, d: {0: "TEXT0", 1: "TEXT1", 2: "TEXT2", 3: "TEXT10"}
+    pipe.visual_judge(BotPaths(settings, "claims_chatbot"), "abc123")
+    assert [(name, text) for _, name, text in seen] == [
+        ("page_0.jpg", "TEXT0"), ("page_1.jpg", "TEXT1"), ("page_2.jpg", "TEXT2"), ("page_10.jpg", "TEXT10")]
+
+
+def test_page_images_map_is_keyed_by_page_number():
+    from factory.ingestion import page_images
+
+    rows = [{"page": "1", "image_uri": "dbfs:/Volumes/c/s/v/p/b.jpg"}, {"page": 0, "image_uri": "/Volumes/c/s/v/p/a.jpg"},
+            {"page": None, "image_uri": "/x"}, {"page": "2", "image_uri": None}]
+    assert page_images(rows) == {1: "/Volumes/c/s/v/p/b.jpg", 0: "/Volumes/c/s/v/p/a.jpg"}

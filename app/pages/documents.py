@@ -11,7 +11,7 @@ from common import (ALL_BOTS, BADGE, app_client, cp, current_user, docs, is_admi
 from factory.explain import help_text
 from factory.qa import guidance, next_step
 from factory.documents import FLAG_REASONS
-from factory.ingestion import BotPaths, page_order
+from factory.ingestion import BotPaths, page_images, page_images_sql, page_order
 
 st.title("Documents", help=help_text("documents"))
 # Documents are visible to a chatbot's owner (the owner person or a member of the owner group)
@@ -175,7 +175,8 @@ with tab_view:
     else:
         els = sql().query(f"""
             SELECT e.value:bbox[0]:page_id::INT AS page, e.value:type::STRING AS type,
-                   e.value:content::STRING AS content, to_json(e.value:bbox[0]:coord) AS coord
+                   e.value:content::STRING AS content, e.value:description::STRING AS description,
+                   to_json(e.value:bbox[0]:coord) AS coord
             FROM {p.t('parsed_elements')} pe, LATERAL variant_explode(pe.parsed:document:elements) e
             WHERE pe.doc_id = :d AND pe.parsed IS NOT NULL
             QUALIFY DENSE_RANK() OVER (ORDER BY pe.parsed_at DESC) = 1""", {"d": doc_id})
@@ -185,28 +186,59 @@ with tab_view:
         if not pages:
             st.info("Nothing extracted yet.")
         else:
+            st.caption("The left side is the original page. The right side is what was read from that page, "
+                       "split into blocks. Choose a block to see its full text and where it sits on the page.")
             page = pages[0] if len(pages) == 1 else st.select_slider(
                 "Page", options=pages, format_func=lambda x: str(x + 1))
             page_els = [e for e in els if e["page"] == page]
-            left, right = st.columns(2)
-            pick = right.radio("Click a block to highlight it on the page", range(len(page_els)),
-                               format_func=lambda i: f"[{page_els[i]['type']}] "
-                                                     f"{(page_els[i]['content'] or '')[:90]}")
+
+            def body(e: dict) -> str:
+                return (e["content"] or e.get("description") or "").strip()
+
+            left, right = st.columns([3, 2])
+            with right:
+                st.markdown(f"**Page {page + 1}: {len(page_els)} block(s) read**")
+                full_text = st.container(border=True)   # filled in below, once a block is chosen
+                with st.container(height=320):
+                    pick = st.radio(
+                        "Blocks on this page", range(len(page_els)), key=f"block_{doc_id}_{page}",
+                        format_func=lambda i: f"{i + 1}. {page_els[i]['type']}: "
+                                              f"{body(page_els[i])[:60] or '(no text)'}"
+                                              + ("…" if len(body(page_els[i])) > 60 else ""))
+                with full_text:
+                    chosen = page_els[pick]
+                    st.caption(f"Block {pick + 1} of {len(page_els)} · {chosen['type']} · full text")
+                    if chosen["content"]:
+                        st.markdown(chosen["content"], unsafe_allow_html=False)
+                    elif chosen.get("description"):
+                        st.markdown(f"*Description written for this {chosen['type']}:* {chosen['description']}",
+                                    unsafe_allow_html=False)
+                    else:
+                        st.markdown("_(nothing was read from this block)_")
             try:
                 from PIL import Image, ImageDraw
-                folder = f"{p.images}/{doc_id}/v{doc['doc_version']}"
-                imgs = sorted((f.path for f in app_client().files.list_directory_contents(folder)
-                               if not f.is_directory), key=page_order)
-                img = Image.open(io.BytesIO(app_client().files.download(imgs[page]).contents.read()))
-                coord = json.loads(page_els[pick]["coord"] or "[]") if page_els else []
-                if len(coord) == 4:
-                    ImageDraw.Draw(img).rectangle(coord, outline="red", width=4)
+                # The reader records which image belongs to which page; the folder listing can't be
+                # trusted for that (it also holds images from earlier reads).
+                images = page_images(sql().query(page_images_sql(p), {"d": doc_id, "v": int(doc["doc_version"])}))
+                if page not in images:
+                    folder = f"{p.images}/{doc_id}/v{doc['doc_version']}"
+                    images = dict(enumerate(sorted((f.path for f in app_client().files.list_directory_contents(folder)
+                                                    if not f.is_directory), key=page_order)))
+                img = Image.open(io.BytesIO(app_client().files.download(images[page]).contents.read())).convert("RGBA")
+                coord = [int(c) for c in json.loads(chosen["coord"] or "[]")]
+                marked = len(coord) == 4
+                if marked:
+                    x1, x2 = sorted((coord[0], coord[2]))
+                    y1, y2 = sorted((coord[1], coord[3]))
+                    shade = Image.new("RGBA", img.size, (0, 0, 0, 0))
+                    ImageDraw.Draw(shade).rectangle([x1, y1, x2, y2], fill=(255, 221, 0, 70), outline=(220, 0, 0, 255),
+                                                    width=max(4, img.width // 200))
+                    img = Image.alpha_composite(img, shade)
                 left.image(img, use_container_width=True)
+                left.caption(f"Original page {page + 1}. " + (f"The shaded red box is block {pick + 1}."
+                                                              if marked else "This block has no position on the page."))
             except Exception as e:  # noqa: BLE001
-                left.info(f"Page image unavailable ({e}).")
-            if page_els:
-                right.markdown(page_els[pick]["content"] or "_(image or empty block)_",
-                               unsafe_allow_html=False)
+                left.info(f"Page image unavailable ({type(e).__name__}).")
 
 with tab_chunks:
     chunks = sql().query(f"""SELECT chunk_id, chunk_position, section, page_ids, chunk_to_retrieve, flagged
