@@ -89,3 +89,16 @@ def test_approve_all_waiting_skips_documents_blocked_for_restricted_data(setting
     assert "status = 'pending_review'" in query and "Contains sensitive info" in query
     assert "readability" not in query                       # every badge, unlike the Good-only button
     assert [a[1] for a in cp.audits if a[0] == "doc_approved"] == ["a", "b"]
+
+
+def test_hand_typed_text_can_be_read_back_and_removed(settings):
+    saved = [{"text": "1. Click Benefits\n2. Choose Enroll", "saved_at": "2026-10-10 09:30:00"}]
+    sql = FakeSql(answers=[(r"pe\.is_override", saved), (r"SELECT doc_version FROM", [{"doc_version": 2}])])
+    docs, cp = _docs(settings, sql)
+    assert docs.current_override("claims_chatbot", "d1") == saved[0]
+    docs.remove_override("claims_chatbot", "d1", "ana@corp.com")
+    delete, params = [(s, p) for s, p in sql.statements if s.startswith("DELETE FROM")][0]
+    assert "is_override" in delete and "doc_version = CAST(:v AS INT)" in delete and params == {"d": "d1", "v": 2}
+    assert ("doc_override_removed", "d1") in [(a[0], a[1]) for a in cp.audits]
+    empty, _ = _docs(settings, FakeSql())
+    assert empty.current_override("claims_chatbot", "d1") is None

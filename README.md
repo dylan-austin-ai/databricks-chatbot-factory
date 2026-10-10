@@ -43,7 +43,7 @@ failure. `releases`, `release_chunks` and `index_history` reconstruct the index 
 | `jobs/` | setup_platform, setup_observability, provision, ingest (+ per-bot file-arrival triggers), compare_strategies, run_evals (`mlflow.genai.evaluate`), promote, monitor, prod_judging, drift, optimize_prompt, reindex, git_sync, maintenance |
 | `sql/` | Control-plane DDL, per-bot DDL, dashboard views, ABAC governance, metric views, system-table cost views |
 | `resources/`, `databricks.yml` | Declarative Automation Bundle (qa and prod targets, direct deployment engine) |
-| `tests/` | 189 unit tests for the pure logic |
+| `tests/` | 190 unit tests for the pure logic |
 
 ## Prerequisites
 

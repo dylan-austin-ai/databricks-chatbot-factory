@@ -220,6 +220,26 @@ class Documents:
             "NULL, :t, true, current_timestamp())", {"d": doc_id, "v": v, "t": text})
         self.cp.audit(actor, bot_id, "doc_override_saved", doc_id)
 
+    def current_override(self, bot_id: str, doc_id: str) -> dict | None:
+        """The hand-typed text in use for this document's current version, if any: {text, saved_at}."""
+        p = BotPaths(self.s, bot_id)
+        rows = self.sql.query(
+            f"""SELECT pe.text_content AS text, pe.parsed_at AS saved_at
+                FROM {p.t('parsed_elements')} pe
+                JOIN {p.t('manifest')} m ON m.doc_id = pe.doc_id AND m.doc_version = pe.doc_version
+                WHERE pe.doc_id = :d AND m.status <> 'superseded' AND pe.is_override
+                ORDER BY pe.parsed_at DESC LIMIT 1""", {"d": doc_id})
+        return rows[0] if rows else None
+
+    def remove_override(self, bot_id: str, doc_id: str, actor: str) -> None:
+        """Go back to the automatic reading: drop the hand-typed text for the current version."""
+        p = BotPaths(self.s, bot_id)
+        v = self.sql.query(f"SELECT doc_version FROM {p.t('manifest')} WHERE doc_id = :d "
+                           "AND status <> 'superseded'", {"d": doc_id})[0]["doc_version"]
+        self.sql.execute(f"DELETE FROM {p.t('parsed_elements')} WHERE doc_id = :d "
+                         "AND doc_version = CAST(:v AS INT) AND is_override", {"d": doc_id, "v": v})
+        self.cp.audit(actor, bot_id, "doc_override_removed", doc_id)
+
     def hard_delete(self, bot_id, doc_id, actor, is_admin: bool, legal_reason: str):
         """Admin only, for legal or retention requests (DOC-10)."""
         if not is_admin:

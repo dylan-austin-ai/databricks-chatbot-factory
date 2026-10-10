@@ -93,7 +93,8 @@ def merge_visual(result: QaResult, visual_findings: list[dict]) -> QaResult:
 #   check     a measurement suggests trouble; the document may still be fine
 #   opinion   an AI reviewer's view of the result; a prompt to look, not a confirmed fault
 #   info      nothing wrong with the document
-FIX = "Open **Fix a problem** to upload a cleaner copy, re-read it without the bad pages, or paste the correct text."
+FIX = ("Type the correct text yourself under **The text is wrong? Type it yourself**, below the page. "
+       "Or open **Fix a problem** to upload a cleaner copy or re-read it without the bad pages.")
 LOOK = "Open **What the chatbot sees** and compare the text with the page."
 _GUIDE = [
     (r"We couldn't read ", "problem",

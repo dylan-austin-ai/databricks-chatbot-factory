@@ -299,6 +299,40 @@ with tab_view:
             except Exception as e:  # noqa: BLE001
                 left.info(f"Page image unavailable ({type(e).__name__}).")
 
+            # Hand-typed text, for when the reading can't be trusted: screenshots with arrows, flow
+            # charts, forms. It replaces the reading for the whole document.
+            mine = D.current_override(cfg.bot_id, doc_id)
+            if mine:
+                st.success("**The chatbot is using text you typed for this document**, not the blocks read from the "
+                           f"page above (saved {str(mine['saved_at'])[:16]}).")
+            with st.expander("The text is wrong or out of order? Type it yourself", expanded=bool(mine)):
+                st.markdown(
+                    "Use this when the reading lost the meaning, for example a screenshot with arrows or a flow "
+                    "chart. **What you type replaces everything read from this document**, on every page, and is "
+                    "what the chatbot will search and quote.\n\n"
+                    "- Write it the way you would explain it to a colleague: a short title, then numbered steps in "
+                    "the order they are done.\n"
+                    "- Name the buttons, menus and fields exactly as they appear on screen.\n"
+                    "- Include every page's content, not only the part that was wrong.\n"
+                    "- Answers that use this text will name the document as their source, without a page number.")
+                read = "\n\n".join(
+                    (f"Page {pg + 1}\n" if len(pages) > 1 else "")
+                    + "\n".join(body(e) for e in els if e["page"] == pg and body(e)) for pg in pages)
+                typed = st.text_area(
+                    "The text for this document", value=(mine["text"] if mine else read), height=320,
+                    key=f"override_{doc_id}",
+                    help="Starts with what was read, so you can fix it instead of starting from nothing.")
+                o1, o2 = st.columns(2)
+                if o1.button("Save my text", type="primary", disabled=not typed.strip()):
+                    D.save_override(cfg.bot_id, doc_id, typed.strip(), user)
+                    run_job("ingest", bot_id=cfg.bot_id, doc_ids=doc_id, rechunk_only="true", generate_golden="false")
+                    st.success("Saved. The chatbot's sections for this document are being rebuilt from your text; "
+                               "check the **Sections** tab in a few minutes, then approve the document.")
+                if mine and o2.button("Go back to the automatic reading"):
+                    D.remove_override(cfg.bot_id, doc_id, user)
+                    run_job("ingest", bot_id=cfg.bot_id, doc_ids=doc_id, rechunk_only="true", generate_golden="false")
+                    st.rerun()
+
 with tab_chunks:
     chunks = sql().query(f"""SELECT chunk_id, chunk_position, section, page_ids, chunk_to_retrieve, flagged
                              FROM {p.t('chunked')} WHERE doc_id = :d ORDER BY chunk_position""",
@@ -318,7 +352,9 @@ with tab_chunks:
                 st.rerun()
 
 with tab_fix:
+    st.caption("Three ways to fix a document that wasn't read well. Pick the one that fits.")
     st.markdown("**Re-read with some pages skipped**")
+    st.caption("For a document with pages that shouldn't be used, such as covers or blank pages.")
     pr = st.text_input("Pages to keep (e.g. 1-3,5,7-40)", doc["page_range"] or "")
     if st.button("Re-read document"):
         try:
@@ -328,6 +364,7 @@ with tab_fix:
         except ValueError as e:
             st.error(str(e))
     st.markdown("**Upload a cleaner copy** (becomes a new version)")
+    st.caption("Best when you have the original: export it from Word or PowerPoint instead of using a scan or photo.")
     newf = st.file_uploader("Replacement file", key="replace")
     if newf and st.button("Replace"):
         res = D.register(cfg.bot_id, doc["doc_name"], newf.getvalue(), user)
@@ -337,12 +374,10 @@ with tab_fix:
             st.success("New version uploaded.")
         else:
             st.error(" ".join(res.reasons))
-    st.markdown("**Correct the text by hand**")
-    override = st.text_area("Corrected text (replaces what was extracted)", height=200)
-    if override and st.button("Save corrected text"):
-        D.save_override(cfg.bot_id, doc_id, override, user)
-        run_job("ingest", bot_id=cfg.bot_id, doc_ids=doc_id, rechunk_only="true", generate_golden="false")
-        st.success("Saved. Sections will update shortly.")
+    st.markdown("**Type the text yourself**")
+    st.caption("If the reading lost the meaning (a screenshot with arrows, a flow chart), open "
+               "**What the chatbot sees** and use **The text is wrong or out of order? Type it yourself**, "
+               "under the page.")
 
 if is_admin():
     with st.expander("MLOps: permanently delete (legal/retention only)"):
