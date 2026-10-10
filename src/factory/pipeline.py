@@ -123,8 +123,9 @@ class Pipeline:
             if cfg.visual_judge and not row.get("is_text"):
                 try:
                     result = qa.merge_visual(result, self.visual_judge(p, row["doc_id"]))
-                except Exception as e:  # noqa: BLE001
-                    result.messages.append(f"Visual check unavailable: {e}")
+                except Exception as e:  # noqa: BLE001 - the check is optional; the detail is for MLOps
+                    self.log(f"Visual check failed for {row['doc_id']}: {type(e).__name__}: {str(e)[:500]}")
+                    result.messages.append("Visual check unavailable.")
             n_inj = (injected or {}).get(row["doc_id"], 0)
             if n_inj:
                 result.messages.append(

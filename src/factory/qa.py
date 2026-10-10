@@ -87,6 +87,81 @@ def merge_visual(result: QaResult, visual_findings: list[dict]) -> QaResult:
     return result
 
 
+# What a reader should make of each quality message, and what to do about it (QA-7). The checks
+# differ in how sure they are, so each message gets a kind:
+#   problem   the reader reported it; the text is known to be incomplete or blocked
+#   check     a measurement suggests trouble; the document may still be fine
+#   opinion   an AI reviewer's view of the result; a prompt to look, not a confirmed fault
+#   info      nothing wrong with the document
+FIX = "Open **Fix a problem** to upload a cleaner copy, re-read it without the bad pages, or paste the correct text."
+LOOK = "Open **What the chatbot sees** and compare the text with the page."
+_GUIDE = [
+    (r"We couldn't read ", "problem",
+     f"{LOOK} If text is missing, {FIX[0].lower() + FIX[1:]}"),
+    (r"The file has \d+ pages but only \d+ were processed", "problem",
+     "Some pages were skipped. Check **Fix a problem** for a page range that leaves pages out, then re-read the "
+     "document. If the file is very long, split it into smaller files and upload those."),
+    (r"The reader was unsure about much of this document", "problem",
+     f"The text is probably unreliable, which is common with scans and photos. {LOOK} If it's wrong, upload a copy "
+     "exported from the original (Word, PowerPoint) instead of a scan."),
+    (r"Blocked: this document appears to contain restricted data", "problem",
+     "It won't be used until this is resolved. Remove the restricted data from the source file and upload the "
+     "clean copy as a new version. If the match is wrong, ask MLOps."),
+    (r"No text was found on page\(s\)", "check",
+     "If those pages are blank, covers or pictures, there's nothing to do. If they hold real content, they are "
+     f"probably scanned images: {FIX[0].lower() + FIX[1:]}"),
+    (r"Very little text was extracted", "check",
+     f"Fine for a slide deck or a form; a concern for a text document. {LOOK}"),
+    (r"Some parts of this document were hard to read", "check",
+     f"{LOOK} Pay attention to tables, small print and footnotes. If it reads correctly, press **Approve**."),
+    (r"\d+ section\(s\) contain text that looks like instructions to an AI", "check",
+     "Open **Sections**, read the flagged sections, and unflag any that are ordinary content."),
+    (r"Contains personal information", "check",
+     "Confirm these people's details are meant to be available to everyone who can use this chatbot. If not, "
+     "remove them from the source file and upload it again."),
+    (r"Page \S+: ", "opinion",
+     f"An automatic visual check compared this page with its text and raised this. {LOOK} If the text is right, "
+     "ignore it and approve."),
+    (r"Reviewer note: ", "opinion",
+     "The automatic reviewer's impression while writing test questions. It is a quality warning, not a confirmed "
+     "fault in the file. Skim the document; if the content reads correctly, approve it."),
+    (r"Visual check unavailable", "info",
+     "That says nothing about the document itself. Review the pages yourself as usual; MLOps can re-run "
+     "the check."),
+    (r"Extracted cleanly|Text file: read directly", "info", ""),
+]
+
+
+def guidance(message: str) -> dict:
+    """{"kind", "text", "next"} for one stored quality message. Works on messages already saved,
+    because it reads their wording; an unrecognised message is something to check."""
+    import re
+
+    for pattern, kind, next_step in _GUIDE:
+        if re.match(pattern, message or ""):
+            text = "The automatic visual check couldn't run." if pattern.startswith("Visual check") else message
+            return {"kind": kind, "text": text, "next": next_step}
+    return {"kind": "check", "text": message, "next": f"{LOOK} If it reads correctly, press **Approve**."}
+
+
+def next_step(badge: str | None, status: str, messages: list[str]) -> str:
+    """One line telling the owner what to do with a document now."""
+    kinds = {guidance(m)["kind"] for m in messages}
+    if status == "archived":
+        return "Archived. Restore it if it should be used again."
+    if status == "approved":
+        return "Nothing to do. It's approved and in the test version."
+    if not badge:
+        return "Still being read. Refresh in a few minutes."
+    if status == "flagged" or "problem" in kinds:
+        return "Fix the problem listed below, or archive the document if it isn't needed."
+    if "check" in kinds:
+        return "Check the points below. If the text is right, press Approve."
+    if "opinion" in kinds:
+        return "The automatic reviewer left suggestions. Read them, then press Approve if the document is fine."
+    return "Skim it, then press Approve."
+
+
 VISUAL_JUDGE_PROMPT = """You are checking whether text extraction from a document page is complete and accurate.
 You get the page image and the text that was extracted from it.
 Report only real problems a reader would care about: missing paragraphs, garbled or

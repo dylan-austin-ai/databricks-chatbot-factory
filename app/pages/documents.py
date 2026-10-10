@@ -9,6 +9,7 @@ import streamlit as st
 from common import (ALL_BOTS, BADGE, app_client, cp, current_user, docs, is_admin, pick_owned_bot, remember_upload,
                     run_job, settings, show_upload_report, sql)
 from factory.explain import help_text
+from factory.qa import guidance, next_step
 from factory.documents import FLAG_REASONS
 from factory.ingestion import BotPaths
 
@@ -25,11 +26,13 @@ if choice == ALL_BOTS:
     for b in owned:
         try:
             for r in sql().query(f"""SELECT doc_name, doc_version, readability, status, expires_at, no_expiry,
-                                            uploaded_by FROM {BotPaths(s, b['bot_id']).t('manifest')}
+                                            uploaded_by, qa_json FROM {BotPaths(s, b['bot_id']).t('manifest')}
                                      WHERE status <> 'superseded'"""):
                 found.append({"Chatbot": b["display_name"], "Document": r["doc_name"], "Version": r["doc_version"],
                               "Readability": BADGE.get(r["readability"]),
                               "Status": (r["status"] or "").replace("_", " "),
+                              "What to do next": next_step(r["readability"], r["status"] or "", json.loads(
+                                  r["qa_json"] or "{}").get("messages", [])),
                               "Expires": "Until replaced" if str(r["no_expiry"]).lower() != "false"
                               else str(r["expires_at"] or ""), "Uploaded by": r["uploaded_by"]})
         except Exception:  # noqa: BLE001 - setup hasn't created this chatbot's document table yet
@@ -131,9 +134,20 @@ st.subheader(doc["doc_name"])
 valid = "valid until replaced" if str(doc["no_expiry"]).lower() != "false" else f"expires {doc['expires_at'] or 'not set'}"
 st.caption(f"Version {doc['doc_version']} · uploaded by {doc['uploaded_by']} · "
            f"{doc['chunk_count'] or 0} sections · {valid}")
-for m in qa.get("messages", []):
-    (st.error if doc["readability"] == "red" else st.warning if doc["readability"] == "yellow"
-     else st.caption)(m)
+# What was found, by how sure the check is, each with what to do about it (QA-7).
+notes = [guidance(m) for m in qa.get("messages", [])]
+st.info("**What to do next:** " + next_step(doc["readability"], doc["status"], qa.get("messages", [])))
+GROUPS = [("problem", "Needs fixing", st.error),
+          ("check", "Worth checking", st.warning),
+          ("opinion", "Suggestions from the automatic reviewer (quality warnings, not confirmed problems)", st.info)]
+for kind, heading, box in GROUPS:
+    found = [n for n in notes if n["kind"] == kind]
+    if found:
+        box(f"**{heading}**\n\n" + "\n\n".join(
+            f"- {n['text']}\n\n  *What to do:* {n['next']}" for n in found))
+for n in notes:
+    if n["kind"] == "info" and n["text"]:
+        st.caption(n["text"] + (f" {n['next']}" if n["next"] else ""))
 
 tab_view, tab_chunks, tab_details, tab_fix = st.tabs(
     ["What the chatbot sees", "Sections", "Details", "Fix a problem"])
@@ -165,11 +179,14 @@ with tab_view:
             FROM {p.t('parsed_elements')} pe, LATERAL variant_explode(pe.parsed:document:elements) e
             WHERE pe.doc_id = :d AND pe.parsed IS NOT NULL
             QUALIFY DENSE_RANK() OVER (ORDER BY pe.parsed_at DESC) = 1""", {"d": doc_id})
+        for e in els:  # the warehouse returns numbers as text
+            e["page"] = int(e["page"]) if e["page"] is not None else None
         pages = sorted({e["page"] for e in els if e["page"] is not None})
         if not pages:
             st.info("Nothing extracted yet.")
         else:
-            page = st.select_slider("Page", options=pages, format_func=lambda x: str(x + 1))
+            page = pages[0] if len(pages) == 1 else st.select_slider(
+                "Page", options=pages, format_func=lambda x: str(x + 1))
             page_els = [e for e in els if e["page"] == page]
             left, right = st.columns(2)
             pick = right.radio("Click a block to highlight it on the page", range(len(page_els)),
