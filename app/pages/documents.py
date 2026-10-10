@@ -87,124 +87,144 @@ def republish():
     run_job("ingest", bot_id=cfg.bot_id, publish_only="true")
 
 
-if pending:
-    good = [r for r in pending if r["readability"] in ("green", "n/a")]
-    with st.container(border=True):
-        st.markdown(f"**Approve in one go** · {len(pending)} document(s) are waiting for review, "
-                    f"{len(good)} of them marked Good")
-        b1, b2 = st.columns(2)
-        if b1.button(f"Approve the {len(good)} Good document(s)", disabled=not good):
-            n = D.bulk_approve_green(cfg.bot_id, user)
-            republish()
-            st.success(f"Approved {n} document(s).")
-            st.rerun()
-        sure = b2.checkbox("I've checked the ones with warnings", key="approve_all_sure",
-                           help="Approves every document waiting for review, including those marked "
-                                "Check it or Problem. Documents blocked for restricted data are never approved.")
-        if b2.button(f"Approve all {len(pending)} waiting", type="primary", disabled=not sure):
-            n = D.bulk_approve_pending(cfg.bot_id, user)
-            republish()
-            st.success(f"Approved {n} document(s).")
-            st.rerun()
-
-# Housekeeping for many documents at once: archive, restore, delete.
-dupes = possible_duplicates(rows)
-with st.expander(f"Manage all documents: archive, restore or delete several at once ({len(rows)})",
-                 expanded=bool(dupes)):
-    if dupes:
-        st.warning(f"**{len(dupes)} document(s) look like copies of another one**, judging by their file names "
-                   "(see the last column). A file uploaded under a different name is kept as a separate document, "
-                   "so a re-upload can leave the old copy behind. Tick the ones you don't want and archive or "
-                   "delete them.")
-    st.caption("Tick documents, then choose what to do with them. **Archive** takes a document out of the chatbot "
-               "and keeps it, so it can be restored. **Delete** removes the file, its text and its sections for "
-               "good.")
-    show = st.radio("Show", ["In use or waiting", "Archived", "Everything"], horizontal=True, key="manage_show")
-    listed = [r for r in rows if show == "Everything" or (r["status"] == "archived") == (show == "Archived")]
-    table = pd.DataFrame([{
-        "Select": False, "Document": r["doc_name"], "Version": r["doc_version"],
-        "Status": (r["status"] or "").replace("_", " "), "Readability": BADGE.get(r["readability"]),
-        "Pages": r["page_count"], "Uploaded": str(r["uploaded_at"] or "")[:16], "Uploaded by": r["uploaded_by"],
-        "Looks like a copy of": ", ".join(dupes.get(r["doc_id"], [])), "doc_id": r["doc_id"]} for r in listed])
-    if table.empty:
-        st.info("No documents in this view.")
-    else:
-        edited = st.data_editor(
-            table, hide_index=True, use_container_width=True,
-            # A fresh key after every action clears the ticks: the rows change, and old ticks would
-            # otherwise land on different documents.
-            key=f"manage_{show}_{st.session_state.setdefault('manage_round', 0)}",
-            disabled=[c for c in table.columns if c != "Select"], column_config={"doc_id": None})
-        chosen_ids = edited.loc[edited["Select"], "doc_id"].tolist()
-        names_by_id = {r["doc_id"]: r["doc_name"] for r in rows}
-        st.markdown(f"**{len(chosen_ids)} selected**" + (": " + ", ".join(names_by_id[i] for i in chosen_ids[:8])
-                                                         + ("…" if len(chosen_ids) > 8 else "") if chosen_ids else ""))
-
-        def apply(action: str, done: str, reason: str = "") -> None:
-            outcome = D.change_many(cfg.bot_id, chosen_ids, action, user, is_admin=is_admin(), reason=reason)
-            failed = {i: why for i, why in outcome.items() if why}
-            republish()
-            st.session_state["manage_round"] += 1
-            st.session_state["manage_result"] = (
-                f"{done} {len(outcome) - len(failed)} document(s)."
-                + (" Not done: " + ", ".join(f"{names_by_id.get(i, i)} ({why})" for i, why in failed.items())
-                   if failed else ""))
-            st.rerun()
-
-        m1, m2 = st.columns(2)
-        if m1.button(f"Archive the {len(chosen_ids)} selected", disabled=not chosen_ids, key="manage_archive"):
-            apply("archive", "Archived")
-        if m2.button(f"Restore the {len(chosen_ids)} selected", disabled=not chosen_ids, key="manage_restore"):
-            apply("restore", "Restored")
-        if is_admin():
-            with st.container(border=True):
-                st.markdown("**Delete for good** (MLOps only)")
-                why = st.text_input("Why are these being deleted? Kept in the audit log.", key="manage_why",
-                                    placeholder="Duplicate uploads")
-                sure = st.checkbox(f"I understand the {len(chosen_ids)} selected document(s) can't be recovered",
-                                   key="manage_sure")
-                if st.button(f"Delete the {len(chosen_ids)} selected for good", type="primary", key="manage_delete",
-                             disabled=not (chosen_ids and sure and why.strip())):
-                    apply("delete", "Deleted", why)
-        else:
-            st.caption("Only MLOps can delete a document for good. Archive it and it stops being used.")
+show_upload_report(cfg.bot_id)  # the last upload's result stays visible whichever section is open
 if st.session_state.get("manage_result"):
     st.success(st.session_state.pop("manage_result"))
 
-show_upload_report(cfg.bot_id)
-with st.container(border=True):
-    st.subheader("Add documents")
-    st.caption("Add files at any time. A file with the same name as an existing document becomes its new "
-               "version. New files go into the test version and reach users after approval on the Launch page.")
-    ing = s.get("ingestion")
-    kinds = ing["parse_extensions"] + ing["text_extensions"] + (
-        ing["tabular_extensions"] if ing.get("enable_tabular") else [])
-    batch = st.session_state.setdefault("add_docs_batch", 0)  # a new key empties the uploader after an upload
-    files = st.file_uploader("Drag and drop, or browse", accept_multiple_files=True, type=kinds,
-                             key=f"add_docs_{batch}")
-    keep = st.checkbox("These stay valid until I upload a new version", value=True, key="add_noexp")
-    exp = None if keep else st.date_input("They expire on", key="add_exp")
-    if st.button("Upload", type="primary", disabled=not files):
-        report = D.upload_many(cfg.bot_id, [
-            {"name": f.name, "data": f.getvalue(), "no_expiry": keep, "expires_at": str(exp) if exp else None}
-            for f in files], user)
-        remember_upload(cfg.bot_id, report)
-        if any(item["ok"] for item in report) and not s.get("ingestion.auto_trigger", True):
-            run_job("ingest", bot_id=cfg.bot_id)  # otherwise the file-arrival trigger starts reading
-        st.session_state["add_docs_batch"] = batch + 1
-        st.rerun()
+# Three things to do here, one open at a time: choosing one opens it and closes the other.
+SECTIONS = ["Add documents", "Curate documents", "Review a document"]
+dupes = possible_duplicates(rows)
+section = st.segmented_control("What would you like to do?", SECTIONS, key="docs_section")
+if section is None:
+    st.caption("Choose one to open it. **Add documents** uploads files. **Curate documents** lists every document "
+               "so you can approve, archive or delete several at once. **Review a document** opens one document "
+               "to check how it was read and decide whether to use it.")
+    if pending:
+        st.info(f"{len(pending)} document(s) are waiting for a decision. Open **Review a document** to check them, "
+                "or **Curate documents** to approve several at once.")
+    if dupes:
+        st.warning(f"{len(dupes)} document(s) look like copies of another one. Open **Curate documents** to "
+                   "archive or delete the ones you don't want.")
+    st.stop()
 
-missing = D.not_uploaded(cfg.bot_id)
-if missing:
-    with st.expander(f"Not uploaded in the last 30 days: {len(missing)} file(s)"):
-        st.caption("Someone tried to add these and they were refused, and no file with that name has been "
-                   "added since. Fix the problem and upload them again above.")
-        st.dataframe([{"File": m["file_name"], "Why": " ".join(m["reasons"]), "Tried by": m["by"],
-                       "When": str(m["when"])[:16]} for m in missing], hide_index=True, use_container_width=True)
+if section == "Add documents":
+    with st.container(border=True):
+        st.subheader("Add documents")
+        st.caption("Add files at any time. A file with the same name as an existing document becomes its new "
+                   "version. New files go into the test version and reach users after approval on the Launch page.")
+        ing = s.get("ingestion")
+        kinds = ing["parse_extensions"] + ing["text_extensions"] + (
+            ing["tabular_extensions"] if ing.get("enable_tabular") else [])
+        batch = st.session_state.setdefault("add_docs_batch", 0)  # a new key empties the uploader after an upload
+        files = st.file_uploader("Drag and drop, or browse", accept_multiple_files=True, type=kinds,
+                                 key=f"add_docs_{batch}")
+        keep = st.checkbox("These stay valid until I upload a new version", value=True, key="add_noexp")
+        exp = None if keep else st.date_input("They expire on", key="add_exp")
+        if st.button("Upload", type="primary", disabled=not files):
+            report = D.upload_many(cfg.bot_id, [
+                {"name": f.name, "data": f.getvalue(), "no_expiry": keep, "expires_at": str(exp) if exp else None}
+                for f in files], user)
+            remember_upload(cfg.bot_id, report)
+            if any(item["ok"] for item in report) and not s.get("ingestion.auto_trigger", True):
+                run_job("ingest", bot_id=cfg.bot_id)  # otherwise the file-arrival trigger starts reading
+            st.session_state["add_docs_batch"] = batch + 1
+            st.rerun()
+        missing = D.not_uploaded(cfg.bot_id)
+        if missing:
+            with st.expander(f"Not uploaded in the last 30 days: {len(missing)} file(s)"):
+                st.caption("Someone tried to add these and they were refused, and no file with that name has been "
+                           "added since. Fix the problem and upload them again above.")
+                st.dataframe([{"File": m["file_name"], "Why": " ".join(m["reasons"]), "Tried by": m["by"],
+                               "When": str(m["when"])[:16]} for m in missing], hide_index=True, use_container_width=True)
 
-st.divider()
+elif section == "Curate documents":
+    with st.container(border=True):
+        st.subheader("Curate documents")
+        st.caption("Every document of this chatbot in one table. Approve the ones waiting, or tick documents to "
+                   "archive, restore or delete them.")
+        if pending:
+            good = [r for r in pending if r["readability"] in ("green", "n/a")]
+            with st.container(border=True):
+                st.markdown(f"**Approve in one go** · {len(pending)} document(s) are waiting for review, "
+                            f"{len(good)} of them marked Good")
+                b1, b2 = st.columns(2)
+                if b1.button(f"Approve the {len(good)} Good document(s)", disabled=not good):
+                    n = D.bulk_approve_green(cfg.bot_id, user)
+                    republish()
+                    st.success(f"Approved {n} document(s).")
+                    st.rerun()
+                sure = b2.checkbox("I've checked the ones with warnings", key="approve_all_sure",
+                                   help="Approves every document waiting for review, including those marked "
+                                        "Check it or Problem. Documents blocked for restricted data are never approved.")
+                if b2.button(f"Approve all {len(pending)} waiting", type="primary", disabled=not sure):
+                    n = D.bulk_approve_pending(cfg.bot_id, user)
+                    republish()
+                    st.success(f"Approved {n} document(s).")
+                    st.rerun()
+        if dupes:
+            st.warning(f"**{len(dupes)} document(s) look like copies of another one**, judging by their file names "
+                       "(see the last column). A file uploaded under a different name is kept as a separate document, "
+                       "so a re-upload can leave the old copy behind. Tick the ones you don't want and archive or "
+                       "delete them.")
+        st.caption("Tick documents, then choose what to do with them. **Archive** takes a document out of the chatbot "
+                   "and keeps it, so it can be restored. **Delete** removes the file, its text and its sections for "
+                   "good.")
+        show = st.radio("Show", ["In use or waiting", "Archived", "Everything"], horizontal=True, key="manage_show")
+        listed = [r for r in rows if show == "Everything" or (r["status"] == "archived") == (show == "Archived")]
+        table = pd.DataFrame([{
+            "Select": False, "Document": r["doc_name"], "Version": r["doc_version"],
+            "Status": (r["status"] or "").replace("_", " "), "Readability": BADGE.get(r["readability"]),
+            "Pages": r["page_count"], "Uploaded": str(r["uploaded_at"] or "")[:16], "Uploaded by": r["uploaded_by"],
+            "Looks like a copy of": ", ".join(dupes.get(r["doc_id"], [])), "doc_id": r["doc_id"]} for r in listed])
+        if table.empty:
+            st.info("No documents in this view.")
+        else:
+            edited = st.data_editor(
+                table, hide_index=True, use_container_width=True, height=420,  # scrolls when long
+                # A fresh key after every action clears the ticks: the rows change, and old ticks would
+                # otherwise land on different documents.
+                key=f"manage_{show}_{st.session_state.setdefault('manage_round', 0)}",
+                disabled=[c for c in table.columns if c != "Select"], column_config={"doc_id": None})
+            chosen_ids = edited.loc[edited["Select"], "doc_id"].tolist()
+            names_by_id = {r["doc_id"]: r["doc_name"] for r in rows}
+            st.markdown(f"**{len(chosen_ids)} selected**" + (": " + ", ".join(names_by_id[i] for i in chosen_ids[:8])
+                                                             + ("…" if len(chosen_ids) > 8 else "") if chosen_ids else ""))
+
+            def apply(action: str, done: str, reason: str = "") -> None:
+                outcome = D.change_many(cfg.bot_id, chosen_ids, action, user, is_admin=is_admin(), reason=reason)
+                failed = {i: why for i, why in outcome.items() if why}
+                republish()
+                st.session_state["manage_round"] += 1
+                st.session_state["manage_result"] = (
+                    f"{done} {len(outcome) - len(failed)} document(s)."
+                    + (" Not done: " + ", ".join(f"{names_by_id.get(i, i)} ({why})" for i, why in failed.items())
+                       if failed else ""))
+                st.rerun()
+
+            m1, m2 = st.columns(2)
+            if m1.button(f"Archive the {len(chosen_ids)} selected", disabled=not chosen_ids, key="manage_archive"):
+                apply("archive", "Archived")
+            if m2.button(f"Restore the {len(chosen_ids)} selected", disabled=not chosen_ids, key="manage_restore"):
+                apply("restore", "Restored")
+            if is_admin():
+                with st.container(border=True):
+                    st.markdown("**Delete for good** (MLOps only)")
+                    why = st.text_input("Why are these being deleted? Kept in the audit log.", key="manage_why",
+                                        placeholder="Duplicate uploads")
+                    sure = st.checkbox(f"I understand the {len(chosen_ids)} selected document(s) can't be recovered",
+                                       key="manage_sure")
+                    if st.button(f"Delete the {len(chosen_ids)} selected for good", type="primary", key="manage_delete",
+                                 disabled=not (chosen_ids and sure and why.strip())):
+                        apply("delete", "Deleted", why)
+            else:
+                st.caption("Only MLOps can delete a document for good. Archive it and it stops being used.")
+
+if section != "Review a document":
+    st.stop()
+
+st.subheader("Review a document")
 names = {r["doc_id"]: r for r in rows}
-doc_id = st.selectbox("Review a document", list(names),
+doc_id = st.selectbox("Which document?", list(names),
                       format_func=lambda d: f"{BADGE.get(names[d]['readability'])} · "
                                             f"{names[d]['doc_name']} · {names[d]['status'].replace('_', ' ')}")
 if not doc_id:
