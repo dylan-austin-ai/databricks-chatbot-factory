@@ -7,8 +7,9 @@ import json
 import pandas as pd
 import streamlit as st
 
-from common import (ALL_BOTS, BADGE, app_client, cp, current_user, docs, is_admin, pick_owned_bot, remember_upload,
-                    run_job, settings, show_upload_report, sql)
+from common import (ALL_BOTS, BADGE, across_bots, app_client, bot_config, current_user, docs, docs_view, is_admin,
+                    not_ready, page_picture, pick_owned_bot, remember_upload, run_job, settings, show_upload_report,
+                    sql)
 from factory.explain import help_text
 from factory.llm import openai_client
 from factory.qa import guidance, next_step, page_issues
@@ -23,27 +24,26 @@ st.title("Documents", help=help_text("documents"))
 choice, owned = pick_owned_bot()
 if choice is None:
     st.stop()
-s, user, D = settings(), current_user(), docs()
+s, user, D, V = settings(), current_user(), docs(), docs_view()   # D changes things, V only reads
 
 if choice == ALL_BOTS:
-    found, not_ready = [], []
-    for b in owned:
-        try:
-            for r in sql().query(f"""SELECT doc_name, doc_version, readability, status, expires_at, no_expiry,
-                                            uploaded_by, qa_json FROM {BotPaths(s, b['bot_id']).t('manifest')}
-                                     WHERE status <> 'superseded'"""):
-                found.append({"Chatbot": b["display_name"], "Document": r["doc_name"], "Version": r["doc_version"],
-                              "Readability": BADGE.get(r["readability"]),
-                              "Status": (r["status"] or "").replace("_", " "),
-                              "What to do next": next_step(r["readability"], r["status"] or "", json.loads(
-                                  r["qa_json"] or "{}").get("messages", [])),
-                              "Expires": "Until replaced" if str(r["no_expiry"]).lower() != "false"
-                              else str(r["expires_at"] or ""), "Uploaded by": r["uploaded_by"]})
-        except Exception:  # noqa: BLE001 - setup hasn't created this chatbot's document table yet
-            not_ready.append(b["display_name"])
-    st.caption(f"Documents across {len(owned)} chatbot(s) you "
+    # One statement for every chatbot's documents instead of one per chatbot.
+    name_of = {b["bot_id"]: b["display_name"] for b in owned}
+    ready = [b for b in owned if not not_ready(b)]
+    listed, unread = across_bots(ready, lambda paths: f"""
+        SELECT doc_name, doc_version, readability, status, CAST(expires_at AS STRING) AS expires_at, no_expiry,
+               uploaded_by, qa_json FROM {paths.t('manifest')} WHERE status <> 'superseded'""")
+    found = [{"Chatbot": name_of[r["bot_id"]], "Document": r["doc_name"], "Version": r["doc_version"],
+              "Readability": BADGE.get(r["readability"]), "Status": (r["status"] or "").replace("_", " "),
+              "What to do next": next_step(r["readability"], r["status"] or "",
+                                           json.loads(r["qa_json"] or "{}").get("messages", [])),
+              "Expires": "Until replaced" if str(r["no_expiry"]).lower() != "false" else str(r["expires_at"] or ""),
+              "Uploaded by": r["uploaded_by"]} for r in listed]
+    waiting_setup = sorted({name_of[b["bot_id"]] for b in owned if not_ready(b)} | {name_of[i] for i in unread})
+    st.caption(f"Every document in the {len(owned)} chatbot(s) you "
                + ("administer" if is_admin() else "own")
-               + ". Choose one chatbot in the sidebar to review, add or change its documents.")
+               + ". This view is for looking across chatbots. To add, review or change documents, choose one "
+                 "chatbot in the **Chatbot** box above.")
     c1, c2, c3 = st.columns(3)
     c1.metric("Chatbots", len(owned))
     c2.metric("Documents", len(found))
@@ -58,12 +58,15 @@ if choice == ALL_BOTS:
                      use_container_width=True)
     else:
         st.info("No documents yet.")
-    if not_ready:
-        st.caption("Setup not finished, so no documents to show yet: " + ", ".join(sorted(not_ready)))
+    if waiting_setup:
+        st.caption("Setup not finished, so no documents to show yet: " + ", ".join(waiting_setup))
     st.stop()
 
 bot = next(b for b in owned if b["bot_id"] == choice)
-cfg = cp().get_config(choice)
+if not_ready(bot):  # no tables yet: say why, and what to do
+    st.info(not_ready(bot))
+    st.stop()
+cfg = bot_config(bot)
 p = BotPaths(s, cfg.bot_id)
 
 rows = sql().query(f"""
@@ -79,7 +82,8 @@ c2.metric("Need review", len(pending))
 c3.metric("Approved", len([r for r in rows if r["status"] == "approved"]))
 c4.metric("Archived", len([r for r in rows if r["status"] == "archived"]))
 if in_progress:
-    st.info(f"{len(in_progress)} document(s) are still being read. Refresh in a few minutes.")
+    st.info(f"{len(in_progress)} document(s) are still being read. This takes a few minutes per document; you "
+            "don't need to stay here. Press **Refresh** in the menu on the left to check.")
 st.caption("Changes here update the test version. Publish them to users from the Launch page.")
 
 
@@ -129,7 +133,7 @@ if section == "Add documents":
                 run_job("ingest", bot_id=cfg.bot_id)  # otherwise the file-arrival trigger starts reading
             st.session_state["add_docs_batch"] = batch + 1
             st.rerun()
-        missing = D.not_uploaded(cfg.bot_id)
+        missing = V.not_uploaded(cfg.bot_id)
         if missing:
             with st.expander(f"Not uploaded in the last 30 days: {len(missing)} file(s)"):
                 st.caption("Someone tried to add these and they were refused, and no file with that name has been "
@@ -151,7 +155,7 @@ elif section == "Curate documents":
                 if b1.button(f"Approve the {len(good)} Good document(s)", disabled=not good):
                     n = D.bulk_approve_green(cfg.bot_id, user)
                     republish()
-                    st.success(f"Approved {n} document(s).")
+                    st.session_state["manage_result"] = f"Approved {n} document(s). They are now in the test version."
                     st.rerun()
                 sure = b2.checkbox("I've checked the ones with warnings", key="approve_all_sure",
                                    help="Approves every document waiting for review, including those marked "
@@ -159,7 +163,7 @@ elif section == "Curate documents":
                 if b2.button(f"Approve all {len(pending)} waiting", type="primary", disabled=not sure):
                     n = D.bulk_approve_pending(cfg.bot_id, user)
                     republish()
-                    st.success(f"Approved {n} document(s).")
+                    st.session_state["manage_result"] = f"Approved {n} document(s). They are now in the test version."
                     st.rerun()
         if dupes:
             st.warning(f"**{len(dupes)} document(s) look like copies of another one**, judging by their file names "
@@ -224,11 +228,19 @@ if section != "Review a document":
 
 st.subheader("Review a document")
 names = {r["doc_id"]: r for r in rows}
-doc_id = st.selectbox("Which document?", list(names),
+if not names:
+    st.info("This chatbot has no documents yet. Choose **Add documents** above to upload some.")
+    st.stop()
+st.caption("Documents that need attention are listed first. Pick one, read what was found, then record your "
+           "decision. Work down the list until none are waiting.")
+ids = list(names)
+last = st.session_state.get(f"review_doc_{cfg.bot_id}")   # stay on the same document between visits
+doc_id = st.selectbox("Which document?", ids, index=ids.index(last) if last in ids else 0,
                       format_func=lambda d: f"{BADGE.get(names[d]['readability'])} · "
-                                            f"{names[d]['doc_name']} · {names[d]['status'].replace('_', ' ')}")
+                                            f"{names[d]['doc_name']} · {(names[d]['status'] or '').replace('_', ' ')}")
 if not doc_id:
     st.stop()
+st.session_state[f"review_doc_{cfg.bot_id}"] = doc_id
 doc = names[doc_id]
 qa = json.loads(doc["qa_json"] or "{}")
 
@@ -309,10 +321,16 @@ if doc["status"] != "archived":
             republish()
             st.rerun()
 
-tab_view, tab_chunks, tab_details, tab_fix = st.tabs(
-    ["What the chatbot sees", "Sections", "Details", "Fix a problem"])
+# One view open at a time: only the one on screen is loaded, so every click is quicker.
+VIEWS = {"What the chatbot sees": "Each page next to the text that was read from it.",
+         "Sections": "The pieces the chatbot searches and quotes. Fix one without redoing the document.",
+         "Details": "Owner, expiry date and the original file.",
+         "Fix a problem": "Re-read the document, upload a cleaner copy, or type the text yourself."}
+view = st.segmented_control("Look closer", list(VIEWS), default="What the chatbot sees", key=f"doc_view_{doc_id}") \
+    or "What the chatbot sees"
+st.caption(VIEWS[view])
 
-with tab_details:  # metadata only: no re-reading or re-splitting (DCL-3)
+if view == "Details":  # metadata only: no re-reading or re-splitting (DCL-3)
     owner = st.text_input("Document owner", doc["doc_owner"] or "")
     no_exp = st.checkbox("Valid until a new version is uploaded", value=str(doc["no_expiry"]).lower() != "false")
     expires = None if no_exp else st.date_input("Expires on")
@@ -327,13 +345,13 @@ with tab_details:  # metadata only: no re-reading or re-splitting (DCL-3)
         name, data = D.download(cfg.bot_id, doc_id)
         st.download_button("Save file", data, file_name=name)
 
-with tab_view:
+if view == "What the chatbot sees":
     if doc["parser"] == "text_reader":
-        text = sql().query(f"SELECT text_content FROM {p.t('parsed_elements')} WHERE doc_id = :d "
-                           "ORDER BY parsed_at DESC LIMIT 1", {"d": doc_id})
+        text = sql().query_steady(f"SELECT text_content FROM {p.t('parsed_elements')} WHERE doc_id = :d "
+                                  "ORDER BY parsed_at DESC LIMIT 1", {"d": doc_id})
         st.text_area("Text", text[0]["text_content"] if text else "", height=500, disabled=True)
     else:
-        els = sql().query(f"""
+        els = sql().query_steady(f"""
             SELECT e.value:bbox[0]:page_id::INT AS page, e.value:type::STRING AS type,
                    e.value:content::STRING AS content, e.value:description::STRING AS description,
                    to_json(e.value:bbox[0]:coord) AS coord
@@ -344,7 +362,9 @@ with tab_view:
             e["page"] = int(e["page"]) if e["page"] is not None else None
         pages = sorted({e["page"] for e in els if e["page"] is not None})
         if not pages:
-            st.info("Nothing extracted yet.")
+            st.info("Nothing has been read from this document yet. If it was uploaded in the last few minutes, it is "
+                    "still being read: press **Refresh** in the menu on the left in a few minutes. If it has been "
+                    "longer than 30 minutes, open **Fix a problem** above and press **Re-read document**.")
         else:
             st.caption("The left side is the original page. The right side is what was read from that page, "
                        "split into blocks. Choose a block to see its full text and where it sits on the page.")
@@ -399,13 +419,16 @@ with tab_view:
                 from PIL import Image, ImageDraw
                 # The reader records which image belongs to which page; the folder listing can't be
                 # trusted for that (it also holds images from earlier reads).
-                images = page_images(sql().query(page_images_sql(p), {"d": doc_id, "v": int(doc["doc_version"])}))
+                images = page_images(sql().query_steady(page_images_sql(p),
+                                                        {"d": doc_id, "v": int(doc["doc_version"])}))
                 if page not in images:
                     folder = f"{p.images}/{doc_id}/v{doc['doc_version']}"
                     images = dict(enumerate(sorted((f.path for f in app_client().files.list_directory_contents(folder)
                                                     if not f.is_directory), key=page_order)))
-                img = Image.open(io.BytesIO(app_client().files.download(images[page]).contents.read())).convert("RGBA")
-                coord = [int(c) for c in json.loads(chosen["coord"] or "[]")]
+                # Downloaded and shrunk once, then reused: choosing another block only redraws the box.
+                picture, scale = page_picture(images[page])
+                img = Image.open(io.BytesIO(picture)).convert("RGBA")
+                coord = [int(c) * scale for c in json.loads(chosen["coord"] or "[]")]
                 marked = len(coord) == 4
                 if marked:
                     x1, x2 = sorted((coord[0], coord[2]))
@@ -414,15 +437,17 @@ with tab_view:
                     ImageDraw.Draw(shade).rectangle([x1, y1, x2, y2], fill=(255, 221, 0, 70), outline=(220, 0, 0, 255),
                                                     width=max(4, img.width // 200))
                     img = Image.alpha_composite(img, shade)
-                left.image(img, use_container_width=True)
+                left.image(img.convert("RGB"), use_container_width=True, output_format="JPEG")
                 left.caption(f"Original page {page + 1}. " + (f"The shaded red box is block {pick + 1}."
                                                               if marked else "This block has no position on the page."))
             except Exception as e:  # noqa: BLE001
-                left.info(f"Page image unavailable ({type(e).__name__}).")
+                left.info("The picture of this page couldn't be shown, so you can't compare it with the text here. "
+                          "You can still read the blocks on the right. To compare, open **Details** above and "
+                          f"download the original file. (For MLOps: {type(e).__name__}.)")
 
             # Hand-typed text, for when the reading can't be trusted: screenshots with arrows, flow
             # charts, forms. It replaces the reading for the whole document.
-            mine = D.current_override(cfg.bot_id, doc_id)
+            mine = V.current_override(cfg.bot_id, doc_id)
             if mine:
                 st.success("**The chatbot is using text you typed for this document**, not the blocks read from the "
                            f"page above (saved {str(mine['saved_at'])[:16]}).")
@@ -447,21 +472,25 @@ with tab_view:
                 if o1.button("Save my text", type="primary", disabled=not typed.strip()):
                     D.save_override(cfg.bot_id, doc_id, typed.strip(), user)
                     run_job("ingest", bot_id=cfg.bot_id, doc_ids=doc_id, rechunk_only="true", generate_golden="false")
-                    st.success("Saved. The chatbot's sections for this document are being rebuilt from your text; "
-                               "check the **Sections** tab in a few minutes, then approve the document.")
+                    st.success("Saved. The chatbot's sections for this document are being rebuilt from your text. "
+                               "In a few minutes press **Refresh** in the menu on the left, open **Sections** above "
+                               "to check them, then approve the document.")
                 if mine and o2.button("Go back to the automatic reading"):
                     D.remove_override(cfg.bot_id, doc_id, user)
                     run_job("ingest", bot_id=cfg.bot_id, doc_ids=doc_id, rechunk_only="true", generate_golden="false")
                     st.rerun()
 
-with tab_chunks:
-    st.caption("Sections are the pieces the chatbot searches and quotes. Fix one section here without redoing "
-               "the document: correct its text, have the app read it again from the page image, or flag it so "
-               "it isn't used. Re-reading the whole document later rebuilds its sections and drops these fixes.")
+if view == "Sections":
+    st.caption("For each section you can: **Edit the text** to correct it yourself, **Read it again from the page** "
+               "to let the app propose a correction for you to check, or **Don't use this section** to leave it "
+               "out. Re-reading the whole document later rebuilds its sections and drops these fixes.")
     chunks = sql().query(f"""SELECT chunk_id, chunk_position, section, page_ids, chunk_to_retrieve, flagged
                              FROM {p.t('chunked')} WHERE doc_id = :d ORDER BY chunk_position""",
                          {"d": doc_id})
-    edits = D.edited_chunks(cfg.bot_id, doc_id)
+    edits = V.edited_chunks(cfg.bot_id, doc_id)
+    if not chunks:
+        st.info("This document has no sections yet. They appear a few minutes after it has been read: press "
+                "**Refresh** in the menu on the left.")
     for c in chunks:
         cid = c["chunk_id"]
         page_ids = [int(x) for x in (json.loads(c["page_ids"] or "[]") if isinstance(c["page_ids"], str)
@@ -484,7 +513,8 @@ with tab_chunks:
                              help="The app looks at the page image and proposes a corrected version of this "
                                   "section. You check it before anything is saved."):
                     try:
-                        images = page_images(sql().query(page_images_sql(p), {"d": doc_id, "v": int(doc["doc_version"])}))
+                        images = page_images(sql().query_steady(page_images_sql(p),
+                                                                {"d": doc_id, "v": int(doc["doc_version"])}))
                         pics = [app_client().files.download(images[x]).contents.read() for x in page_ids if x in images]
                         with st.spinner("Reading the page again…"):
                             st.session_state[f"proposal_{cid}"] = propose_section_text(
@@ -534,8 +564,9 @@ with tab_chunks:
                     st.session_state.pop(f"proposal_{cid}", None)
                     st.rerun()
 
-with tab_fix:
-    st.caption("Three ways to fix a document that wasn't read well. Pick the one that fits.")
+if view == "Fix a problem":
+    st.caption("Three ways to fix a document that wasn't read well. Pick the one that fits. If only one or two "
+               "sections are wrong, it is quicker to fix just those under **Sections**.")
     st.markdown("**Re-read with some pages skipped**")
     st.caption("For a document with pages that shouldn't be used, such as covers or blank pages.")
     pr = st.text_input("Pages to keep (e.g. 1-3,5,7-40)", doc["page_range"] or "")
@@ -543,7 +574,8 @@ with tab_fix:
         try:
             D.set_page_range(cfg.bot_id, doc_id, pr or None, user)
             run_job("ingest", bot_id=cfg.bot_id, doc_ids=doc_id, reparse="true", generate_golden="false")
-            st.success("Re-reading in the background.")
+            st.success("The document is being read again in the background. This takes a few minutes; press "
+                       "**Refresh** in the menu on the left to see the result.")
         except ValueError as e:
             st.error(str(e))
     st.markdown("**Upload a cleaner copy** (becomes a new version)")
@@ -554,12 +586,13 @@ with tab_fix:
         if res.ok:
             if not settings().get("ingestion.auto_trigger", True):
                 run_job("ingest", bot_id=cfg.bot_id)
-            st.success("New version uploaded.")
+            st.success("New version uploaded. It is being read now, which takes a few minutes. It will appear in "
+                       "the list as a new version waiting for your review.")
         else:
             st.error(" ".join(res.reasons))
     st.markdown("**Type the text yourself**")
     st.caption("If the reading lost the meaning (a screenshot with arrows, a flow chart), open "
-               "**What the chatbot sees** and use **The text is wrong or out of order? Type it yourself**, "
+               "**What the chatbot sees** above and use **The text is wrong or out of order? Type it yourself**, "
                "under the page.")
 
 if is_admin():

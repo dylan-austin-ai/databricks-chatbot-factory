@@ -77,6 +77,29 @@ def steps(current: int, labels: list[str]) -> None:
     html(f'<div class="cf-steps">{cells}</div>')
 
 
+STEP_TONE = {"done": "green", "now": "blue", "waiting": "gray", "problem": "red", "later": "gray"}
+
+
+def checklist(path, labels: dict[str, str], pages: dict[str, tuple[str, str]], here: str = "") -> None:
+    """The path to launch: every step with its status. The one current step is spelled out in a
+    box with a button to the page where it is done; `here` is the page this is shown on."""
+    for i, step in enumerate(path, 1):
+        head = f"{pill(labels[step.status], STEP_TONE[step.status])} **{i}. {step.title}**"
+        if step.status in ("done", "later"):
+            st.markdown(f'{head} <span class="cf-muted">· {step.detail}</span>', unsafe_allow_html=True)
+            continue
+        with st.container(border=True):
+            detail = step.detail  # on the page itself, "Open Launch and press X" is just "Press X"
+            if step.page == here:
+                detail = detail.replace(f"Open **{pages[here][1]}** and press", "Press")
+            st.markdown(f"{head}\n\n{detail}", unsafe_allow_html=True)
+            if step.page and step.page != here:
+                st.page_link(pages[step.page][0], label=f"Go to {pages[step.page][1]}",
+                             icon=":material/arrow_forward:")
+            elif step.page:
+                st.caption("That's on this page, further down.")
+
+
 def target_chart(df, title: str = "", target: float | None = None, target_label: str = "target",
                  above_is_bad: bool = True, fmt: str = ",.2f"):
     """Line chart with values on hover, a dashed target line and red markers where it was breached

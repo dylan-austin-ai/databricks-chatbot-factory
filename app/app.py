@@ -1,26 +1,11 @@
 """Chatbot Factory app entry point (Databricks App, Streamlit). Look: docs/design."""
-import logging
-import traceback
-
 import streamlit as st
 
-from common import is_admin, start_probe
+from common import READ_TTL, forget, is_admin, report, start_probe
 from ui import style
 
 st.set_page_config(page_title="Chatbot Factory", page_icon=":material/forum:", layout="wide")
 style()
-
-
-def report(where: str, error: Exception) -> None:
-    """One line saying something went wrong, with the full detail folded away for whoever needs
-    it. The trace also goes to the app log."""
-    logging.getLogger("factory.app").error("%s failed: %s", where, "".join(
-        traceback.format_exception(type(error), error, error.__traceback__)))
-    st.error(f"Something went wrong {where} ({type(error).__name__}). The rest of the app still works; "
-             "you can try again or pick another page.")
-    with st.expander("Show technical details"):
-        st.code("".join(traceback.format_exception(type(error), error, error.__traceback__)), language=None)
-
 
 try:
     start_probe()
@@ -48,6 +33,11 @@ if admin:
 
 st.sidebar.markdown("**Chatbot Factory**")
 page = st.navigation(pages)
+if st.sidebar.button("Refresh", icon=":material/refresh:", use_container_width=True,
+                     help="Reading documents and quality checks run in the background and take a few minutes. "
+                          f"The pages pick up their results within {READ_TTL} seconds; press this to see them now."):
+    forget(settings_too=True)
+    st.rerun()
 try:
     page.run()
 except Exception as e:  # noqa: BLE001 - st.stop() and st.rerun() are not Exceptions and pass through
