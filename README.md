@@ -35,7 +35,7 @@ failure. `releases`, `release_chunks` and `index_history` reconstruct the index 
 
 | Path | What it is |
 |---|---|
-| `src/factory/` | Library: config, ingestion SQL, releases, provisioning, guardrails, identity, evals, strategies, monitoring, alerting |
+| `src/factory/` | Library: config, ingestion SQL, releases, provisioning, guardrails, identity, evals, strategies, monitoring, alerting, `journey` (what an owner should do next), `problems` (errors and alerts in plain words) |
 | `src/factory/platform_defaults.yml` | Defaults; MLOps edits them on the Admin page (stored in `platform_settings`, published to the runtime volume) |
 | `agent/agent.py`, `agent/deploy.py` | The single shared agent and its gated deploy |
 | `app/` | Streamlit app styled to the Claude Design screens (`app/ui.py`, `.streamlit/config.toml`) |
@@ -108,6 +108,43 @@ uv sync --extra app     # also install what the Streamlit app needs
 Databricks Apps installs from `requirements.txt`, so keep it in step with the `app` extra in
 `pyproject.toml`.
 
+## The app: who sees what, and how it stays quick
+
+Each page works at the level that makes sense for it:
+
+| Page | Level | Why |
+|---|---|---|
+| Home | All of a person's chatbots | One card per chatbot with its next step and a button straight to it |
+| Create chatbot | One chatbot | Creates or finishes one |
+| Documents | Both | "All my chatbots" lists every document read-only; choosing a chatbot opens Add, Curate and Review |
+| Test questions | One chatbot | Each chatbot is checked against its own questions |
+| Launch | One chatbot | A version is tested, approved and published per chatbot |
+| Chat | One chatbot | A conversation is with one chatbot |
+| Monitoring | Both | "All my chatbots" compares them and says which needs a look; choosing one opens its charts |
+| Traces | One chatbot | A flow is one chatbot's steps |
+| All chatbots (MLOps) | Both | Everything combined, or filtered to one |
+| Admin (MLOps) | Platform | Settings, reports, costs and alerts are platform-wide; Chatbots and Lifecycle act on one chatbot |
+
+Owners are told what to do rather than what happened. `factory/journey.py` turns a chatbot's
+state, documents, test questions and test version into the path to launch with exactly one
+current step (Home and Launch show it). `factory/problems.py` turns an error, an alert or a
+failed quality check into what it means and what to do; the technical text is kept, folded
+away, for whoever it is sent to. A part of a page that can't be loaded costs that part, not
+the page.
+
+Streamlit runs a page again on every click, so the app avoids asking twice:
+
+- Page reads are remembered for 30 seconds (`READ_TTL` in `app/common.py`) and forgotten on any
+  write, so people see their own change at once. Background jobs' results show within 30
+  seconds, or at once with **Refresh** in the menu. The services that decide before they write
+  (`ControlPlane`, `Documents`) always read fresh.
+- Independent reads run at the same time (`read_many`), and the same read across chatbots is one
+  statement (`across_bots`).
+- Pages with sections (Documents review, Monitoring, Admin) load only the open section.
+- Writes are batched: a batch of rows travels as one JSON parameter (`factory.sql.json_rows`).
+- A background job is not queued again when an identical run is still waiting to start
+  (`factory/jobruns.py`); the ingest job runs one at a time for the whole platform.
+
 ## Lifecycle and admin
 
 Admin › Lifecycle restores archived chatbots, deletes them (stops serving, data kept), and
@@ -142,9 +179,18 @@ metric-view `filter`; system-table column names in `sql/system_views.sql`; the a
 `telemetry_export_destinations` and `compute_size` fields; `agents.deploy(budget_policy_id=)`.
 App (October 7): the Review queue link path `/ml/experiments/<id>/reviews`; `queue_traces` from the app's service principal (needs Can Edit on the traces experiment); `mlflow.search_traces(experiment_ids=, filter_string="tags.bot_id = ...",
 return_type="list")` and `mlflow.get_trace` from the app's service principal (Traces and All
-chatbots pages); span `inputs`/`outputs` sizes in the One trace view; Streamlit ≥ 1.45 features
+chatbots pages); span `inputs`/`outputs` sizes in the One trace view; Streamlit ≥ 1.65 features
 (`st.dataframe` row selection, `bar_chart(horizontal=, stack=)`, `NumberColumn(format="percent")`,
-`help=` on titles and markdown). Observability checks: MLflow ≥ 3.14 on the serving
+`help=` on titles and markdown, `width="stretch"`, `st.segmented_control`, `st.popover`).
+October 11 (speed and clarity pass, checked only against a pretend workspace): batches sent as
+`inline(from_json(:rows, 'ARRAY<STRUCT<...>>', map('mode', 'FAILFAST')))` with one named parameter
+through the Statement Execution API and `spark.sql(args=)`; `MERGE ... USING` and
+`IN (SELECT ... FROM <that subquery>)` over it; `UNION ALL` across chatbot schemas with a named
+parameter per branch; GRANT statements for different objects running side by side;
+`jobs.list_runs(active_only=True)` returning each run's state and `job_parameters` (if it
+doesn't, jobs are simply started as before); the kept AI Search index handle in the agent
+(refetched once when a search fails); section ids that now end in a hash of the text (existing
+sections keep their ids until their document is next read again). Observability checks: MLflow ≥ 3.14 on the serving
 image; traces reach `traces_otel_spans` and show in the experiment; streamed calls through the
 guardrailed endpoint (or the logged fallback); `mlflow.chat.tokenUsage` on the autolog spans;
 built-in scorers accept `model=` (else they use the managed judge); scorer filter strings on

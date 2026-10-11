@@ -632,6 +632,14 @@ Rows written earlier keep `dev`.
 | As needed | Optimize and promote the answer prompt | Admin › Answer prompt (every chatbot is re-checked afterwards) |
 | Before expiry | Rotate the agent service principal secret | A6 steps 3–4, then `deploy_agent` |
 | After a policy change | Keep the checklist in step | Admin › Setup checklist |
+| When someone reports an error | Ask for the text under **Show technical details** | It names the page, the error type and the time (UTC); the full trace is in the app's log at that time |
+
+What owners see in the app is written for people who are not engineers: **Home** shows each
+chatbot's next step, **Launch** shows the path to launch as a checklist, and errors say what
+to do. When a message says "tell MLOps", the fix is on your side: usually a missing grant
+(B5), a setup job that hasn't run (B2, C5) or a job that isn't connected to the app.
+The app remembers what it reads for 30 seconds; **Refresh** in its menu shows the result of a
+background job straight away.
 
 Scheduled jobs that run on their own:
 - monitor: every 15 minutes in business hours, hourly otherwise
@@ -656,4 +664,11 @@ output and the first smoke test:
   `v_guardrail_verdicts` joins on.
 - The Review Queues, managed sessions and Genie API calls (each logs and carries on if it fails).
 - The ABAC `CREATE POLICY` syntax and the system-table column names in `sql/system_views.sql`.
+- Section ids now end in a hash of the section's text, so a section whose text changes gets a
+  new id and is embedded again, while unchanged sections are left alone. Sections written by an
+  earlier version keep their old ids until their document is next read again; nothing needs to
+  be migrated.
+- Approving several documents in a row should start one "rebuild the test version" run, not one
+  per approval. If the Jobs run list shows one per approval, `jobs.list_runs` isn't returning
+  run parameters and the de-duplication is quietly off; nothing breaks, it is only slower.
 - README › "Verify against a live workspace first" has the full list.

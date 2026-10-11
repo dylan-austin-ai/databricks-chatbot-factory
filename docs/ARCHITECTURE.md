@@ -118,8 +118,10 @@ request_log, guardrail_events, question_embeddings, question_drift, traces_otel_
 synthetic_health, monitoring_rollup, cost_daily, alerts, platform_releases; `v_*` views and
 `*_redacted` views for Support.
 
-Per bot: volume `docs`, `manifest`, `parsed_elements`, `chunked`, `index_source`
-(Confidential), `golden_set`, `access_probe`, `tester_probe`.
+Per bot: volume `docs`, `manifest`, `parsed_elements`, `chunked`, `chunk_archive` (sections
+replaced by an edit or a re-read, kept so a release can still be rebuilt), `chunk_edits` (who
+changed which section), `index_source` (Confidential), `golden_set`, `access_probe`,
+`tester_probe`.
 
 Retention: 7 years (`jobs/maintenance.py`); `audit_log` is never purged.
 

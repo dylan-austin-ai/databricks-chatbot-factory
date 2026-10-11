@@ -210,12 +210,19 @@ class ChatbotAgent(ResponsesAgent):
         return who.user in allowed or bool(set(cfg.allowed_principals) & self._groups(who.user, s))
 
     # Retrieval (RET-1, DCL-1) ------------------------------------------------------
+    def _index(self, s, cfg, fresh: bool = False):
+        """The search index handle. Getting one costs a request that describes the index, so it is
+        kept for ten minutes instead of being fetched for both searches of every question."""
+        endpoint, name = s.get("ai_search.endpoint"), index_name_for(s, cfg)
+        if fresh:
+            self._cache.pop(("index", endpoint, name), None)
+        return self._cache.get_or_load(("index", endpoint, name), 600, lambda: self.vsc.get_index(endpoint, name))
+
     def _search(self, cfg, s, query, channel, strategy, rerank: bool) -> list[dict]:
         name, kind = ("search.rerank", "RERANKER") if rerank else ("search.vector", "RETRIEVER")
         with mlflow.start_span(name=name, span_type=kind) as span:
             span.set_inputs({"query": query, "query_type": strategy.get("query_type", "hybrid"),
                              "num_results": int(strategy.get("num_results", 8)), "channel": channel})
-            idx = self.vsc.get_index(s.get("ai_search.endpoint"), index_name_for(s, cfg))
             cols = ["chunk_id", "doc_id", "doc_version", "doc_name", "source_uri", "page_ids",
                     "section", "chunk_to_retrieve"]
             kwargs = dict(query_text=query, columns=cols, num_results=int(strategy.get("num_results", 8)),
@@ -224,7 +231,12 @@ class ChatbotAgent(ResponsesAgent):
             if rerank:
                 from databricks.vector_search.reranker import DatabricksReranker
                 kwargs["reranker"] = DatabricksReranker(columns_to_rerank=["chunk_to_retrieve", "doc_name"])
-            res = idx.similarity_search(**kwargs)
+            try:
+                res = self._index(s, cfg).similarity_search(**kwargs)
+            except (ImportError, TypeError):  # reranker unavailable: retrieve() falls back without it
+                raise
+            except Exception:  # noqa: BLE001 - a kept handle can go stale (index rebuilt): get a new one, once
+                res = self._index(s, cfg, fresh=True).similarity_search(**kwargs)
             names = [c["name"] for c in res["manifest"]["columns"]]
             rows = [dict(zip(names, r)) for r in res.get("result", {}).get("data_array", [])]
             for i, r in enumerate(rows, 1):
