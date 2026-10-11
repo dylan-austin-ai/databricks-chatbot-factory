@@ -11,7 +11,7 @@ dev = ["pytest>=8", "pypdf>=4", "cryptography>=42", "numpy>=1.26"]
 # Everything the Streamlit app needs at runtime. Mirrors requirements.txt, which
 # Databricks Apps installs from; keep the two in step.
 app = [
-    "streamlit>=1.45",
+    "streamlit>=1.65",
     "pandas>=2",
     "pillow>=10",
     "pypdf>=4",

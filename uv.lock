@@ -531,7 +531,7 @@ requires-dist = [
     { name = "pypdf", marker = "extra == 'dev'", specifier = ">=4" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8" },
     { name = "pyyaml", specifier = ">=6" },
-    { name = "streamlit", marker = "extra == 'app'", specifier = ">=1.45" },
+    { name = "streamlit", marker = "extra == 'app'", specifier = ">=1.65" },
     { name = "tzdata", specifier = ">=2024.1" },
 ]
 provides-extras = ["dev", "app"]

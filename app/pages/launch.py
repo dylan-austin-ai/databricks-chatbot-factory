@@ -291,7 +291,7 @@ if history:
                    "Published": r.get("promoted_at"), "Approved by": r.get("approved_by"),
                    "Quality check": "Passed" if str(r.get("eval_passed")).lower() == "true" else "Not passed",
                    "Smoke test": {"true": "Passed", "false": "Failed"}.get(str(r.get("smoke_passed")).lower(), "—")}
-                  for r in history], hide_index=True, use_container_width=True)
+                  for r in history], hide_index=True, width="stretch")
 st.subheader("Documentation")
 st.caption("A one-page description of this chatbot for auditors and anyone who asks what it does: its purpose, "
            "owners, documents and latest quality results.")

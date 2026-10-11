@@ -1,22 +1,99 @@
-"""Monitoring and drift for one chatbot (OBS-6..12): speed, cost, quality, retrieval and
-question drift, with links to the MLflow traces and the Databricks drift dashboard."""
-import os
+"""Monitoring and drift (OBS-6..12): speed, cost, quality, retrieval and question drift, with
+links to the MLflow traces and the Databricks drift dashboard.
 
+Works at both levels: "All my chatbots" compares them side by side so the one that needs
+attention stands out; choosing one chatbot opens its charts."""
 import altair as alt
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1  # noqa: F401 - embedded dashboard
 
-from common import METRIC_LABEL, OUTCOME_LABEL, app_client, is_admin, pick_bot, settings, sql
+from common import (METRIC_LABEL, OUTCOME_LABEL, app_client, drift_dashboard_id, is_admin, my_bots, pick_bot,
+                    read_many, settings, soft, sql, trace_experiment_id)
 from factory.explain import help_text
+from factory.sql import json_rows
 from ui import clickable_bars, drill, html, pill, target_chart
 
 st.title("Monitoring", help=help_text("monitoring"))
+s = settings()
+SLOW_S = float(s.get("monitoring.latency_p95_s", 12))
+ALL, ONE = "All my chatbots", "One chatbot"
+mine = my_bots()
+scope = ONE
+if "monitoring_open" in st.session_state:  # a row was chosen in the all-chatbots table: open that chatbot
+    st.session_state["bot_id"] = st.session_state.pop("monitoring_open")
+    st.session_state["monitoring_scope"] = ONE
+if len(mine) > 1:
+    st.session_state.setdefault("monitoring_scope", ONE if st.session_state.get("bot_id") else ALL)
+    scope = st.segmented_control("Show", [ALL, ONE], key="monitoring_scope") or ALL
+c_days, _ = st.columns([2, 3])
+days = c_days.segmented_control("Period", [7, 30, 90], default=30, format_func=lambda d: f"{d} days") or 30
+
+if scope == ALL:
+    # Side by side, so the chatbot that needs attention stands out. One statement for all of them.
+    live = [b for b in mine if b.get("live_release_id")]
+    if not live:
+        st.info("None of your chatbots is live yet, so there is nothing to monitor. Monitoring starts once a "
+                "chatbot has been published on the **Launch** page.")
+        st.stop()
+    source, params = json_rows([{"bot_id": b["bot_id"]} for b in live], {"bot_id": "STRING"})
+    found, failed = read_many({
+        "usage": (f"""SELECT bot_id, sum(requests) AS questions,
+                             sum(answered_rate * requests) / nullif(sum(requests), 0) AS answered,
+                             sum(no_source_rate * requests) / nullif(sum(requests), 0) AS not_covered,
+                             percentile_approx(p95_latency_ms, 0.5) / 1000 AS slow_s
+                      FROM {s.fq('v_observability_daily')}
+                      WHERE day >= current_date() - INTERVAL {int(days)} DAYS AND bot_id IN (SELECT bot_id FROM {source})
+                      GROUP BY bot_id""", params),
+        "alerts": (f"SELECT bot_id, count(*) AS alerts FROM {s.fq('v_alerts_open')} "
+                   f"WHERE bot_id IN (SELECT bot_id FROM {source}) GROUP BY bot_id", params)})
+    usage = {r["bot_id"]: r for r in found["usage"]}
+    open_alerts = {r["bot_id"]: int(r["alerts"]) for r in found["alerts"]}
+
+    def look_at(row: dict | None, alerts: int) -> str:
+        """The first thing worth the owner's attention for one chatbot, in plain words."""
+        if not row or not float(row["questions"] or 0):
+            return "Nobody has asked it anything in this period."
+        if alerts:
+            return f"{alerts} open alert(s). They are listed on Home with what to do."
+        if float(row["answered"] or 0) < 0.8:
+            return "Many questions go unanswered. Open it and look at Quality."
+        if float(row["slow_s"] or 0) > SLOW_S:
+            return "Answers are slower than the target. Open it and look at Speed."
+        return "Nothing needs your attention."
+
+    table = pd.DataFrame([{
+        "Chatbot": b["display_name"],
+        "Questions": int(float((usage.get(b["bot_id"]) or {}).get("questions") or 0)),
+        "Answered": float((usage.get(b["bot_id"]) or {}).get("answered") or 0) if b["bot_id"] in usage else None,
+        "Not in documents": float((usage.get(b["bot_id"]) or {}).get("not_covered") or 0) if b["bot_id"] in usage else None,
+        "Slow answers (seconds)": float((usage.get(b["bot_id"]) or {}).get("slow_s") or 0) if b["bot_id"] in usage else None,
+        "Open alerts": open_alerts.get(b["bot_id"], 0),
+        "What to look at": look_at(usage.get(b["bot_id"]), open_alerts.get(b["bot_id"], 0)),
+        "bot_id": b["bot_id"]} for b in live]).sort_values(["Open alerts", "Questions"], ascending=False)
+    st.caption(f"Your {len(live)} live chatbot(s) over the last {days} days. **Select a row** to open that chatbot's "
+               "charts. The last column says what, if anything, needs a look.")
+    ev = st.dataframe(table.drop(columns=["bot_id"]), hide_index=True, width="stretch", on_select="rerun",
+                      selection_mode="single-row", key="monitoring_all",
+                      column_config={"Answered": st.column_config.NumberColumn(format="percent"),
+                                     "Not in documents": st.column_config.NumberColumn(format="percent"),
+                                     "Slow answers (seconds)": st.column_config.NumberColumn(format="%.1f")})
+    chosen = ev.selection.rows if ev and ev.selection else []
+    if chosen:
+        st.session_state["monitoring_open"] = table.iloc[chosen[0]]["bot_id"]
+        st.session_state.pop("monitoring_all", None)
+        st.rerun()
+    not_live = [b["display_name"] for b in mine if not b.get("live_release_id")]
+    if not_live:
+        st.caption("Not live yet, so not monitored: " + ", ".join(not_live))
+    for name, error in failed.items():
+        soft({"usage": "Usage numbers", "alerts": "Open alerts"}[name], error)
+    st.stop()
+
 bot, cfg = pick_bot()
 if not bot:
     st.stop()
-s, b = settings(), {"b": cfg.bot_id}
-days = st.segmented_control("Period", [7, 30, 90], default=30, format_func=lambda d: f"{d} days") or 30
+b = {"b": cfg.bot_id}
 
 
 def frame(query: str) -> pd.DataFrame:
@@ -29,31 +106,30 @@ def frame(query: str) -> pd.DataFrame:
 daily = frame(f"SELECT * FROM {s.fq('v_observability_daily')} WHERE bot_id = :b "
               f"AND day >= current_date() - INTERVAL {int(days)} DAYS ORDER BY day")
 if daily.empty:
-    st.info("No live questions in this period yet. Charts appear once people use the live version.")
+    if not bot.get("live_release_id"):
+        st.info(f"**{cfg.display_name}** isn't live yet, so there is nothing to monitor. Monitoring starts once it "
+                "has been published on the **Launch** page.")
+    else:
+        st.info("Nobody has asked the live version a question in this period yet. Charts appear here once people "
+                "use it. Try a longer period above, or check that people know where to find the chatbot.")
     st.stop()
 daily = daily.set_index("day").apply(pd.to_numeric, errors="coerce")
 last7 = daily.tail(7)
 
 # Native Databricks tools, linked and embedded (OBS-16) ------------------------------------------
 host = app_client().config.host.rstrip("/")
-links, dashboard_id = [], None
-try:
-    exp = app_client().experiments.get_by_name(f"/Shared/chatbot-factory/{os.environ.get('FACTORY_ENV', 'qa')}/traces")
-    links.append(f"[Review queue]({host}/ml/experiments/{exp.experiment.experiment_id}/reviews) "
+links, experiment, dashboard_id = [], trace_experiment_id(), drift_dashboard_id()
+if experiment:
+    links.append(f"[Review queue]({host}/ml/experiments/{experiment}/reviews) "
                  f"(`review_{cfg.bot_id}`: failed and thumbs-down answers waiting for a person)")
-    links.append(f"[Traces in MLflow]({host}/ml/experiments/{exp.experiment.experiment_id}/traces) "
+    links.append(f"[Traces in MLflow]({host}/ml/experiments/{experiment}/traces) "
                  f"(filter `tags.bot_id = '{cfg.bot_id}'`; run issue detection from there) · "
                  "open **Traces** in the menu for the step-by-step flow")
-except Exception:  # noqa: BLE001
-    pass
-try:
-    dashboard_id = app_client().quality_monitors.get(s.fq("request_log")).dashboard_id
-except Exception:  # noqa: BLE001
-    pass
 if s.get("observability.genie_space_id"):
     links.append(f"[Ask Genie about usage and quality]({host}/genie/rooms/{s.get('observability.genie_space_id')})")
 if links:
-    st.markdown(" · ".join(links))
+    with st.expander("Databricks tools for a deeper look (for MLOps and analysts)"):
+        st.markdown(" · ".join(links))
 if dashboard_id:
     with st.expander("Databricks drift dashboard"):
         # Needs the workspace embed policy to allow *.databricksapps.com (Admin › Setup checklist).
@@ -71,26 +147,45 @@ c[4].metric("Answered", f"{last7['answered_rate'].mean():.0%}")
 if admin:
     c[5].metric("Cost per question", f"${last7['cost_usd'].sum() / max(last7['requests'].sum(), 1):.4f}")
 
-names = ["Speed", "Quality", "Guardrails", "Retrieval", "Question drift"] + (["Cost and tokens"] if admin else [])
-t_speed, t_quality, t_guard, t_retrieval, t_drift, *rest = st.tabs(names)
+# What, if anything, needs the owner's attention, in plain words.
+answered, slow = float(last7["answered_rate"].mean()), float(last7["p95_latency_ms"].median()) / 1000
+if answered < 0.8:
+    st.warning(f"**Only {answered:.0%} of questions were answered in the last 7 days.** Open **Quality** below to see "
+               "what happened to the rest. The usual cause is questions about things your documents don't cover: "
+               "**Question drift** shows which topics, and adding a document for them fixes it.")
+elif slow > SLOW_S:
+    st.warning(f"**Answers are slower than the target** ({slow:.1f}s against {SLOW_S:.0f}s). This is for MLOps to fix, "
+               "not you. If it lasts more than a day, tell them.")
+else:
+    st.success("Nothing here needs your attention: most questions are answered and answers arrive on time.")
 
-with t_speed:
+# One view open at a time, so only the charts on screen are loaded.
+VIEWS = {"Speed": "How long people wait for an answer.",
+         "Quality": "What happened to each question, and how the automatic judges rate the answers.",
+         "Guardrails": "Every time a safety check stepped in.",
+         "Retrieval": "How well the search finds the right part of your documents.",
+         "Question drift": "Whether people ask about different things than when the chatbot launched."}
+if admin:
+    VIEWS["Cost and tokens"] = "Spending per day and the size of questions and answers."
+view = st.segmented_control("Look closer at", list(VIEWS), default="Speed", key="monitoring_view") or "Speed"
+st.caption(VIEWS[view])
+
+if view == "Speed":
     st.caption("Answer time and time to first token from the answer model, in seconds. Dashed line: the slow-answer "
                "target; red markers: days over it.")
     target_chart(daily[["p50_latency_ms", "p95_latency_ms", "p50_ttft_ms", "p95_ttft_ms"]].div(1000).rename(
         columns={"p50_latency_ms": "Answer (typical)", "p95_latency_ms": "Answer (p95)",
                  "p50_ttft_ms": "First token (typical)", "p95_ttft_ms": "First token (p95)"}), "Seconds",
-        float(s.get("monitoring.latency_p95_s", 12)), "Slow-answer target (p95)", fmt=".1f")
+        SLOW_S, "Slow-answer target (p95)", fmt=".1f")
     st.caption("Share of answers the safety checks sent back for a rewrite.")
     st.line_chart(daily[["retake_rate"]].rename(columns={"retake_rate": "Rewritten by guardrails"}))
 
-for t in rest:  # admins only
-    with t:
-        st.line_chart(daily[["cost_usd"]].rename(columns={"cost_usd": "Cost per day ($)"}))
-        st.line_chart(daily[["avg_input_tokens", "avg_output_tokens"]].rename(
-            columns={"avg_input_tokens": "Input tokens per question", "avg_output_tokens": "Output tokens per question"}))
+if view == "Cost and tokens":  # admins only
+    st.line_chart(daily[["cost_usd"]].rename(columns={"cost_usd": "Cost per day ($)"}))
+    st.line_chart(daily[["avg_input_tokens", "avg_output_tokens"]].rename(
+        columns={"avg_input_tokens": "Input tokens per question", "avg_output_tokens": "Output tokens per question"}))
 
-with t_quality:
+if view == "Quality":
     st.caption("What happened to each question.")
     st.area_chart(daily[["answered_rate", "no_source_rate", "refused_rate", "failed_rate"]].rename(columns={
         "answered_rate": "Answered", "no_source_rate": "Not in documents", "refused_rate": "Refused or blocked",
@@ -114,9 +209,9 @@ with t_quality:
                                        f"{r.last_7_days / r.prior_7_days - 1:+.0%}", axis=1)
         st.dataframe(issues.rename(columns={"scorer": "Judge", "topic": "Topic", "failures": "Failures",
                                             "last_7_days": "Last 7 days", "trend": "Trend"})[
-            ["Judge", "Topic", "Failures", "Last 7 days", "Trend"]], hide_index=True, use_container_width=True)
+            ["Judge", "Topic", "Failures", "Last 7 days", "Trend"]], hide_index=True, width="stretch")
 
-with t_guard:  # GW-7: people asking never see which check fired; it's all recorded here
+if view == "Guardrails":  # GW-7: people asking never see which check fired; it's all recorded here
     st.markdown("Every safety check that fired.", help=help_text("guardrails"))
     RULE = {"gateway_guardrail": "Unity Gateway policy blocked", "topic_rules": "Off-topic refused",
             "unverified": "Answer couldn't be verified", "sensitive_output": "Sensitive data redacted",
@@ -155,9 +250,9 @@ with t_guard:  # GW-7: people asking never see which check fired; it's all recor
                            AND ts >= current_date() - INTERVAL {int(days)} DAYS ORDER BY ts DESC LIMIT 200""")
         if not recent.empty:
             recent["rule"] = recent["rule"].map(lambda r: RULE.get(r, r))
-            st.dataframe(recent, hide_index=True, use_container_width=True)
+            st.dataframe(recent, hide_index=True, width="stretch")
 
-with t_retrieval:
+if view == "Retrieval":
     st.caption("Best search score per question (a falling line means documents match questions less well) "
                "and how many results the reranker moved.")
     st.line_chart(daily[["mean_top_score"]].rename(columns={"mean_top_score": "Best search score"}))
@@ -169,9 +264,9 @@ with t_retrieval:
     if not psi.empty:
         st.caption("Latest day-over-day drift per field (Databricks data quality monitor). "
                    "PSI above 0.2 is a meaningful shift.")
-        st.dataframe(psi, hide_index=True, use_container_width=True)
+        st.dataframe(psi, hide_index=True, width="stretch")
 
-with t_drift:
+if view == "Question drift":
     st.markdown("Are people asking about different things than at launch?", help=help_text("drift"))
     qd = frame(f"SELECT * FROM {s.fq('question_drift')} WHERE bot_id = :b "
                f"AND day >= current_date() - INTERVAL {int(days)} DAYS ORDER BY day")
@@ -204,4 +299,4 @@ with t_drift:
             color=alt.Color("week:O" if color == "week" else "outcome:N", title=color.capitalize()),
             tooltip=[alt.Tooltip("topic:N", title="Topic"), alt.Tooltip("week:T", title="Week of"),
                      alt.Tooltip("outcome:N", title="What happened")]).properties(height=420),
-            use_container_width=True)
+            width="stretch")

@@ -144,3 +144,12 @@ def test_every_way_the_quality_check_can_fail_comes_with_advice(settings):
         assert problems.check_advice(failure) != fallback, failure
     assert "Test questions" in problems.check_advice("Only 3 approved test question(s); at least 50 are required.")
     assert "MLOps" in fallback
+
+
+def test_chat_apology_never_shows_technical_text():
+    denied = problems.chat_apology(PermissionError("PERMISSION_DENIED: user x lacks SELECT on access_probe"))
+    assert "don't have access" in denied and "access_probe" not in denied
+    assert "waking up" in problems.chat_apology(TimeoutError("timed out after 120s"))
+    assert "waking up" in problems.chat_apology(RuntimeError("503 TEMPORARILY_UNAVAILABLE"))
+    other = problems.chat_apology(KeyError("custom_outputs"))
+    assert "ask again" in other and "custom_outputs" not in other and "MLOps" not in other

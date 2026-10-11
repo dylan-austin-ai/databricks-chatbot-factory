@@ -137,11 +137,14 @@ class AppSql:
         read from each page): remembered for 10 minutes, or until a write or Refresh."""
         return _read_steady(statement, json.dumps(params, sort_keys=True, default=str) if params else "")
 
-    def execute(self, statement, params=None):
+    def execute(self, statement, params=None, keep_reads: bool = False):
+        """`keep_reads` is for small, frequent writes nothing on screen depends on (a thumbs-up):
+        forgetting every page's reads for each one would undo the remembering."""
         try:
             _sql().execute(statement, params)
         finally:
-            forget()
+            if not keep_reads:
+                forget()
 
 
 @st.cache_data(ttl=300)
@@ -551,3 +554,12 @@ def load_traces(bot_id: str | None, limit: int = 300, trace_id: str | None = Non
                                      order_by=["timestamp_ms DESC"])
     return [{"trace_id": t.info.trace_id, "tags": dict(t.info.tags or {}), "spans": [_span(s) for s in t.data.spans]}
             for t in found if t]
+
+
+def safe_traces(bot_id: str | None, limit: int = 300, trace_id: str | None = None) -> list[dict]:
+    """load_traces, except that MLflow being unreachable costs the page one section, not all of it."""
+    try:
+        return load_traces(bot_id, limit, trace_id)
+    except Exception as e:  # noqa: BLE001
+        soft("The traces from MLflow", e)
+        return []

@@ -33,7 +33,7 @@ if admin:
 
 st.sidebar.markdown("**Chatbot Factory**")
 page = st.navigation(pages)
-if st.sidebar.button("Refresh", icon=":material/refresh:", use_container_width=True,
+if st.sidebar.button("Refresh", icon=":material/refresh:", width="stretch",
                      help="Reading documents and quality checks run in the background and take a few minutes. "
                           f"The pages pick up their results within {READ_TTL} seconds; press this to see them now."):
     forget(settings_too=True)

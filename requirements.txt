@@ -1,4 +1,4 @@
-streamlit>=1.45
+streamlit>=1.65
 databricks-sdk>=0.60
 openai>=1.40
 pyyaml>=6

@@ -99,7 +99,7 @@ for i, b in enumerate(bots):
             st.markdown(f'{pill(journey.STATUS_LABEL[step.status], STEP_TONE[step.status])} **Next: {step.title}**'
                         f'\n\n{step.detail}', unsafe_allow_html=True)
         page, name = PAGES.get(step.page or "launch", PAGES["launch"])
-        if st.button(f"Go to {name}", key=f"open_{b['bot_id']}", use_container_width=True,
+        if st.button(f"Go to {name}", key=f"open_{b['bot_id']}", width="stretch",
                      type="primary" if step.status in (journey.NOW, journey.PROBLEM) else "secondary"):
             st.session_state["bot_id"] = b["bot_id"]
             st.session_state["docs_bot_id"] = b["bot_id"]

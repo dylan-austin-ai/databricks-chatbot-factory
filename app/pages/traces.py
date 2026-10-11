@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from common import ROOT, app_client, current_user, is_admin, load_traces, pick_bot, settings, sql, trace_experiment_id, user_groups
+from common import ROOT, app_client, current_user, is_admin, safe_traces, pick_bot, settings, sql, trace_experiment_id, user_groups
 from factory.explain import help_text
 from factory.flow import aggregate, code_excerpt, describe, tree
 from ui import html, pill
@@ -33,7 +33,7 @@ def code(name: str) -> None:
 
 
 def pick_row(df: pd.DataFrame, key: str) -> int:
-    ev = st.dataframe(df, hide_index=True, use_container_width=True, on_select="rerun",
+    ev = st.dataframe(df, hide_index=True, width="stretch", on_select="rerun",
                       selection_mode="single-row", key=key, height=min(38 * (len(df) + 1), 700))
     rows = ev.selection.rows if ev and ev.selection else []
     return rows[0] if rows else 0
@@ -50,7 +50,7 @@ if exp:
     st.markdown(f"[Open in MLflow]({app_client().config.host.rstrip('/')}/ml/experiments/{exp}/traces)")
 
 if not one:
-    traces = load_traces(cfg.bot_id, 300)
+    traces = safe_traces(cfg.bot_id, 300)
     if not traces:
         st.info("No traces yet. They appear after the first questions.")
         st.stop()
@@ -105,7 +105,7 @@ if not recent:
 pick = pick_row(pd.DataFrame([{"When": r["ts"], "Question": (r["question"] or "")[:90], "Outcome": r["outcome"],
                                "Time": fmt(float(r["latency_ms"] or 0))} for r in recent]), "recent")
 meta = recent[pick]
-found = load_traces(None, trace_id=meta["trace_id"])
+found = safe_traces(None, trace_id=meta["trace_id"])
 if not found:
     st.warning("This trace isn't readable yet; traces land within a few minutes.")
     st.stop()
@@ -144,7 +144,7 @@ with right, st.container(border=True):
         st.dataframe(pd.DataFrame([{"Rank": d["metadata"].get("rank"), "Before rerank": d["metadata"].get("pre_rerank_rank"),
                                     "Document": d["metadata"].get("doc_name"), "Pages": d["metadata"].get("pages"),
                                     "Score": d["metadata"].get("score"), "Text": d["page_content"][:300]} for d in docs]),
-                     hide_index=True, use_container_width=True)
+                     hide_index=True, width="stretch")
     messages = (sp["inputs"] or {}).get("messages") if isinstance(sp["inputs"], dict) else None
     if messages:
         st.markdown("**Sent to the AI model**")

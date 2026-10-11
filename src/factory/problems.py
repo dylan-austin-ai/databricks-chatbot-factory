@@ -56,6 +56,19 @@ _UNKNOWN = Problem("Something unexpected went wrong.",
                    "Press **Try again**. If it happens a second time: " + _SEND[0].lower() + _SEND[1:], YOU)
 
 
+def chat_apology(error: BaseException) -> str:
+    """What to say in the chat when a question couldn't be answered. The person asking may not
+    own the chatbot, so this never mentions MLOps or technical details."""
+    text = f"{type(error).__name__}: {error}"
+    if re.search(_RULES[1][0], text, re.I | re.S):
+        return ("Sorry, you don't have access to this chatbot. Ask its owner to add you, then try again.")
+    if describe(error).who == WAIT:
+        return ("Sorry, the chatbot is busy or still waking up, which can take a few minutes after a quiet "
+                "period. Please ask again in a minute or two.")
+    return ("Sorry, something went wrong and I couldn't answer. Please ask again. If it keeps happening, tell the "
+            "chatbot's owner.")
+
+
 def describe(error: BaseException) -> Problem:
     """The plain-language version of an error."""
     text = f"{type(error).__name__}: {error}"

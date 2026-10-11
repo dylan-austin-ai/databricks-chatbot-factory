@@ -62,7 +62,7 @@ df = pd.DataFrame(rows, columns=["eval_id", "kind", "difficulty", "origin", "que
 df["kind"] = df["kind"].map(lambda k: golden.KIND_LABEL.get(k, k))
 df["delete"] = False
 edited = st.data_editor(
-    df, hide_index=True, use_container_width=True, num_rows="dynamic",
+    df, hide_index=True, width="stretch", num_rows="dynamic",
     key=editor_key,
     column_config={
         "eval_id": None, "origin": st.column_config.TextColumn("Source", disabled=True),
@@ -99,11 +99,11 @@ def save(change: dict, message: str) -> None:
 
 
 b1, b2, _ = st.columns([1, 1, 2])
-if b1.button("Save changes", type="primary", disabled=not unsaved, use_container_width=True):
+if b1.button("Save changes", type="primary", disabled=not unsaved, width="stretch"):
     save(delta, f"Saved: {pending}. The test version is being updated; this takes a few minutes.")
 
 not_yet = [r for r in rows if not r["approved"]]
-with b2.popover(f"Approve all {len(not_yet)} remaining", disabled=not not_yet or unsaved, use_container_width=True):
+with b2.popover(f"Approve all {len(not_yet)} remaining", disabled=not not_yet or unsaved, width="stretch"):
     st.markdown(f"This marks **all {len(not_yet)} unapproved question(s)** as correct without you reading them. "
                 "The quality check will then hold the chatbot to these expected answers, so a wrong one makes a "
                 "good chatbot look bad. Only do this if you have read them.")

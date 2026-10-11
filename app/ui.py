@@ -123,7 +123,7 @@ def target_chart(df, title: str = "", target: float | None = None, target_label:
             layers.append(alt.Chart(bad).mark_point(color="#B91C1C", size=90, shape="triangle-up", filled=True)
                           .encode(x=f"{x}:T", y="value:Q", tooltip=[alt.Tooltip(f"{x}:T", title="Day"), "series:N",
                                                                      alt.Tooltip("value:Q", format=fmt)]))
-    st.altair_chart(alt.layer(*layers).properties(height=280), use_container_width=True)
+    st.altair_chart(alt.layer(*layers).properties(height=280), width="stretch")
 
 
 @st.dialog("Details", width="large")
@@ -137,7 +137,7 @@ def drill(title: str, rows, note: str = "") -> None:
     if df.empty:
         st.info("Nothing to show.")
         return
-    st.dataframe(df, hide_index=True, use_container_width=True, height=min(38 * (len(df) + 1), 520))
+    st.dataframe(df, hide_index=True, width="stretch", height=min(38 * (len(df) + 1), 520))
     st.download_button("Download CSV", df.to_csv(index=False), file_name=f"{title.lower().replace(' ', '_')[:60]}.csv",
                        mime="text/csv")
 
@@ -151,7 +151,7 @@ def clickable_bars(df, label: str, value: str, key: str, horizontal: bool = True
     chart = alt.Chart(df).mark_bar(cursor="pointer").encode(
         **enc, opacity=alt.condition(pick, alt.value(1), alt.value(0.6)),
         tooltip=[label, alt.Tooltip(f"{value}:Q", format=",")]).add_params(pick)
-    ev = st.altair_chart(chart, use_container_width=True, on_select="rerun", key=key)
+    ev = st.altair_chart(chart, width="stretch", on_select="rerun", key=key)
     sel = (ev or {}).get("selection", {}).get("pick") or []
     return fresh(key, sel[0].get(label) if sel else None)
 

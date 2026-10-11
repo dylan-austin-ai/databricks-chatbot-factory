@@ -1,24 +1,30 @@
-"""Chat (CON-1, UI-004/005). Calls the shared agent as the signed-in user so UC grants
-apply (IDN-1). Owners, the Reviewer and testers can switch to the test version (REL-1)."""
+"""Chat with one chatbot (CON-1, UI-004/005). Calls the shared agent as the signed-in user so UC
+grants apply (IDN-1). Owners, the Reviewer and testers can switch to the test version (REL-1).
+
+Always one chatbot at a time: a conversation is with one chatbot and its documents."""
+import logging
 import uuid
 
 import streamlit as st
 
-from common import (APP_VERSION, OUTCOME_LABEL, STATE_LABEL, can_manage, cp, current_user, is_tester,
+from common import (APP_VERSION, OUTCOME_LABEL, STATE_LABEL, all_bots, can_manage, current_user, is_tester,
                     settings, sql, user_client)
+from factory.problems import chat_apology
 from ui import html, md_text, pill
 
 st.title("Chat")
 s, user = settings(), current_user()
-bots = [b for b in cp().list_bots()
+bots = [b for b in all_bots()
         if b["state"] == "live" or ((can_manage(b) or is_tester(b)) and b.get("candidate_release_id"))]
 if not bots:
-    st.info("No chatbots are available yet.")
+    st.info("There are no chatbots for you to talk to yet. A chatbot appears here once it is live, or, if you own, "
+            "review or test one, as soon as its test version is ready (a few minutes after its documents are "
+            "approved).")
     st.stop()
 ids = [b["bot_id"] for b in bots]
 bot_id = st.selectbox("Chatbot", ids, index=ids.index(st.session_state["bot_id"])
                       if st.session_state.get("bot_id") in ids else 0,
-                      format_func=lambda i: next(f"{b['display_name']} ({STATE_LABEL[b['state']]})"
+                      format_func=lambda i: next(f"{b['display_name']} ({STATE_LABEL.get(b['state'], b['state'])})"
                                                  for b in bots if b["bot_id"] == i))
 bot = next(b for b in bots if b["bot_id"] == bot_id)
 bot_cfg = __import__("json").loads(bot.get("config_json") or "{}")
@@ -26,7 +32,11 @@ channel = "live"
 if (can_manage(bot) or is_tester(bot)) and bot.get("candidate_release_id"):
     if bot["state"] != "live" or st.toggle("Use the test version", value=True):
         channel = "candidate"
-        st.warning("Test version. Only owners, the Reviewer and invited testers see this.")
+        st.warning("You are talking to the **test version**. Only owners, the Reviewer and invited testers can. "
+                   "It includes changes that haven't been published yet.")
+if not st.session_state.get(f"chat_{bot_id}_{channel}", {}).get("messages"):
+    st.caption("Ask a question in your own words. Answers come only from this chatbot's approved documents, and "
+               "each one lists its sources. Use the thumbs under an answer to tell the owner whether it helped.")
 
 key = f"chat_{bot_id}_{channel}"
 if key not in st.session_state or st.sidebar.button("New conversation"):
@@ -36,7 +46,7 @@ conv = st.session_state[key]
 
 def feedback(m, rating):
     sql().execute(f"INSERT INTO {s.fq('feedback')} VALUES (:r, :b, :u, :rt, NULL, current_timestamp(), false)",
-                  {"r": m["request_id"], "b": bot_id, "u": user, "rt": rating})
+                  {"r": m["request_id"], "b": bot_id, "u": user, "rt": rating}, keep_reads=True)
     if m.get("trace_id"):  # OBS-10: the thumb is attached to the answer's MLflow trace
         try:
             import mlflow
@@ -84,8 +94,9 @@ if question := st.chat_input("Ask a question"):
                                               "app_version": APP_VERSION}})
             custom = getattr(resp, "custom_outputs", None) or (resp.model_extra or {}).get("custom_outputs", {})
             text = custom.get("answer") or resp.output_text
-        except Exception:  # noqa: BLE001
-            text, custom = "Sorry, something went wrong. Please try again.", {"outcome": "error"}
+        except Exception as e:  # noqa: BLE001 - say what to do; the detail goes to the app log only
+            logging.getLogger("factory.app").warning("chat request %s failed: %s", request_id, type(e).__name__)
+            text, custom = chat_apology(e), {"outcome": "error"}
     conv["messages"].append({"role": "assistant", "content": text, "request_id": request_id,
                              "trace_id": custom.get("trace_id"),
                              "label": OUTCOME_LABEL.get(custom.get("outcome")),

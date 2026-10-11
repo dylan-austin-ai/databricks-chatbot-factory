@@ -254,7 +254,7 @@ class Documents:
                              "AND status <> 'superseded'", {"d": doc_id})
         if row and row[0]["flag_reason"] == BLOCKED:
             raise PermissionError("This document contains restricted data and can't be approved. "
-                                  "Upload a clean copy instead (ING-8).")
+                                  "Upload a clean copy instead.")
         self._set_status(bot_id, doc_id, "approved", True, actor, "doc_approved")
 
     def _approve_waiting(self, bot_id: str, actor: str, only: str = "") -> int:

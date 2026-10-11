@@ -1,12 +1,15 @@
 """All chatbots (OBS-21, MLOps): every chatbot combined or filtered to one, with Arize-style views
 built from our own tables and MLflow traces: per-step latency, slow-answer heatmap, question
 topics worst first, slice comparison, document gaps, conversation health, guardrails, and a
-paginated table of every chatbot."""
+paginated table of every chatbot.
+
+Works at both levels: all chatbots together by default, or one chosen in the Chatbot box."""
 import altair as alt
 import pandas as pd
 import streamlit as st
 
-from common import STATE_LABEL, app_client, cp, is_admin, load_traces, settings, sql, trace_experiment_id
+from common import (STATE_LABEL, all_bots, app_client, bot_config, is_admin, safe_traces, read_many, settings, soft,
+                    sql, trace_experiment_id)
 from factory.explain import help_text
 from factory.flow import aggregate
 from ui import clickable_bars, drill, fresh
@@ -14,9 +17,10 @@ from ui import clickable_bars, drill, fresh
 if not is_admin():
     st.error("This page is for MLOps admins only.")
     st.stop()
-s, control = settings(), cp()
+s = settings()
 st.title("All chatbots")
-st.markdown("Every chatbot combined, or filter to one.", help=help_text("monitoring"))
+st.markdown("Every chatbot combined. To look at just one, choose it in the **Chatbot** box.",
+            help=help_text("monitoring"))
 
 
 def open_trace(trace_id: str, key: str) -> None:
@@ -27,11 +31,11 @@ def open_trace(trace_id: str, key: str) -> None:
 
 
 def pick(df: pd.DataFrame, key: str, **kw) -> int | None:
-    ev = st.dataframe(df, hide_index=True, use_container_width=True, on_select="rerun", selection_mode="single-row",
+    ev = st.dataframe(df, hide_index=True, width="stretch", on_select="rerun", selection_mode="single-row",
                       key=key, **kw)
     rows = ev.selection.rows if ev and ev.selection else []
     return rows[0] if rows else None
-bots = {b["bot_id"]: b for b in control.list_bots() if b["state"] not in ("deleted", "purged")}
+bots = {b["bot_id"]: b for b in all_bots() if b["state"] not in ("deleted", "purged")}
 c1, c2 = st.columns([3, 2])
 bot = c1.selectbox("Chatbot", ["all"] + sorted(bots), format_func=lambda b: f"All chatbots ({len(bots)})"
                    if b == "all" else bots[b]["display_name"])
@@ -51,32 +55,103 @@ WHERE = where()
 LOG = s.fq("request_log")
 
 
-def frame(query: str) -> pd.DataFrame:
+def numeric(rows: list[dict]) -> pd.DataFrame:
+    df = pd.DataFrame(rows)
+    for col in df.columns:  # the SQL API returns strings
+        try:
+            df[col] = pd.to_numeric(df[col])
+        except (ValueError, TypeError):
+            pass
+    return df
+
+
+def frame(query: str, params: dict | None = None) -> pd.DataFrame:
+    """One read that depends on something chosen further down the page."""
     try:
-        df = pd.DataFrame(sql().query(query, P))
-        for col in df.columns:  # the SQL API returns strings
-            try:
-                df[col] = pd.to_numeric(df[col])
-            except (ValueError, TypeError):
-                pass
-        return df
-    except Exception as e:  # noqa: BLE001 - tables fill in after the first questions
-        st.caption(f"Not available yet: {str(e)[:120]}")
+        return numeric(sql().query(query, params or P))
+    except Exception as e:  # noqa: BLE001 - one missing table costs one chart, not the page
+        soft("Part of this page", e)
         return pd.DataFrame()
 
 
-k = frame(f"""SELECT count(*) AS q, sum(cost_usd) AS cost, avg(CASE WHEN outcome = 'answered' THEN 1.0 ELSE 0 END) AS ans,
-              percentile_approx(latency_ms, 0.95) AS p95, percentile_approx(ttft_ms, 0.95) AS ttft,
-              count(DISTINCT bot_id) AS bots FROM {LOG} {WHERE}""")
+def every_chatbot(usage: pd.DataFrame) -> None:
+    st.subheader("Every chatbot")
+    base = pd.DataFrame([{"bot_id": b, "Chatbot": v["display_name"], "Status": STATE_LABEL.get(v["state"], v["state"]),
+                          "Owner": v.get("owner_user")} for b, v in bots.items()])
+    if base.empty:
+        st.caption("No chatbots have been created yet.")
+        return
+    if usage.empty:
+        usage = pd.DataFrame(columns=["bot_id", "questions", "answered", "p95_s", "cost"])
+    allrows = base.merge(usage, on="bot_id", how="left").fillna({"questions": 0}).sort_values("questions", ascending=False)
+    find = st.text_input("Search chatbots")
+    if find:
+        allrows = allrows[allrows.Chatbot.str.contains(find, case=False, regex=False)]
+    per = 25
+    pages = max(1, -(-len(allrows) // per))
+    page = st.number_input(f"Page (of {pages})", 1, pages, 1)
+    st.dataframe(allrows.iloc[(page - 1) * per: page * per].drop(columns=["bot_id"]), hide_index=True,
+                 width="stretch", column_config={"answered": st.column_config.NumberColumn("Answered", format="percent"),
+                                                          "cost": st.column_config.NumberColumn("Cost", format="dollar"),
+                                                          "p95_s": st.column_config.NumberColumn("Slow (p95, s)", format="%.1f")})
+    st.download_button("Download CSV", allrows.to_csv(index=False), file_name=f"chatbots_{days}d.csv")
+
+
+# Everything that doesn't depend on a choice further down, asked for at the same time ----------
+SLOW_MS = int(float(s.get("monitoring.latency_p95_s", 12)) * 1000)
+SINCE = f"current_date() - INTERVAL {int(days)} DAYS"
+BATCH = {
+    "headline": f"""SELECT count(*) AS q, sum(cost_usd) AS cost, avg(CASE WHEN outcome = 'answered' THEN 1.0 ELSE 0 END) AS ans,
+                    percentile_approx(latency_ms, 0.95) AS p95, percentile_approx(ttft_ms, 0.95) AS ttft,
+                    count(DISTINCT bot_id) AS bots FROM {LOG} {WHERE}""",
+    "judge": f"SELECT avg(value) AS v FROM {s.fq('judge_results')} WHERE ts >= {SINCE} AND (:b = '' OR bot_id = :b)",
+    "guard": f"""SELECT rule, sum(events) AS events FROM {s.fq('v_guardrails')} WHERE day >= {SINCE}
+                 AND (:b = '' OR bot_id = :b) GROUP BY rule ORDER BY events DESC""",
+    "alerts": f"SELECT count(*) AS n FROM {s.fq('v_alerts_open')} WHERE (:b = '' OR bot_id = :b)",
+    "daily": f"SELECT CAST(ts AS DATE) AS day, bot_id, count(*) AS questions, sum(cost_usd) AS cost FROM {LOG} {WHERE} GROUP BY ALL",
+    "heat": f"""SELECT date_format(ts, 'E') AS weekday, dayofweek(ts) AS dow, hour(ts) AS hour,
+                avg(CASE WHEN latency_ms > {SLOW_MS} THEN 1.0 ELSE 0 END) AS slow, count(*) AS n
+                FROM {LOG} {WHERE} GROUP BY ALL""",
+    "topics": f"SELECT * FROM {s.fq('v_topics')} WHERE (:b = '' OR bot_id = :b)",
+    # counted in the warehouse, twenty rows back, instead of downloading every question's score
+    "gaps": f"""SELECT least(floor(top_score * 20), 19) / 20 AS bucket, count(*) AS questions
+                FROM {LOG} {WHERE} AND top_score IS NOT NULL GROUP BY 1 ORDER BY 1""",
+    "low": f"""SELECT r.question, r.top_score, r.bot_id, t.topic_label, r.trace_id FROM {LOG} r
+               LEFT JOIN {s.fq('question_embeddings')} t USING (request_id)
+               {where('r.')}
+               AND r.outcome = 'no_source' ORDER BY r.top_score LIMIT 10""",
+    "conv": f"""WITH t AS (SELECT conversation_id, ts, outcome,
+                   lag(outcome) OVER (PARTITION BY conversation_id ORDER BY ts) AS prev,
+                   row_number() OVER (PARTITION BY conversation_id ORDER BY ts DESC) AS last
+                FROM {LOG} {WHERE} AND conversation_id IS NOT NULL)
+                SELECT count(*) / count(DISTINCT conversation_id) AS per_conv,
+                       avg(CASE WHEN prev IN ('no_source', 'refused', 'unverified') THEN 1.0 ELSE 0 END) AS reasked,
+                       count_if(last = 1 AND outcome IN ('no_source', 'refused', 'blocked')) / count(DISTINCT conversation_id) AS left_after_miss
+                FROM t""",
+    "issues": f"""SELECT bot_id, scorer, topic, failures, last_7_days, prior_7_days, latest_reason, example_traces
+                  FROM {s.fq('v_failure_patterns')} WHERE (:b = '' OR bot_id = :b)
+                  ORDER BY last_7_days DESC, failures DESC LIMIT 50""",
+    "usage": f"""SELECT bot_id, count(*) AS questions, avg(CASE WHEN outcome = 'answered' THEN 1.0 ELSE 0 END) AS answered,
+                 percentile_approx(latency_ms, 0.95) / 1000 AS p95_s, sum(cost_usd) AS cost
+                 FROM {LOG} WHERE ts >= {SINCE} AND channel = 'live' AND NOT synthetic GROUP BY bot_id""",
+}
+found, failed = read_many({name: (query, P) for name, query in BATCH.items()})
+F = {name: numeric(rows) for name, rows in found.items()}
+WHAT = {"headline": "The headline numbers", "judge": "Judge pass rates", "guard": "Guardrail counts",
+        "alerts": "The open alert count", "daily": "Questions and cost per day", "heat": "Slow answers by hour",
+        "topics": "Question topics", "gaps": "Search scores", "low": "Unanswered questions",
+        "conv": "Conversation numbers", "issues": "Recurring problems", "usage": "Usage per chatbot"}
+for name, error in failed.items():
+    soft(WHAT[name], error)
+
+k = F["headline"]
 if k.empty or not k.loc[0, "q"]:
-    st.info("No live questions in this period yet.")
+    st.info("Nobody has asked a live chatbot a question in this period yet, so there are no charts to show. "
+            "They appear here once people start using a live chatbot.")
+    every_chatbot(F["usage"])
     st.stop()
 k = k.loc[0]
-judge = frame(f"SELECT avg(value) AS v FROM {s.fq('judge_results')} WHERE ts >= current_date() - INTERVAL {int(days)} DAYS "
-              "AND (:b = '' OR bot_id = :b)")
-guard = frame(f"SELECT rule, sum(events) AS events FROM {s.fq('v_guardrails')} WHERE day >= current_date() - INTERVAL "
-              f"{int(days)} DAYS AND (:b = '' OR bot_id = :b) GROUP BY rule ORDER BY events DESC")
-alerts = frame(f"SELECT count(*) AS n FROM {s.fq('v_alerts_open')} WHERE (:b = '' OR bot_id = :b)")
+judge, guard, alerts = F["judge"], F["guard"], F["alerts"]
 c = st.columns(8)
 c[0].metric("Questions", f"{int(k.q):,}", f"{int(k.bots)} chatbots", delta_color="off")
 c[1].metric("Cost", f"${float(k.cost or 0):,.2f}", f"${float(k.cost or 0) / k.q:.4f} per question", delta_color="off")
@@ -89,7 +164,7 @@ c[6].metric("Guardrail events", f"{int(guard.events.sum()) if not guard.empty el
 c[7].metric("Open alerts", int(alerts.loc[0, "n"]) if not alerts.empty else 0)
 
 left, right = st.columns(2)
-daily = frame(f"SELECT CAST(ts AS DATE) AS day, bot_id, count(*) AS questions, sum(cost_usd) AS cost FROM {LOG} {WHERE} GROUP BY ALL")
+daily = F["daily"]
 with left:
     st.subheader("Questions per day")
     if not daily.empty:
@@ -105,7 +180,7 @@ with right:
 left, right = st.columns(2)
 with left:
     st.subheader("Where the time goes, per step", help=help_text("flow"))
-    rows = aggregate([t["spans"] for t in load_traces(None if bot == "all" else bot, 300)])
+    rows = aggregate([t["spans"] for t in safe_traces(None if bot == "all" else bot, 300)])
     rows = sorted([r for r in rows if r["depth"] > 0], key=lambda r: -r["p95_ms"])[:8]
     if rows:
         st.bar_chart(pd.DataFrame({"typical (p50)": [r["p50_ms"] for r in rows], "slow (p95)": [r["p95_ms"] for r in rows]},
@@ -113,16 +188,14 @@ with left:
         st.caption("Milliseconds, from the last 300 traces. Open Traces for the full flow.")
 with right:
     st.subheader("Slow answers by day and hour")
-    heat = frame(f"""SELECT date_format(ts, 'E') AS weekday, dayofweek(ts) AS dow, hour(ts) AS hour,
-                     avg(CASE WHEN latency_ms > {int(float(s.get('monitoring.latency_p95_s', 12)) * 1000)} THEN 1.0 ELSE 0 END) AS slow,
-                     count(*) AS n FROM {LOG} {WHERE} GROUP BY ALL""")
+    heat = F["heat"]
     if not heat.empty:
         cell = alt.selection_point(fields=["dow", "hour", "weekday"], name="cell")
         ev = st.altair_chart(alt.Chart(heat).mark_rect(cursor="pointer").encode(
             x=alt.X("hour:O", title="Hour"), y=alt.Y("weekday:N", sort=alt.EncodingSortField("dow"), title=None),
             color=alt.Color("slow:Q", title="Share slow", scale=alt.Scale(scheme="reds")),
             tooltip=["weekday", "hour", alt.Tooltip("slow:Q", format=".1%"), "n"]).add_params(cell),
-            use_container_width=True, on_select="rerun", key="heat")
+            width="stretch", on_select="rerun", key="heat")
         st.caption(f"Share of answers slower than {s.get('monitoring.latency_p95_s', 12)} s. Workspace time zone. "
                    "Click a cell for its slow answers.")
         sel = (ev or {}).get("selection", {}).get("cell") or []
@@ -131,11 +204,11 @@ with right:
             drill(f"Slow answers, {c0['weekday']} {int(c0['hour'])}:00", sql().query(
                 f"""SELECT ts, bot_id, latency_ms, ttft_ms, outcome, trace_id FROM {LOG} {WHERE}
                     AND dayofweek(ts) = {int(c0['dow'])} AND hour(ts) = {int(c0['hour'])}
-                    AND latency_ms > {int(float(s.get('monitoring.latency_p95_s', 12)) * 1000)}
+                    AND latency_ms > {SLOW_MS}
                     ORDER BY latency_ms DESC LIMIT 5000""", P))
 
 st.subheader("Question topics, worst first", help=help_text("clusters"))
-topics = frame(f"SELECT * FROM {s.fq('v_topics')} WHERE (:b = '' OR bot_id = :b)")
+topics = F["topics"]
 if topics.empty:
     st.caption("Topics appear the day after questions are embedded by the daily drift job.")
 else:
@@ -153,8 +226,9 @@ else:
     if i is not None:
         t = topics.iloc[i]
         qs = frame(f"""SELECT r.ts, r.question, r.outcome, r.top_score, r.trace_id FROM {s.fq('question_embeddings')} e
-                       JOIN {LOG} r USING (request_id) WHERE e.bot_id = '{t.bot_id}' AND e.topic = {int(t.topic)}
-                       AND e.day >= current_date() - 28 ORDER BY r.ts DESC LIMIT 200""")
+                       JOIN {LOG} r USING (request_id) WHERE e.bot_id = :tb AND e.topic = CAST(:tt AS INT)
+                       AND e.day >= current_date() - 28 ORDER BY r.ts DESC LIMIT 200""",
+                   {"tb": str(t.bot_id), "tt": int(t.topic)})
         st.markdown(f"**{t.topic_label}** · {len(qs)} questions. Select one to open its trace.")
         j = pick(qs.drop(columns=["trace_id"]), "topic_questions")
         if j is not None and qs.trace_id.iloc[j]:
@@ -180,18 +254,16 @@ with left:
         piv["cell"] = piv.apply(lambda x: f"{x.v:.0%}" if m in ("Judges pass", "Answered") and pd.notna(x.v) else
                                 (f"${x.v:.4f}" if m == "Cost per question" else f"{x.v:,.0f}") + f" (n={int(x.n):,})", axis=1)
         st.dataframe(piv.pivot_table(index="r1", columns="c1", values="cell", aggfunc="first").fillna("—"),
-                     use_container_width=True)
+                     width="stretch")
         st.caption("Each cell shows how many answers it's based on.")
 with right:
     st.subheader("Gaps in the documents", help=help_text("search"))
-    gaps = frame(f"SELECT top_score FROM {LOG} {WHERE} AND top_score IS NOT NULL")
+    gaps = F["gaps"]
     if not gaps.empty:
-        counts = pd.cut(gaps.top_score.astype(float), bins=[i / 20 for i in range(21)]).value_counts().sort_index()
-        st.bar_chart(pd.DataFrame({"questions": counts.values}, index=[f"{b.left:.2f}" for b in counts.index]))
-        low = frame(f"""SELECT r.question, r.top_score, r.bot_id, t.topic_label, r.trace_id FROM {LOG} r
-                        LEFT JOIN {s.fq('question_embeddings')} t USING (request_id)
-                        {where('r.')}
-                        AND r.outcome = 'no_source' ORDER BY r.top_score LIMIT 10""")
+        counted = {round(float(b), 2): int(n) for b, n in zip(gaps.bucket, gaps.questions)}
+        st.bar_chart(pd.DataFrame({"questions": [counted.get(round(i / 20, 2), 0) for i in range(20)]},
+                                  index=[f"{i / 20:.2f}" for i in range(20)]))
+        low = F["low"]
         st.caption("Best search score per question (1 = exact match). Lowest-scoring unanswered questions "
                    "(select one to open its trace):")
         if not low.empty:
@@ -204,23 +276,16 @@ with right:
                 mlflow.set_tracking_uri("databricks")
                 mlflow.set_experiment(experiment_id=trace_experiment_id())
                 try:
-                    n = sum(queue_traces(cp().get_config(b), g.trace_id.dropna().tolist())
-                            for b, g in low.groupby("bot_id"))
+                    n = sum(queue_traces(bot_config(bots[b]), g.trace_id.dropna().tolist())
+                            for b, g in low.groupby("bot_id") if b in bots)
                     st.success(f"{n} question(s) queued for review.")
                 except Exception as e:  # noqa: BLE001 - Review Queues is a Beta preview
-                    st.error(f"Couldn't queue them: {str(e)[:200]}")
+                    soft("The review queue", e)
 
 left, right = st.columns(2)
 with left:
     st.subheader("Conversations")
-    conv = frame(f"""WITH t AS (SELECT conversation_id, ts, outcome,
-                        lag(outcome) OVER (PARTITION BY conversation_id ORDER BY ts) AS prev,
-                        row_number() OVER (PARTITION BY conversation_id ORDER BY ts DESC) AS last
-                     FROM {LOG} {WHERE} AND conversation_id IS NOT NULL)
-                     SELECT count(*) / count(DISTINCT conversation_id) AS per_conv,
-                            avg(CASE WHEN prev IN ('no_source', 'refused', 'unverified') THEN 1.0 ELSE 0 END) AS reasked,
-                            count_if(last = 1 AND outcome IN ('no_source', 'refused', 'blocked')) / count(DISTINCT conversation_id) AS left_after_miss
-                     FROM t""")
+    conv = F["conv"]
     if not conv.empty:
         x = conv.loc[0]
         c = st.columns(3)
@@ -239,9 +304,7 @@ with right:
                     ORDER BY ts DESC LIMIT 5000""", {**P, "r": hit}))
 
 st.subheader("Recurring problems", help=help_text("issues"))
-issues = frame(f"""SELECT bot_id, scorer, topic, failures, last_7_days, prior_7_days, latest_reason, example_traces
-                   FROM {s.fq('v_failure_patterns')} WHERE (:b = '' OR bot_id = :b)
-                   ORDER BY last_7_days DESC, failures DESC LIMIT 50""")
+issues = F["issues"]
 if issues.empty:
     st.caption("No judge failures in the last 28 days.")
 else:
@@ -256,23 +319,4 @@ else:
         if ex and ex[0].strip():
             open_trace(ex[0].strip(), "issues")
 
-st.subheader("Every chatbot")
-table = frame(f"""SELECT bot_id, count(*) AS questions, avg(CASE WHEN outcome = 'answered' THEN 1.0 ELSE 0 END) AS answered,
-                  percentile_approx(latency_ms, 0.95) / 1000 AS p95_s, sum(cost_usd) AS cost
-                  FROM {LOG} WHERE ts >= current_date() - INTERVAL {int(days)} DAYS AND channel = 'live' AND NOT synthetic
-                  GROUP BY bot_id""")
-base = pd.DataFrame([{"bot_id": b, "Chatbot": v["display_name"], "Status": STATE_LABEL.get(v["state"], v["state"]),
-                      "Owner": v.get("owner_user")} for b, v in bots.items()])
-if not base.empty:
-    allrows = base.merge(table, on="bot_id", how="left").fillna({"questions": 0}).sort_values("questions", ascending=False)
-    find = st.text_input("Search chatbots")
-    if find:
-        allrows = allrows[allrows.Chatbot.str.contains(find, case=False)]
-    per = 25
-    pages = max(1, -(-len(allrows) // per))
-    page = st.number_input(f"Page (of {pages})", 1, pages, 1)
-    st.dataframe(allrows.iloc[(page - 1) * per: page * per].drop(columns=["bot_id"]), hide_index=True,
-                 use_container_width=True, column_config={"answered": st.column_config.NumberColumn("Answered", format="percent"),
-                                                          "cost": st.column_config.NumberColumn("Cost", format="dollar"),
-                                                          "p95_s": st.column_config.NumberColumn("Slow (p95, s)", format="%.1f")})
-    st.download_button("Download CSV", allrows.to_csv(index=False), file_name=f"chatbots_{days}d.csv")
+every_chatbot(F["usage"])

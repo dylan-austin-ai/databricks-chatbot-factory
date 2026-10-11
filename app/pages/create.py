@@ -12,13 +12,14 @@ from html import escape as esc
 import pandas as pd
 import streamlit as st
 
-from common import (STATE_LABEL, all_groups, app_client, check_emails, cp, current_user, docs, is_owner,
-                    remember_upload, run_job, settings, show_upload_report, sql, user_groups)
+from common import (STATE_LABEL, all_bots, all_groups, app_client, bot_config, check_emails, cp, current_user, docs,
+                    is_owner, remember_upload, run_job, settings, show_upload_report, sql, technical_details, user_groups)
 from factory.config import EVERYONE, MAX_TESTERS, BotConfig
 from factory.explain import help_text
 from factory.guardrails import platform_rules
 from factory.lifecycle import State
 from factory.naming import NamingError, validate
+from factory.problems import describe
 from factory.ingestion import BotPaths
 from factory.provisioning import Provisioner
 from factory.wizard import UNFINISHED_STATES, answers_from_config
@@ -35,6 +36,27 @@ FAST_DEFAULTS = {"access_mode": "restricted", "channel": "chat", "sensitivity": 
                  "traffic_alerts": True, "testers": [], "business_function": "Other"}
 
 s = settings()
+created = st.session_state.get("created")
+if created:  # just created: nothing but what happens next
+    st.title(f"{created['name']} is being built")
+    st.success("Your answers and documents are saved. You don't need to stay on this page.")
+    st.markdown(
+        "**What happens now**\n"
+        "1. **The next 10 minutes or so:** the chatbot is set up and your documents are read. There is nothing "
+        "for you to do.\n"
+        "2. **Then it's your turn:** open **Documents**, choose **Review a document** and approve the documents "
+        "that were read correctly.\n"
+        "3. **After that:** approve the test questions written for you, run the quality check and send the "
+        "chatbot for approval.\n\n"
+        "You don't have to remember this: **Home** always shows the next step for each of your chatbots.")
+    show_upload_report(created["bot_id"])
+    c1, c2, c3 = st.columns(3)
+    c1.page_link("pages/home.py", label="Go to Home", icon=":material/home:")
+    c2.page_link("pages/documents.py", label="Go to Documents", icon=":material/description:")
+    if c3.button("Create another chatbot"):
+        st.session_state.pop("created")
+        st.rerun()
+    st.stop()
 w = st.session_state.setdefault("wizard", {"step": 0})
 
 
@@ -75,6 +97,10 @@ def create(cfg: BotConfig) -> None:
     try:
         with st.status("Creating workspace…", expanded=True) as status:
             existing = control.get_bot(cfg.bot_id)
+            if existing and w.get("resume") != cfg.bot_id:  # someone took the name since it was checked
+                st.error(f"A chatbot called **{cfg.display_name}** was created a moment ago, so that name is no "
+                         "longer free. Go back, change the name slightly and press **Create chatbot** again.")
+                st.stop()
             control.save_config(cfg, user, "setup resumed" if existing else "created",
                                 state=None if existing else State.DRAFT.value)
             w["resume"] = cfg.bot_id  # restore point: from here the wizard continues this chatbot
@@ -92,16 +118,26 @@ def create(cfg: BotConfig) -> None:
             run_job("provision", bot_id=cfg.bot_id, actor=user)
             status.update(label="Your chatbot is being built", state="complete")
     except Exception as e:  # noqa: BLE001 - keep the answers and say how to carry on
-        st.error(f"Setup stopped before it finished: {type(e).__name__}: {str(e)[:400]}")
-        st.info("Your answers are saved. Change anything that needs fixing and press **Create chatbot** "
-                "again; steps that already finished are skipped. If you leave this page, the chatbot is "
-                "listed under **Unfinished chatbots** on **Create a chatbot**.")
+        problem = describe(e)
+        st.error(f"**Setup stopped before it finished.** {problem.what}")
+        later = ("If you leave this page, the chatbot is listed under **Unfinished chatbots** on **Create "
+                 "chatbot**, where you can carry on.")
+        if problem.who == "mlops":  # pressing the button again won't help
+            st.markdown("**What to do:** nothing you entered is lost, but this needs MLOps. Open **Show technical "
+                        "details** below, copy the text and send it to them. When they have fixed it, press "
+                        f"**Create chatbot** again: the steps that already finished are skipped. {later}")
+        else:
+            st.markdown("**What to do:** nothing you entered is lost. Press **Create chatbot** again: the steps "
+                        "that already finished are skipped. If it stops a second time, open **Show technical "
+                        f"details**, copy the text and send it to MLOps. {later}")
+        with st.expander("Show technical details"):
+            technical_details("creating a chatbot", e)
         st.stop()
     st.session_state["bot_id"] = cfg.bot_id
+    st.session_state["docs_bot_id"] = cfg.bot_id
     st.session_state.pop("wizard", None)
-    show_upload_report(cfg.bot_id)
-    st.page_link("pages/documents.py", label="Next: check your documents", icon=":material/description:")
-    st.stop()
+    st.session_state["created"] = {"bot_id": cfg.bot_id, "name": cfg.display_name}
+    st.rerun()   # the form is finished with: show only what happens next
 
 
 def name_fields(problems: list[str]) -> None:
@@ -120,7 +156,8 @@ def name_fields(problems: list[str]) -> None:
                                 placeholder="Answers adjusters' questions about claims procedures.",
                                 help=help_text("purpose"))
     try:
-        w["bot_id"] = validate(w["display_name"], cp().existing_bot_ids()) if w["display_name"] else ""
+        taken = {b["bot_id"] for b in all_bots(include_deleted=True)}  # checked again, fresh, on Create
+        w["bot_id"] = validate(w["display_name"], taken) if w["display_name"] else ""
         if w["bot_id"]:
             st.caption(f"Technical name: `{w['bot_id']}` (can't be changed later)")
     except NamingError as e:
@@ -141,7 +178,7 @@ def upload(label: str) -> None:
         exp = w.setdefault("expiry", {})
         table = st.data_editor(pd.DataFrame({"Document": list(w["files"]),
                                              "Expires on": [exp.get(n) for n in w["files"]]}),
-                               hide_index=True, use_container_width=True, disabled=["Document"],
+                               hide_index=True, width="stretch", disabled=["Document"],
                                column_config={"Expires on": st.column_config.DateColumn(
                                    "Expires on (empty = valid until replaced)", min_value=dt.date.today())})
         w["expiry"] = {r["Document"]: r["Expires on"] for _, r in table.iterrows() if pd.notna(r["Expires on"])}
@@ -205,6 +242,12 @@ def resuming() -> None:
         st.rerun()
 
 
+def still_needed(problems: list[str]) -> None:
+    """What is missing before the next button works, as one calm list instead of a wall of red."""
+    if problems:
+        st.warning("**Before you can continue:**\n" + "\n".join(f"- {p}" for p in problems))
+
+
 def has_documents() -> bool:
     """Files chosen now, or already stored for a chatbot whose setup is being resumed."""
     return bool(w.get("files")) or bool(w.get("resume") and saved_documents(w["resume"]))
@@ -216,7 +259,7 @@ if not w.get("mode"):
     resuming()
     if w.get("resume"):
         st.caption("Pick a path below to carry on. Either one keeps the answers you already gave.")
-    unfinished = [b for b in cp().list_bots() if b["state"] in UNFINISHED_STATES and is_owner(b)
+    unfinished = [b for b in all_bots() if b["state"] in UNFINISHED_STATES and is_owner(b)
                   and b["bot_id"] != w.get("resume")]
     if unfinished:
         with st.container(border=True):
@@ -227,7 +270,7 @@ if not w.get("mode"):
                 c1.markdown(f"**{b['display_name']}** `{b['bot_id']}`  \n"
                             f"{STATE_LABEL.get(b['state'], b['state'])} · {b['owner_user']}")
                 if c2.button("Continue setup", key=f"resume_{b['bot_id']}", type="primary"):
-                    st.session_state["wizard"] = answers_from_config(cp().get_config(b["bot_id"]))
+                    st.session_state["wizard"] = answers_from_config(bot_config(b))
                     st.rerun()
     st.write("Choose how much you want to set up yourself. You can switch at any time and change any setting later.")
     a, b = st.columns(2)
@@ -281,13 +324,12 @@ if w["mode"] == "fast":
     if not has_documents():
         problems.append("Upload at least one document.")
     problems += [] if problems else cfg.validate()
-    for p in problems:
-        st.error(p)
+    still_needed(problems)
     c1, _, c2 = st.columns([1, 3, 1])
-    if c1.button("Back", use_container_width=True):
+    if c1.button("Back", width="stretch"):
         w["mode"] = None
         st.rerun()
-    if c2.button("Create chatbot", type="primary", use_container_width=True, disabled=bool(problems)):
+    if c2.button("Create chatbot", type="primary", width="stretch", disabled=bool(problems)):
         create(cfg)
     st.stop()
 
@@ -302,16 +344,15 @@ steps(w["step"], STEPS)
 
 
 def nav(problems: list[str]) -> None:
-    for p in problems:
-        st.error(p)
+    still_needed(problems)
     c1, _, c2 = st.columns([1, 3, 1])
-    if c1.button("Back", use_container_width=True):
+    if c1.button("Back", width="stretch"):
         if w["step"] == 0:
             w["mode"] = None
         else:
             w["step"] -= 1
         st.rerun()
-    if w["step"] < len(STEPS) - 1 and c2.button("Next", type="primary", use_container_width=True,
+    if w["step"] < len(STEPS) - 1 and c2.button("Next", type="primary", width="stretch",
                                                 disabled=bool(problems)):
         w["step"] += 1
         st.rerun()
@@ -435,13 +476,12 @@ else:  # Alerts and review (budgets are set by MLOps in Admin, WIZ-13)
                 w["step"] = i
                 st.rerun()
     problems = cfg.validate()
-    for p in problems:
-        st.error(p)
+    still_needed(problems)
     c1, _, c2 = st.columns([1, 3, 1])
-    if c1.button("Back", use_container_width=True):
+    if c1.button("Back", width="stretch"):
         w["step"] -= 1
         st.rerun()
-    if c2.button("Create chatbot", type="primary", use_container_width=True, disabled=bool(problems)):
+    if c2.button("Create chatbot", type="primary", width="stretch", disabled=bool(problems)):
         create(cfg)
     st.stop()
 

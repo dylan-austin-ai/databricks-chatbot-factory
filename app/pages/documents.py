@@ -55,7 +55,7 @@ if choice == ALL_BOTS:
         shown = [r for r in found if r["Status"] in keep
                  and (not find or find in r["Document"].lower() or find in r["Chatbot"].lower())]
         st.dataframe(sorted(shown, key=lambda r: (r["Chatbot"], r["Document"])), hide_index=True,
-                     use_container_width=True)
+                     width="stretch")
     else:
         st.info("No documents yet.")
     if waiting_setup:
@@ -139,7 +139,7 @@ if section == "Add documents":
                 st.caption("Someone tried to add these and they were refused, and no file with that name has been "
                            "added since. Fix the problem and upload them again above.")
                 st.dataframe([{"File": m["file_name"], "Why": " ".join(m["reasons"]), "Tried by": m["by"],
-                               "When": str(m["when"])[:16]} for m in missing], hide_index=True, use_container_width=True)
+                               "When": str(m["when"])[:16]} for m in missing], hide_index=True, width="stretch")
 
 elif section == "Curate documents":
     with st.container(border=True):
@@ -184,7 +184,7 @@ elif section == "Curate documents":
             st.info("No documents in this view.")
         else:
             edited = st.data_editor(
-                table, hide_index=True, use_container_width=True, height=420,  # scrolls when long
+                table, hide_index=True, width="stretch", height=420,  # scrolls when long
                 # A fresh key after every action clears the ticks: the rows change, and old ticks would
                 # otherwise land on different documents.
                 key=f"manage_{show}_{st.session_state.setdefault('manage_round', 0)}",
@@ -437,7 +437,7 @@ if view == "What the chatbot sees":
                     ImageDraw.Draw(shade).rectangle([x1, y1, x2, y2], fill=(255, 221, 0, 70), outline=(220, 0, 0, 255),
                                                     width=max(4, img.width // 200))
                     img = Image.alpha_composite(img, shade)
-                left.image(img.convert("RGB"), use_container_width=True, output_format="JPEG")
+                left.image(img.convert("RGB"), width="stretch", output_format="JPEG")
                 left.caption(f"Original page {page + 1}. " + (f"The shaded red box is block {pick + 1}."
                                                               if marked else "This block has no position on the page."))
             except Exception as e:  # noqa: BLE001

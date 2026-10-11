@@ -164,7 +164,7 @@ class BotConfig:
             problems.append("Access must be 'people in my organization' or 'through another app'.")
         if self.access_mode == "middleware" and self.sensitivity != "public":
             problems.append("Chatbots reached through another app can only use Public documents "
-                            "until document-level access is available (GOV-9).")
+                            "until document-level access is available.")
         if self.access_mode == "restricted" and not self.allowed_principals:
             problems.append("Pick at least one group or person who can use the chatbot.")
         if not self.owner_user or not self.owner_group:
@@ -177,7 +177,7 @@ class BotConfig:
             problems.append("Conversation history must be off, session-only, or saved.")
         if self.identity_mode == "pseudonymous" and self.history_mode == "saved":
             problems.append("Saved conversation history isn't available when identities are "
-                            "pseudonymous (CNV-1).")
+                            "pseudonymous.")
         if len(self.testers) > MAX_TESTERS:
             problems.append(f"You can invite up to {MAX_TESTERS} testers.")
         if self.budget_action not in {"continue", "pause"}:
