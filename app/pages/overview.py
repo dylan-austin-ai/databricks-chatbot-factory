@@ -8,8 +8,8 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from common import (STATE_LABEL, all_bots, app_client, bot_config, is_admin, safe_traces, read_many, settings, soft,
-                    sql, trace_experiment_id)
+from common import (STATE_LABEL, all_bots, app_client, bot_config, is_admin, open_alerts, safe_traces, read_many,
+                    settings, soft, sql, trace_experiment_id)
 from factory.explain import help_text
 from factory.flow import aggregate
 from ui import clickable_bars, drill, fresh
@@ -107,7 +107,6 @@ BATCH = {
     "judge": f"SELECT avg(value) AS v FROM {s.fq('judge_results')} WHERE ts >= {SINCE} AND (:b = '' OR bot_id = :b)",
     "guard": f"""SELECT rule, sum(events) AS events FROM {s.fq('v_guardrails')} WHERE day >= {SINCE}
                  AND (:b = '' OR bot_id = :b) GROUP BY rule ORDER BY events DESC""",
-    "alerts": f"SELECT count(*) AS n FROM {s.fq('v_alerts_open')} WHERE (:b = '' OR bot_id = :b)",
     "daily": f"SELECT CAST(ts AS DATE) AS day, bot_id, count(*) AS questions, sum(cost_usd) AS cost FROM {LOG} {WHERE} GROUP BY ALL",
     "heat": f"""SELECT date_format(ts, 'E') AS weekday, dayofweek(ts) AS dow, hour(ts) AS hour,
                 avg(CASE WHEN latency_ms > {SLOW_MS} THEN 1.0 ELSE 0 END) AS slow, count(*) AS n
@@ -138,7 +137,7 @@ BATCH = {
 found, failed = read_many({name: (query, P) for name, query in BATCH.items()})
 F = {name: numeric(rows) for name, rows in found.items()}
 WHAT = {"headline": "The headline numbers", "judge": "Judge pass rates", "guard": "Guardrail counts",
-        "alerts": "The open alert count", "daily": "Questions and cost per day", "heat": "Slow answers by hour",
+        "daily": "Questions and cost per day", "heat": "Slow answers by hour",
         "topics": "Question topics", "gaps": "Search scores", "low": "Unanswered questions",
         "conv": "Conversation numbers", "issues": "Recurring problems", "usage": "Usage per chatbot"}
 for name, error in failed.items():
@@ -151,7 +150,12 @@ if k.empty or not k.loc[0, "q"]:
     every_chatbot(F["usage"])
     st.stop()
 k = k.loc[0]
-judge, guard, alerts = F["judge"], F["guard"], F["alerts"]
+judge, guard = F["judge"], F["guard"]
+try:  # alerts that are still true, for the chatbot chosen or all of them
+    n_alerts = len([a for a in open_alerts() if bot == "all" or a["bot_id"] == bot])
+except Exception as e:  # noqa: BLE001
+    n_alerts = 0
+    soft("The open alert count", e)
 c = st.columns(8)
 c[0].metric("Questions", f"{int(k.q):,}", f"{int(k.bots)} chatbots", delta_color="off")
 c[1].metric("Cost", f"${float(k.cost or 0):,.2f}", f"${float(k.cost or 0) / k.q:.4f} per question", delta_color="off")
@@ -161,7 +165,7 @@ c[3].metric("Judges pass", f"{float(judge.loc[0, 'v']):.0%}" if not judge.empty 
 c[4].metric("Slow answers (p95)", f"{float(k.p95 or 0) / 1000:.1f}s")
 c[5].metric("First token (p95)", f"{float(k.ttft or 0) / 1000:.1f}s" if k.ttft else "—")
 c[6].metric("Guardrail events", f"{int(guard.events.sum()) if not guard.empty else 0:,}", help=help_text("guardrails"))
-c[7].metric("Open alerts", int(alerts.loc[0, "n"]) if not alerts.empty else 0)
+c[7].metric("Open alerts", n_alerts)
 
 left, right = st.columns(2)
 daily = F["daily"]

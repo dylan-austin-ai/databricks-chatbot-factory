@@ -99,8 +99,6 @@ ALERT_ADVICE: dict[str, str] = {
               "document**.",
     "question_drift": "People are asking about different things than at launch. Open **Monitoring**, choose "
                       "**Question drift** to see the new topics, and add documents that cover them.",
-    "drift": "The mix of questions or answers changed noticeably. Open **Monitoring** and choose **Retrieval** to "
-             "see what moved.",
     "quality_drop": "Fewer answers are passing the quality checks. Open **Monitoring** and choose **Quality** to "
                     "see which check is failing. The usual cause is a document that is out of date or missing.",
     "guardrail_spike": "Safety checks are stepping in more often than usual. Open **Monitoring** and choose "
@@ -154,3 +152,93 @@ def check_advice(failure: str) -> str:
         if re.search(pattern, failure or "", re.I):
             return advice
     return "Run the quality check again. If the same line comes back, send it to MLOps."
+
+
+def brief(error: BaseException, limit: int = 200) -> str:
+    """An error as one short line, for an alert or a log: its type and the first line of its
+    message. A database error can run to pages (the whole statement, a stack trace), and none of
+    that belongs in an alert that is emailed and shown on a page."""
+    first = next((line.strip() for line in str(error).splitlines() if line.strip()), "")
+    text = f"{type(error).__name__}: {first}" if first else type(error).__name__
+    return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
+
+
+def one_line(text: str | None, limit: int = 240) -> str:
+    """Stored text squeezed onto one line and cut to a readable length."""
+    flat = " ".join((text or "").split())
+    return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
+
+
+ALERT_LABEL: dict[str, str] = {
+    "availability": "Not reachable", "latency": "Slow answers", "error_rate": "Failing questions",
+    "harmful_output": "Answer flagged", "traffic_low": "Quieter than usual", "traffic_high": "Busier than usual",
+    "idle": "Not being used", "budget": "Budget", "expiry": "Document expiring", "question_drift": "New topics",
+    "drift": "Changed outside the app", "quality_drop": "Quality dropped", "guardrail_spike": "Safety checks busy",
+    "eval_regression": "Quality check failed", "provision_failed": "Setup stopped",
+    "smoke_failed": "New version not published", "alert_setup_failed": "Email alerts not set up",
+    "integrity": "Search index not updated", "runtime_publish_failed": "Settings not delivered",
+}
+
+# Kinds whose stored message is an error written by a machine. People are shown this sentence
+# instead; the stored message stays on the Admin page for whoever fixes it.
+ALERT_PLAIN: dict[str, str] = {
+    "provision_failed": "Setting up this chatbot stopped part-way.",
+    "alert_setup_failed": "Email alerts for this chatbot couldn't be set up automatically.",
+    "runtime_publish_failed": "This chatbot's latest settings couldn't be delivered to the answering service, "
+                              "so it is still using the previous ones.",
+    "integrity": "A check on this chatbot's sections failed, so its search index was not updated.",
+    "availability": "The chatbot couldn't be reached, or it failed a routine test question.",
+}
+
+# Kinds the chatbot's owner can do something about. Everything else is for MLOps.
+OWNER_ACTS = frozenset({"harmful_output", "traffic_low", "idle", "expiry", "question_drift", "quality_drop",
+                        "guardrail_spike", "eval_regression", "smoke_failed", "provision_failed"})
+
+# What MLOps should do about the kinds that are theirs.
+ALERT_MLOPS: dict[str, str] = {
+    "availability": "Check the agent's serving endpoint (state and recent events). An endpoint waking from "
+                    "zero clears on its own; a failed test question has its reason in the recorded message.",
+    "latency": "Check the load on the serving endpoint and the rate limits on the answer model service.",
+    "error_rate": "Open **All chatbots**, filter to this chatbot and open the failing questions' traces.",
+    "traffic_high": "Check that it is expected (a launch, a campaign) and keep an eye on cost.",
+    "budget": "Raise the budget under **Chatbots** if the spending is expected. At 100% the chatbot pauses if "
+              "it is set to.",
+    "drift": "Someone changed this chatbot's tables outside the app. The recorded message names the table and "
+             "who: revoke the grant or drop the table.",
+    "provision_failed": "Open **Launch** for this chatbot: the failed step is marked there, and **Try again** "
+                        "re-runs it. The recorded message says why it failed.",
+    "alert_setup_failed": "The email alerts for this chatbot don't exist yet. Press **Try setting them up "
+                          "again**. If it fails again the recorded message says why (usually the jobs' "
+                          "principal may not create SQL alerts).",
+    "integrity": "Duplicate or empty sections were found. Re-read the affected documents (Documents, **Fix a "
+                 "problem**) and the next update of the test version will try again.",
+    "runtime_publish_failed": "Check that the app's service principal can write to the runtime volume, then "
+                              "save any setting for this chatbot again.",
+}
+
+
+def alert_text(kind: str, message: str | None) -> str:
+    """What to show for an alert: a plain sentence where the stored message is machine text,
+    otherwise the stored message on one line."""
+    return ALERT_PLAIN.get(kind) or one_line(message)
+
+
+def mlops_advice(kind: str) -> str:
+    return ALERT_MLOPS.get(kind) or alert_advice(kind)
+
+
+def group_alerts(alerts: list[dict]) -> list[dict]:
+    """Alerts (newest first) with repeats folded together: one entry per chatbot and kind, with
+    how many times it was raised and everything a page needs to show it."""
+    groups: dict[tuple, dict] = {}
+    for a in alerts:
+        key = (a.get("bot_id"), a.get("kind"))
+        if key not in groups:
+            kind = a.get("kind") or ""
+            groups[key] = {"bot_id": a.get("bot_id"), "kind": kind, "count": 0, "latest": a,
+                           "severity": a.get("severity"),
+                           "label": ALERT_LABEL.get(kind, kind.replace("_", " ").capitalize()),
+                           "text": alert_text(kind, a.get("message")), "for_owner": kind in OWNER_ACTS,
+                           "advice": alert_advice(kind), "mlops_advice": mlops_advice(kind)}
+        groups[key]["count"] += 1
+    return list(groups.values())

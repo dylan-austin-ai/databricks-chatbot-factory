@@ -43,7 +43,7 @@ failure. `releases`, `release_chunks` and `index_history` reconstruct the index 
 | `jobs/` | setup_platform, setup_observability, provision, ingest (+ per-bot file-arrival triggers), compare_strategies, run_evals (`mlflow.genai.evaluate`), promote, monitor, prod_judging, drift, optimize_prompt, reindex, git_sync, maintenance |
 | `sql/` | Control-plane DDL, per-bot DDL, dashboard views, ABAC governance, metric views, system-table cost views |
 | `resources/`, `databricks.yml` | Declarative Automation Bundle (qa and prod targets, direct deployment engine) |
-| `tests/` | 248 unit tests for the pure logic, and 54 that run every page of the app against a pretend workspace (these need the `app` extra) |
+| `tests/` | 259 unit tests for the pure logic, and 61 that run every page of the app against a pretend workspace (these need the `app` extra) |
 
 ## Prerequisites
 
@@ -133,6 +133,13 @@ failed quality check into what it means and what to do; the technical text is ke
 away, for whoever it is sent to. A part of a page that can't be loaded costs that part, not
 the page.
 
+Alerts say what is true now. Every check raises its alert again each period for as long as it
+keeps finding the problem, so an alert that hasn't been raised again for a day or two (or whose
+chatbot has since finished setup) no longer counts as open (`monitoring.alert_is_current`); the
+monitor job and the Admin page close those. Alert messages are one plain line
+(`problems.brief`); owners see a sentence about what to do, and only for alerts they can act
+on. The rest is one quiet line for them and a list for MLOps under Admin, section Alerts.
+
 Streamlit runs a page again on every click, so the app avoids asking twice:
 
 - Page reads are remembered for 30 seconds (`READ_TTL` in `app/common.py`) and forgotten on any
@@ -143,6 +150,9 @@ Streamlit runs a page again on every click, so the app avoids asking twice:
   statement (`across_bots`).
 - Pages with sections (Documents review, Monitoring, Admin) load only the open section.
 - Writes are batched: a batch of rows travels as one JSON parameter (`factory.sql.json_rows`).
+  UPDATE and DELETE pick their rows with a plain parameter list (`factory.sql.in_list`), never
+  a subquery. Admin, section Setup checklist has a button that checks the warehouse accepts the
+  batched form.
 - A background job is not queued again when an identical run is still waiting to start
   (`factory/jobruns.py`); the ingest job runs one at a time for the whole platform.
 

@@ -3,13 +3,15 @@ links to the MLflow traces and the Databricks drift dashboard.
 
 Works at both levels: "All my chatbots" compares them side by side so the one that needs
 attention stands out; choosing one chatbot opens its charts."""
+from collections import Counter
+
 import altair as alt
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1  # noqa: F401 - embedded dashboard
 
-from common import (METRIC_LABEL, OUTCOME_LABEL, app_client, drift_dashboard_id, is_admin, my_bots, pick_bot,
-                    read_many, settings, soft, sql, trace_experiment_id)
+from common import (METRIC_LABEL, OUTCOME_LABEL, app_client, drift_dashboard_id, is_admin, my_bots, open_alerts,
+                    pick_bot, read_many, settings, soft, sql, trace_experiment_id)
 from factory.explain import help_text
 from factory.sql import json_rows
 from ui import clickable_bars, drill, html, pill, target_chart
@@ -44,11 +46,13 @@ if scope == ALL:
                              percentile_approx(p95_latency_ms, 0.5) / 1000 AS slow_s
                       FROM {s.fq('v_observability_daily')}
                       WHERE day >= current_date() - INTERVAL {int(days)} DAYS AND bot_id IN (SELECT bot_id FROM {source})
-                      GROUP BY bot_id""", params),
-        "alerts": (f"SELECT bot_id, count(*) AS alerts FROM {s.fq('v_alerts_open')} "
-                   f"WHERE bot_id IN (SELECT bot_id FROM {source}) GROUP BY bot_id", params)})
+                      GROUP BY bot_id""", params)})
     usage = {r["bot_id"]: r for r in found["usage"]}
-    open_alerts = {r["bot_id"]: int(r["alerts"]) for r in found["alerts"]}
+    try:  # alerts that are still true, counted per chatbot
+        alert_count = Counter(a["bot_id"] for a in open_alerts())
+    except Exception as e:  # noqa: BLE001
+        alert_count = Counter()
+        failed["alerts"] = e
 
     def look_at(row: dict | None, alerts: int) -> str:
         """The first thing worth the owner's attention for one chatbot, in plain words."""
@@ -68,8 +72,8 @@ if scope == ALL:
         "Answered": float((usage.get(b["bot_id"]) or {}).get("answered") or 0) if b["bot_id"] in usage else None,
         "Not in documents": float((usage.get(b["bot_id"]) or {}).get("not_covered") or 0) if b["bot_id"] in usage else None,
         "Slow answers (seconds)": float((usage.get(b["bot_id"]) or {}).get("slow_s") or 0) if b["bot_id"] in usage else None,
-        "Open alerts": open_alerts.get(b["bot_id"], 0),
-        "What to look at": look_at(usage.get(b["bot_id"]), open_alerts.get(b["bot_id"], 0)),
+        "Open alerts": alert_count.get(b["bot_id"], 0),
+        "What to look at": look_at(usage.get(b["bot_id"]), alert_count.get(b["bot_id"], 0)),
         "bot_id": b["bot_id"]} for b in live]).sort_values(["Open alerts", "Questions"], ascending=False)
     st.caption(f"Your {len(live)} live chatbot(s) over the last {days} days. **Select a row** to open that chatbot's "
                "charts. The last column says what, if anything, needs a look.")

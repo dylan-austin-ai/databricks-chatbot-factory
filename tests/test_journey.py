@@ -126,10 +126,14 @@ def test_every_alert_the_platform_raises_comes_with_advice():
         raised |= set(re.findall(r"""\balert\(\s*[\w.\[\]"']+,\s*"([a-z_]+)\"""", path.read_text()))
         raised |= set(re.findall(r"""Alert\(\w+,\s*"([a-z_]+)\"""", path.read_text()))
     assert {"availability", "expiry", "quality_drop", "smoke_failed"} <= raised
-    platform_only = {"alert_setup_failed", "integrity", "runtime_publish_failed"}
-    assert raised - platform_only <= set(problems.ALERT_ADVICE), raised - platform_only - set(problems.ALERT_ADVICE)
+    # every kind has a plain name; owners get advice for theirs, MLOps for the rest
+    assert raised <= set(problems.ALERT_LABEL), raised - set(problems.ALERT_LABEL)
+    assert problems.OWNER_ACTS <= set(problems.ALERT_ADVICE)
+    for kind in raised - problems.OWNER_ACTS:
+        assert kind in problems.ALERT_MLOPS or kind in problems.ALERT_ADVICE, kind
     assert "nothing for you to do" in problems.alert_advice("integrity")
     assert "Documents" in problems.alert_advice("expiry")
+    assert "outside the app" in problems.mlops_advice("drift")      # this one is about tables, not questions
 
 
 def test_every_way_the_quality_check_can_fail_comes_with_advice(settings):

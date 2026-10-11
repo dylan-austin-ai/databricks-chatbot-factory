@@ -237,6 +237,8 @@ for bot in bots:
     if not gate.passed and channel == "live" and not a.limit:
         cp.alert(cfg.bot_id, "eval_regression", "high", "; ".join(gate.failures),
                  dedupe_key=f"eval:{cfg.bot_id}:{release_id}:{PLATFORM_VERSION}")
+    elif channel == "live" and not a.limit:
+        cp.resolve_alerts(cfg.bot_id, "eval_regression")
     print(cfg.bot_id, channel, "PASSED" if gate.passed else "FAILED", metrics, zero, gate.failures)
     if a.limit and not gate.passed:  # the promote job treats a failed smoke test as a failure
         raise SystemExit(f"Smoke test failed for {cfg.bot_id}: {gate.failures}")

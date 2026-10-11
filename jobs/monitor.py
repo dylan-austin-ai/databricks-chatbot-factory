@@ -203,4 +203,6 @@ if daily_due:
         for al in monitoring.expiry_notices(b["bot_id"], docs, int(mon.get("expiry_lead_days", 30)), today):
             cp.alert(al.bot_id, al.kind, al.severity, al.message, al.dedupe_key, True)
 
+# 5. Alerts whose cause has gone away are closed, so the app and the emails only show what is true now.
+print(f"Closed {cp.clear_stale_alerts()} alert(s) that no longer apply")
 print(f"Monitor run complete at {now.isoformat()}")

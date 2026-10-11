@@ -215,6 +215,11 @@ def all_bots(include_deleted: bool = False) -> list[dict]:
     return ControlPlane(sql(), settings()).list_bots(include_deleted)
 
 
+def open_alerts() -> list[dict]:
+    """Alerts that are unresolved and still true, newest first (a remembered read)."""
+    return ControlPlane(sql(), settings()).open_alerts()
+
+
 def bot_config(bot: dict) -> BotConfig:
     """A chatbot's configuration from its row, without asking the warehouse for it again."""
     return BotConfig.from_dict(json.loads(bot["config_json"]))

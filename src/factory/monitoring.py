@@ -27,6 +27,52 @@ class Alert:
         return self.kind in REQUIRED_KINDS
 
 
+# Every check that keeps finding a problem raises its alert again each period (15 minutes, a day
+# or a month, see the dedupe keys). An alert that hasn't been raised again for this many hours is
+# about something that has stopped, so it no longer counts as open.
+ALERT_HOURS = {"question_drift": 48, "quality_drop": 48, "guardrail_spike": 48, "drift": 48, "eval_regression": 48,
+               "smoke_failed": 7 * 24, "integrity": 7 * 24, "idle": 31 * 24,
+               "alert_setup_failed": 30 * 24}   # stays until the setup works; closed then
+DEFAULT_ALERT_HOURS = 24
+GONE = ("archived", "deleted", "purged")
+
+
+def alert_is_current(kind: str, bot_state: str | None, age_hours: float, this_month: bool = True,
+                     has_bot: bool = True, expiry_lead_days: int = 30) -> bool:
+    """Whether an unresolved alert still describes something true. Nothing closes an alert when
+    its cause goes away, so this decides it: the chatbot's state for setup failures, the calendar
+    month for budgets, and otherwise how long ago it was last raised."""
+    if has_bot and bot_state in GONE:
+        return False                                  # nobody can act on it any more
+    if kind == "provision_failed":
+        return bot_state == "provision_failed"        # setup has since finished, or been retried
+    if kind == "budget":
+        return this_month
+    hours = (expiry_lead_days + 1) * 24 if kind == "expiry" else ALERT_HOURS.get(kind, DEFAULT_ALERT_HOURS)
+    return age_hours < hours
+
+
+def unresolved_alerts_sql(settings) -> str:
+    """Every unresolved alert with what alert_is_current needs: the chatbot's state, the alert's
+    age by the warehouse's own clock, and whether it was raised this month. Newest first."""
+    return f"""SELECT a.*, b.state AS bot_state,
+                      (unix_timestamp(current_timestamp()) - unix_timestamp(a.ts)) / 3600.0 AS age_hours,
+                      date_trunc('MONTH', a.ts) = date_trunc('MONTH', current_timestamp()) AS this_month
+               FROM {settings.fq('alerts')} a LEFT JOIN {settings.fq('bots')} b ON a.bot_id = b.bot_id
+               WHERE NOT coalesce(a.resolved, false) ORDER BY a.ts DESC LIMIT 2000"""
+
+
+def split_alerts(rows: list[dict], expiry_lead_days: int = 30) -> tuple[list[dict], list[dict]]:
+    """Rows from unresolved_alerts_sql as (still current, no longer true)."""
+    current, stale = [], []
+    for r in rows:
+        keep = alert_is_current(r.get("kind") or "", r.get("bot_state"), float(r.get("age_hours") or 0),
+                                str(r.get("this_month")).lower() != "false", bool(r.get("bot_id")),
+                                expiry_lead_days)
+        (current if keep else stale).append(r)
+    return current, stale
+
+
 def _parse_window_edge(spec: str) -> tuple[int, int, ZoneInfo]:
     clock, tz = spec.split()
     hh, mm = (int(x) for x in clock.split(":"))

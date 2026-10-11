@@ -12,6 +12,7 @@ from typing import Callable
 from .config import BotConfig, PlatformSettings
 from .controlplane import ControlPlane, render
 from .ingestion import BotPaths
+from .problems import brief
 from .sql import SqlRunner, ident, run_lanes
 
 
@@ -62,8 +63,10 @@ class Provisioner:
                 continue
             progress(PROGRESS_MESSAGES.get(step, step))
             try:
-                getattr(self, step)(cfg)
-                self._record(cfg.bot_id, step, "done")
+                # A step that returns False failed without stopping setup. It is recorded as
+                # failed, not done, so the next run tries it again.
+                worked = getattr(self, step)(cfg) is not False
+                self._record(cfg.bot_id, step, "done" if worked else "failed", "" if worked else "see alerts")
             except Exception as e:  # noqa: BLE001 - recorded and re-raised
                 self._record(cfg.bot_id, step, "failed", repr(e))
                 self.cp.audit(actor, cfg.bot_id, "provision_failed", step, {"error": repr(e)})
@@ -193,16 +196,26 @@ class Provisioner:
             columns_to_sync=INDEX_COLUMNS,
         )
 
-    def create_alerts(self, cfg: BotConfig) -> None:
-        """Email alerts for the owner (OBS-5). Never blocks provisioning."""
+    def create_alerts(self, cfg: BotConfig) -> bool | None:
+        """Email alerts for the owner (OBS-5). Never blocks provisioning: on failure it raises an
+        alert for MLOps and returns False, so the step is tried again next time."""
         if self.w is None:
-            return
+            return None
         try:
             from .alerting import ensure_bot_alerts
             ensure_bot_alerts(self.w, self.s, cfg, self.s.get("warehouse_id"))
         except Exception as e:  # noqa: BLE001
             self.cp.alert(cfg.bot_id, "alert_setup_failed", "medium",
-                          f"Email alerts could not be set up automatically ({e}); MLOps will set them up.")
+                          f"Email alerts could not be set up automatically ({brief(e)}).", replace=True)
+            return False
+        self.cp.resolve_alerts(cfg.bot_id, "alert_setup_failed")
+        return True
+
+    def retry_alerts(self, cfg: BotConfig) -> bool:
+        """Try the email-alert setup again for a chatbot where it failed, and record the outcome."""
+        worked = self.create_alerts(cfg) is not False
+        self._record(cfg.bot_id, "create_alerts", "done" if worked else "failed", "" if worked else "see alerts")
+        return worked
 
 
 INDEX_COLUMNS = ["chunk_id", "bot_id", "doc_id", "doc_version", "doc_name", "source_uri",

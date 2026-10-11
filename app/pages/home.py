@@ -9,8 +9,9 @@ import streamlit as st
 from common import (PAGES, STATE_LABEL, bot_progress, current_user, is_admin, my_bots, read_many, settings, soft,
                     user_groups)
 from factory import journey
-from factory.problems import alert_advice
-from ui import STATE_TONE, STEP_TONE, bar, html, pill
+from factory.monitoring import split_alerts, unresolved_alerts_sql
+from factory.problems import group_alerts
+from ui import STATE_TONE, STEP_TONE, bar, html, pill, plain
 
 s, user = settings(), current_user()
 c1, c2 = st.columns([4, 1])
@@ -26,7 +27,7 @@ if not bots:
 admin, groups = is_admin(), user_groups(user)
 ids = {b["bot_id"]: b for b in bots}
 queries = {
-    "alerts": (f"SELECT * FROM {s.fq('v_alerts_open')} ORDER BY ts DESC LIMIT 50", None),
+    "alerts": (unresolved_alerts_sql(s), None),
     "usage": (f"""SELECT a.bot_id, a.questions, f.thumbs FROM
           (SELECT bot_id, sum(requests) AS questions FROM {s.fq('v_bot_activity')}
            WHERE day >= current_date() - INTERVAL 7 DAYS GROUP BY bot_id) a
@@ -41,7 +42,12 @@ if admin:  # owners don't manage costs (WIZ-13)
     queries["spending"] = (f"SELECT bot_id, variable_cost_usd, budget_usd FROM {s.fq('v_budget')} "
                            "WHERE month = date_trunc('MONTH', current_date())", None)
 found, failed = read_many(queries)   # all at once; a part that fails is reported at the bottom
-alerts = [a for a in found["alerts"] if a["bot_id"] in ids]
+# Only alerts that are still true, with repeats folded together. A chatbot whose setup stopped
+# says so on its own card, so that one isn't listed twice.
+still_true = split_alerts(found["alerts"], int(s.get("monitoring.expiry_lead_days", 30)))[0]
+alerts = group_alerts([a for a in still_true if a["kind"] != "provision_failed"
+                       and (a["bot_id"] in ids or (admin and not a["bot_id"]))])
+yours, for_mlops = [g for g in alerts if g["for_owner"]], [g for g in alerts if not g["for_owner"]]
 week = {r["bot_id"]: r for r in found["usage"]}
 candidates = {r["bot_id"]: r for r in found["versions"]}
 spend = {r["bot_id"]: r for r in found.get("spending", [])}
@@ -62,19 +68,29 @@ def next_for(b: dict) -> journey.Step:
 
 
 waiting = [b for b in bots if b["state"] == "pending_approval" and reviews(b)]
-if alerts or waiting:
+if yours or waiting or (admin and for_mlops):
     with st.container(border=True):
         st.markdown("**Needs your attention**")
         for b in waiting:
             st.markdown(f'{pill("Approval", "blue")} **{esc(b["display_name"])}** · a new version is waiting for '
                         "your approval. Press **Go to Launch** on its card below.", unsafe_allow_html=True)
-        for a in alerts[:8]:
-            tone = {"high": "red", "medium": "amber"}.get(a["severity"], "gray")
-            st.markdown(f'{pill(a["kind"].replace("_", " ").title(), tone)} **{esc(ids[a["bot_id"]]["display_name"])}**'
-                        f' · {esc(a["message"] or "")}  \n<span class="cf-muted">What to do: </span>'
-                        f'{alert_advice(a["kind"])}', unsafe_allow_html=True)
-        if len(alerts) > 8:
-            st.caption(f"And {len(alerts) - 8} more. They clear on their own once the cause is fixed.")
+        for g in yours[:6]:   # one calm line each: what it is in plain words, then what to do
+            repeats = f' <span class="cf-muted">(raised {g["count"]} times)</span>' if g["count"] > 1 else ""
+            st.markdown(f'{pill(g["label"], "red" if g["severity"] == "high" else "amber")} '
+                        f'**{esc(ids[g["bot_id"]]["display_name"])}** · {plain(g["text"])}{repeats}  \n'
+                        f'<span class="cf-muted">What to do:</span> {g["advice"]}', unsafe_allow_html=True)
+        if len(yours) > 6:
+            st.caption(f"And {len(yours) - 6} more. Each one clears on its own once the checks stop reporting it.")
+        if admin and for_mlops:
+            c1, c2 = st.columns([5, 1])
+            c1.markdown(f'{pill("For MLOps", "gray")} {len(for_mlops)} alert(s) for MLOps to look at: '
+                        + ", ".join(sorted({g["label"].lower() for g in for_mlops})) + ".", unsafe_allow_html=True)
+            if c2.button("Open them", key="open_admin_alerts"):
+                st.session_state["admin_section"] = "Alerts"
+                st.switch_page("pages/admin.py")
+if for_mlops and not admin:
+    st.caption(f"MLOps has been told about {len(for_mlops)} other issue(s) with your chatbots ("
+               + ", ".join(sorted({g["label"].lower() for g in for_mlops})) + "). There is nothing for you to do.")
 
 st.subheader("Your chatbots")
 st.caption("Each card shows what to do next for that chatbot. Press its button to go straight there.")
@@ -91,7 +107,7 @@ for i, b in enumerate(bots):
              f'<span class="cf-muted">{esc(json.loads(b.get("config_json") or "{}").get("purpose", ""))}</span><div style="margin:8px 0">{versions}</div>'
              f'<b>{int(wk.get("questions") or 0):,}</b> <span class="cf-muted">questions this week</span> · '
              f'<b>{thumbs}</b> <span class="cf-muted">thumbs up</span>'
-             + (f'<div class="cf-muted" style="margin-top:8px">This month: ${used:,.0f} of ${budget:,.0f}</div>'
+             + (f'<div class="cf-muted" style="margin-top:8px">This month: &#36;{used:,.0f} of &#36;{budget:,.0f}</div>'
                 f'{bar(used, budget)}' if admin and "spending" not in failed else ""))
         if step.status == journey.DONE:
             st.markdown(f'{pill("Nothing to do", "green")} {step.detail}', unsafe_allow_html=True)

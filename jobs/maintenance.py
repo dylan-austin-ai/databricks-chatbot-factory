@@ -66,6 +66,16 @@ for row in sql.query(f"""
 sql.execute(f"""UPDATE {settings.fq('bots')} SET platform_pin = NULL, pin_expires_at = NULL
                WHERE pin_expires_at < current_timestamp()""")
 
+# Email alerts that couldn't be set up when a chatbot was created are tried again here.
+from factory.provisioning import Provisioner  # noqa: E402
+
+waiting = {al["bot_id"] for al in cp.open_alerts() if al["kind"] == "alert_setup_failed" and al["bot_id"]}
+for b in bots:
+    if b["bot_id"] in waiting and b["state"] not in ("draft", "deleted", "purged"):
+        worked = Provisioner(sql, settings, cp, w).retry_alerts(cp.get_config(b["bot_id"]))
+        print(f"{b['bot_id']}: email alerts {'set up' if worked else 'still failing'}")
+print(f"Closed {cp.clear_stale_alerts()} alert(s) that no longer apply")
+
 keep_days = int(settings.get("soft_delete_retention_days", 90))
 for b in sql.query(f"""SELECT bot_id FROM {settings.fq('bots')} WHERE state = 'deleted'
                       AND deleted_at < current_timestamp() - make_interval(0,0,0,{keep_days},0,0,0)"""):

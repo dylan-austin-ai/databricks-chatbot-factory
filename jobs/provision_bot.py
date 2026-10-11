@@ -7,6 +7,7 @@ from _bootstrap import args, context, uc_secret, vector_client
 
 from factory.lifecycle import State
 from factory.pipeline import Pipeline
+from factory.problems import brief
 from factory.provisioning import Provisioner
 
 a = args("catalog", "bot_id", "actor", "agent_principal", "ingest_job_id")
@@ -27,7 +28,10 @@ try:
         sync_repo(cfg, settings, sql, Documents(sql, settings, cp, w), token)
     pipe.run(cfg)
     cp.set_state(cfg.bot_id, State.TESTING.value, a.actor or "system:job")
+    cp.resolve_alerts(cfg.bot_id, "provision_failed")
 except Exception as e:
+    # The whole error (often pages of it) goes to the audit log and this run's output; the alert
+    # is emailed and shown in the app, so it gets one line.
     cp.set_state(cfg.bot_id, State.PROVISION_FAILED.value, a.actor or "system:job", {"error": repr(e)})
-    cp.alert(cfg.bot_id, "provision_failed", "high", f"Provisioning failed: {e}")
+    cp.alert(cfg.bot_id, "provision_failed", "high", f"Setup stopped: {brief(e)}", replace=True)
     raise

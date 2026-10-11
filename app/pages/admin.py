@@ -7,20 +7,24 @@ Chatbots (its options) and Lifecycle (archive, restore, delete).
 One section is open at a time, so only that section's data is loaded.
 """
 import io
+from collections import Counter
 from datetime import datetime, timedelta, timezone
+from html import escape as esc
 
 import pandas as pd
 import streamlit as st
 import yaml
 
 from common import (JOB_IDS, STATE_LABEL, all_bots, app_client, bot_config, cp, current_user, forget, fresh_sql,
-                    is_admin, run_job, settings, soft, sql)
+                    is_admin, open_alerts, run_job, settings, soft, sql, technical_details)
 from factory.explain import help_text
 from factory.config import DEFAULT_JUDGES, DEFAULT_OBSERVABILITY
 from factory.gateway import ui_checklist
 from factory.lifecycle import State, TransitionError, retire_path
+from factory.problems import group_alerts
 from factory.provisioning import Provisioner
-from factory.sql import json_rows
+from factory.sql import in_list, json_rows
+from ui import pill, plain
 
 if not is_admin():
     st.error("This page is for MLOps admins only.")
@@ -307,7 +311,7 @@ if section == "Reports":  # Reports --------------------------------------------
     rep = frame(f"""
         SELECT b.bot_id, b.display_name, b.state, b.owner_user, b.owner_group, b.created_at,
                r.last_question, coalesce(r.questions, 0) AS questions, coalesce(r.cost_usd, 0) AS cost_usd,
-               r.answered_rate, r.p95_latency_ms, r.p95_ttft_ms, q.judge_pass_rate, coalesce(al.open_alerts, 0) AS open_alerts
+               r.answered_rate, r.p95_latency_ms, r.p95_ttft_ms, q.judge_pass_rate
         FROM {s.fq('bots')} b
         LEFT JOIN (SELECT bot_id, max(ts) AS last_question, count(*) AS questions, sum(cost_usd) AS cost_usd,
                           avg(CASE WHEN outcome = 'answered' THEN 1.0 ELSE 0.0 END) AS answered_rate,
@@ -316,9 +320,13 @@ if section == "Reports":  # Reports --------------------------------------------
                      AND ts >= current_timestamp() - INTERVAL {int(days)} DAYS GROUP BY bot_id) r USING (bot_id)
         LEFT JOIN (SELECT bot_id, avg(value) AS judge_pass_rate FROM {s.fq('judge_results')}
                    WHERE ts >= current_timestamp() - INTERVAL {int(days)} DAYS GROUP BY bot_id) q USING (bot_id)
-        LEFT JOIN (SELECT bot_id, count(*) AS open_alerts FROM {s.fq('v_alerts_open')} GROUP BY bot_id) al USING (bot_id)
         WHERE b.state <> 'purged' ORDER BY questions DESC""")
     if not rep.empty:
+        try:  # alerts that are still true, counted the same way as everywhere else in the app
+            still_open = Counter(a["bot_id"] for a in open_alerts())
+            rep["open_alerts"] = rep["bot_id"].map(lambda b: still_open.get(b, 0))
+        except Exception as e:  # noqa: BLE001
+            soft("The open alert counts", e)
         num = rep[["questions", "cost_usd"]].apply(pd.to_numeric, errors="coerce")
         c = st.columns(4)
         c[0].metric("Chatbots", len(rep))
@@ -397,6 +405,24 @@ if section == "Setup checklist":  # Setup checklist: Databricks steps with no AP
     ]
     for text, done in items:
         st.markdown(f"{'✅' if done else '☐'} {text}")
+    st.markdown("**Check that the warehouse accepts batched writes**")
+    st.caption("Uploads, audit entries and saved test questions send many rows in one statement. This reads two "
+               "rows that way and writes nothing. Run it once after the first deploy, and again after a "
+               "Databricks runtime upgrade.")
+    if st.button("Run the check"):
+        source, params = json_rows([{"a": "x", "n": 1}, {"a": "y", "n": 2}], {"a": "STRING", "n": "INT"})
+        try:
+            got = sql().query(f"SELECT count(*) AS n_rows, sum(n) AS total FROM {source}", params)
+            if got and int(got[0]["n_rows"]) == 2 and int(got[0]["total"]) == 3:
+                st.success("Passed: the warehouse read both rows.")
+            else:
+                st.error(f"The warehouse answered, but not with the two rows that were sent: {got}. Uploads and "
+                         "saves may misbehave; send this line to whoever maintains the app.")
+        except Exception as e:  # noqa: BLE001
+            st.error("Failed: the warehouse rejected the statement, so uploads, bulk actions and saving test "
+                     "questions will fail too. Send the details below to whoever maintains the app.")
+            with st.expander("Show technical details"):
+                technical_details("checking batched writes", e)
     st.markdown("**Per-chatbot MLflow UI steps** (issue detection and custom trace views have no API):")
     for b in all_bots():
         cfg = bot_config(b)
@@ -423,6 +449,7 @@ if section == "User access":  # User access (IDN-3) ----------------------------
                      "security_scopes": r.get("security_scopes", ""), "active": r.get("active") or "true"}
                     for r in df.to_dict("records")]
             source, params = json_rows(rows, {c: "STRING" for c in COLS})
+            users, user_params = in_list(sorted({r["user_id"] for r in rows}), "u")
             typed = f"""SELECT user_id, country, state, business_function, split(security_scopes, ';') AS scopes,
                                CAST(active AS BOOLEAN) AS active, CAST(nullif(valid_from, '') AS DATE) AS valid_from,
                                CAST(nullif(valid_to, '') AS DATE) AS valid_to FROM {source}"""
@@ -433,29 +460,50 @@ if section == "User access":  # User access (IDN-3) ----------------------------
                          "2026-01-31 and **active** must be true or false. Fix the file and load it again.")
                 soft("The file check", e)
             else:
-                sql().execute(f"DELETE FROM {s.fq('user_access')} "
-                              f"WHERE lower(user_id) IN (SELECT user_id FROM {source})", params)
+                sql().execute(f"DELETE FROM {s.fq('user_access')} WHERE lower(user_id) IN {users}", user_params)
                 sql().execute(f"INSERT INTO {s.fq('user_access')} "
                               f"SELECT t.*, 'csv', current_timestamp() FROM ({typed}) t", params)
                 control.audit(user, None, "user_access_loaded", f.name, {"rows": len(rows)})
                 st.success(f"Loaded {len(rows)} row(s) for {len({r['user_id'] for r in rows})} user(s).")
 
 if section == "Alerts":  # Alerts -------------------------------------------------------------------------
+    st.caption("An alert closes on its own once the checks stop reporting the problem, usually within a day or "
+               "two; a setup failure closes when the setup succeeds. **Resolve** closes one sooner.")
     try:
-        alerts = sql().query(f"SELECT * FROM {s.fq('v_alerts_open')} ORDER BY ts DESC LIMIT 200")
+        cleared = control.clear_stale_alerts()   # ones whose cause has gone are closed, not just hidden
+        groups = group_alerts(open_alerts())
     except Exception as e:  # noqa: BLE001
-        alerts = []
+        cleared, groups = 0, []
         soft("The alert list", e)
     else:
-        if not alerts:
+        if cleared:
+            st.caption(f"{cleared} older alert(s) whose cause had gone were closed just now.")
+        if not groups:
             st.success("No open alerts.")
-    for a in alerts:
-        c1, c2 = st.columns([6, 1])
-        c1.write(f"**{a['severity']}** · {a['bot_id'] or 'platform'} · {a['kind']} · {a['ts']}  \n{a['message']}")
-        if c2.button("Resolve", key=a["alert_id"]):
-            sql().execute(f"UPDATE {s.fq('alerts')} SET resolved = true WHERE alert_id = :a", {"a": a["alert_id"]})
-            control.audit(user, a["bot_id"], "alert_resolved", a["alert_id"])
-            st.rerun()
+    if st.session_state.get("alerts_retry"):
+        st.success(st.session_state.pop("alerts_retry"))
+    names = {b["bot_id"]: b["display_name"] for b in all_bots(include_deleted=True)}
+    for g in groups:
+        last, key = g["latest"], f"{g['bot_id'] or 'platform'}_{g['kind']}"
+        with st.container(border=True):
+            c1, c2 = st.columns([6, 1])
+            c1.markdown(
+                f'{pill(g["label"], "red" if g["severity"] == "high" else "amber")} '
+                f'**{esc(names.get(g["bot_id"], g["bot_id"] or "Platform"))}** · {plain(g["text"])}'
+                + (f' <span class="cf-muted">(raised {g["count"]} times)</span>' if g["count"] > 1 else "")
+                + f'  \n<span class="cf-muted">Last raised {str(last.get("ts") or "")[:16].replace("T", " ")}. '
+                  f'What to do:</span> {g["mlops_advice"]}', unsafe_allow_html=True)
+            with c1.expander("Message as recorded"):
+                st.code(last.get("message") or "(empty)", language=None)   # shown as typed, never formatted
+            if c2.button("Resolve", key=f"resolve_{key}"):
+                control.resolve_alerts(g["bot_id"], g["kind"])
+                control.audit(user, g["bot_id"], "alert_resolved", g["kind"], {"count": g["count"]})
+                st.rerun()
+            if g["kind"] == "alert_setup_failed" and c1.button("Try setting them up again", key=f"retry_{key}"):
+                run_job("maintenance")   # the maintenance job retries failed email-alert setups
+                st.session_state["alerts_retry"] = ("The maintenance job has started and will try the email alerts "
+                                                    "again. It takes a few minutes; this alert closes if it works.")
+                st.rerun()
 
 if section == "Audit log":  # Audit log ----------------------------------------------------------------------
     bot_filter = st.text_input("Filter by chatbot (technical name)")

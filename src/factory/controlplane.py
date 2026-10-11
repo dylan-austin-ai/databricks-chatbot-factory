@@ -9,7 +9,8 @@ from typing import Any
 
 from .lifecycle import check_transition
 from .config import BotConfig, PlatformSettings
-from .sql import SqlRunner, ident, json_rows
+from .problems import brief
+from .sql import SqlRunner, ident, in_list, json_rows
 
 SQL_DIR = Path(__file__).resolve().parents[2] / "sql"
 
@@ -76,7 +77,8 @@ class ControlPlane:
             else:
                 publish_settings(self, self.w)
         except Exception as e:  # noqa: BLE001 - never block the user action
-            self.alert(bot_id, "runtime_publish_failed", "high", f"Runtime publish failed: {e}")
+            self.alert(bot_id, "runtime_publish_failed", "high", f"Runtime publish failed: {brief(e)}",
+                       replace=True)
 
     # Setup ------------------------------------------------------------------
     # Columns added to tables that may already exist: CREATE TABLE IF NOT EXISTS won't add them.
@@ -133,6 +135,33 @@ class ControlPlane:
         )
         self.audit(actor, None, "setting_changed", key, {"value": value})
         self.publish(None)
+
+    def resolve_alerts(self, bot_id: str | None, kind: str) -> None:
+        """Close the open alerts of one kind for one chatbot (the platform's own when bot_id is
+        None): what they reported is no longer true, or is being replaced by a newer report."""
+        self.sql.execute(
+            f"UPDATE {self.s.fq('alerts')} SET resolved = true "
+            "WHERE NOT coalesce(resolved, false) AND kind = :k AND bot_id <=> :b", {"k": kind, "b": bot_id})
+
+    def open_alerts(self) -> list[dict]:
+        """Alerts that are unresolved and still describe something true, newest first."""
+        from .monitoring import split_alerts, unresolved_alerts_sql
+        return split_alerts(self.sql.query(unresolved_alerts_sql(self.s)),
+                            int(self.s.get("monitoring.expiry_lead_days", 30)))[0]
+
+    def clear_stale_alerts(self) -> int:
+        """Close the unresolved alerts that no longer describe anything true (see
+        monitoring.alert_is_current). Returns how many were closed."""
+        from .monitoring import split_alerts, unresolved_alerts_sql
+        stale = split_alerts(self.sql.query(unresolved_alerts_sql(self.s)),
+                             int(self.s.get("monitoring.expiry_lead_days", 30)))[1]
+        ids = [r["alert_id"] for r in stale if r.get("alert_id")]
+        for start in range(0, len(ids), 500):
+            listed, params = in_list(ids[start:start + 500], "a")
+            self.sql.execute(f"UPDATE {self.s.fq('alerts')} SET resolved = true WHERE alert_id IN {listed}", params)
+        if ids:
+            self.audit("system:alerts", None, "alerts_cleared", "", {"count": len(ids)})
+        return len(ids)
 
     # Audit (LCY-7, DOC-13) --------------------------------------------------
     def audit(self, actor: str, bot_id: str | None, action: str, target: str = "",
@@ -250,13 +279,20 @@ class ControlPlane:
         self.publish(bot_id)
 
     def alert(self, bot_id: str | None, kind: str, severity: str, message: str,
-              dedupe_key: str | None = None, required: bool = True) -> bool:
+              dedupe_key: str | None = None, required: bool = True, replace: bool = False) -> bool:
         """Record an alert; emailed by the bot's SQL alert (OBS-5). Returns False if a
-        matching open alert (same dedupe_key) already exists."""
+        matching open alert (same dedupe_key) already exists.
+
+        `replace` closes earlier open alerts of this kind for this chatbot first, so a failure
+        that happens again is one alert with a fresh time (and one email), not a growing pile.
+        Keep `message` short and plain: it is emailed and shown on pages. problems.brief() turns
+        an error into one line."""
         if dedupe_key and self.sql.query(
                 f"SELECT 1 FROM {self.s.fq('alerts')} WHERE dedupe_key = :d AND NOT coalesce(resolved, false) LIMIT 1",
                 {"d": dedupe_key}):
             return False
+        if replace:
+            self.resolve_alerts(bot_id, kind)
         self.sql.execute(
             f"INSERT INTO {self.s.fq('alerts')} VALUES "
             "(:id, current_timestamp(), :b, :k, :sev, :m, false, :d, CAST(:r AS BOOLEAN))",

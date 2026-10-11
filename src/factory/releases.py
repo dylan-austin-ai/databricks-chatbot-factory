@@ -119,7 +119,7 @@ class Releases:
         p = BotPaths(self.s, cfg.bot_id)
         problems = self.integrity_problems(p)
         if problems:
-            self.cp.alert(cfg.bot_id, "integrity", "high", " ".join(problems))
+            self.cp.alert(cfg.bot_id, "integrity", "high", " ".join(problems), replace=True)
             raise IntegrityError(" ".join(problems))
         rid = self.open_candidate(cfg, actor)
         tbl = index_table(self.s, cfg)

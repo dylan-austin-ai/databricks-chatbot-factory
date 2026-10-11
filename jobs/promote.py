@@ -85,4 +85,5 @@ if not passed:
              f"Release {rid} failed its post-promotion smoke test and was rolled back.",
              dedupe_key=f"smoke:{rid}")
     raise SystemExit("Smoke test failed; rolled back.")
+cp.resolve_alerts(cfg.bot_id, "smoke_failed")
 print(f"Promoted {rid}; smoke test passed")

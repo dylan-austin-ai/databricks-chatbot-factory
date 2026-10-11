@@ -624,7 +624,8 @@ Rows written earlier keep `dev`.
 
 | When | What | Where |
 |---|---|---|
-| Daily | Open alerts | Admin › Alerts (also emailed) |
+| Daily | Open alerts | Admin › Alerts (also emailed). They close on their own when the checks stop reporting the problem; **Resolve** closes one sooner |
+| Once, after the first deploy | Check the warehouse accepts batched writes | Admin › Setup checklist › **Run the check** |
 | Weekly | Review queues for each chatbot | Traces experiment › **Reviews** tab |
 | Weekly | Costs vs gateway usage | Admin › Costs |
 | Monthly | Idle chatbots (flagged after 45 days) | Admin › Reports › archive |
@@ -671,4 +672,11 @@ output and the first smoke test:
 - Approving several documents in a row should start one "rebuild the test version" run, not one
   per approval. If the Jobs run list shows one per approval, `jobs.list_runs` isn't returning
   run parameters and the de-duplication is quietly off; nothing breaks, it is only slower.
+- In the qa target the bundle runs in development mode, which pauses every schedule, so the
+  monitor job doesn't run there on its own. The app doesn't depend on it for alerts (it only
+  shows the ones still true, and Admin › Alerts closes the rest), but email alerts, budgets and
+  expiry notices need the monitor job: run it by hand in qa when you want to test them.
+- If a chatbot's email alerts couldn't be set up when it was created, Admin › Alerts shows
+  "Email alerts not set up" with **Try setting them up again**, which runs the maintenance job;
+  that job also retries them every night.
 - README › "Verify against a live workspace first" has the full list.

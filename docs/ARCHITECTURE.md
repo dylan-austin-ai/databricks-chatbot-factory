@@ -41,6 +41,13 @@ and optional traffic alerts within 8 AM ET – 6 PM PT. Budgets are computed fro
 (shared endpoints can't be split by billing tags); alerts at 70/90/100%, owner picks pause or
 continue. Expiry notices 30 days ahead. Alerts are rows in `alerts`, emailed by SQL alerts.
 
+Alert lifecycle: `alerts.resolved` is set by an admin (Resolve), by the job that sees the cause
+go away (setup, promotion or a passing check succeeding), and by a sweep that closes alerts no
+longer true: `monitoring.alert_is_current` decides by the chatbot's state for setup failures, by
+calendar month for budgets, and otherwise by how long ago the alert was last raised. The app
+applies the same rule when it shows alerts, so a paused schedule never leaves stale ones on
+screen. A failure that repeats replaces its alert (`ControlPlane.alert(replace=True)`).
+
 ## Observability (OBS-6..12)
 
 Every question is one MLflow trace, stored in Unity Catalog (`_platform.traces_otel_*`, OTel

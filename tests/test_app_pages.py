@@ -195,7 +195,7 @@ def test_home_shows_the_next_step_and_survives_a_missing_view(workspace):
     wh.on(r"count_if\(status = 'pending_review'", [
         {"bot_id": "it_bot", "reading": "0", "waiting": "3", "flagged": "0", "approved": "1", "questions": "9",
          "questions_ok": "2"}])
-    wh.fail(r"v_alerts_open", RuntimeError("[TABLE_OR_VIEW_NOT_FOUND] v_alerts_open cannot be found"))
+    wh.fail(r"_platform\.alerts a LEFT JOIN", RuntimeError("[TABLE_OR_VIEW_NOT_FOUND] alerts cannot be found"))
     at = run("home")
     assert problems(at) == []
     text = " ".join(m.value for m in at.markdown)
@@ -280,3 +280,145 @@ def test_launch_offers_the_right_next_action_at_each_stage(workspace, bot, relea
     if expect == "Run the quality check again":   # each failed result comes with what to do about it
         fixes = [m.value for m in at.markdown if m.value.startswith("- **")]
         assert len(fixes) == 2 and all("What to do:" in f for f in fixes)
+
+
+# --- alerts: calm, plain, and gone when they stop being true -----------------------------------
+
+SPARK_ERROR = ("Provisioning failed: [AI_FUNCTION_COMPILATION_ERROR] An error occurred while compiling the AI function\n"
+               "== SQL (line 5, position 13) ==\nSELECT ai_parse_document(content, map('a', b))\n-------------^^^")
+
+
+def alert_row(alert_id, bot_id, kind, message, state, age_hours, severity="high") -> dict:
+    return {"alert_id": alert_id, "ts": "2026-10-08T14:03:22.000Z", "bot_id": bot_id, "kind": kind,
+            "severity": severity, "message": message, "resolved": "false", "dedupe_key": None, "required": "true",
+            "bot_state": state, "age_hours": str(age_hours), "this_month": "true"}
+
+
+ALERTS = [alert_row("a1", "it_bot", "provision_failed", SPARK_ERROR, "testing", 70),
+          alert_row("a2", "it_bot", "provision_failed", SPARK_ERROR, "testing", 71),
+          alert_row("a3", "it_bot", "alert_setup_failed", "Email alerts could not be set up automatically "
+                    "(AlertV2.__init__() got an unexpected keyword argument 'custom_subject')", "testing", 70, "medium"),
+          alert_row("a4", "hr_bot", "expiry", '"Rates 2026.pdf" expires on Oct 23, 2026 (12 days).', "live", 5, "medium"),
+          alert_row("a5", "hr_bot", "quality_drop", "groundedness is 70% over 7 days (needs 90%).", "live", 3),
+          alert_row("a6", "hr_bot", "quality_drop", "groundedness is 72% over 7 days (needs 90%).", "live", 27)]
+
+
+def page_text(at: AppTest) -> str:
+    return " ".join(x.value for kind in (at.markdown, at.caption, at.error, at.warning, at.info) for x in kind)
+
+
+def test_home_shows_alerts_calmly_and_only_the_ones_still_true(workspace):
+    common, wh, _ = workspace()
+    wh.on(r"_platform\.alerts a LEFT JOIN", ALERTS)
+    at = run("home")
+    text = page_text(at)
+    assert problems(at) == []
+    # the setup failure is long over (the chatbot is in testing): not shown, and no raw error text anywhere
+    assert "Setup stopped" not in text and "AI_FUNCTION_COMPILATION_ERROR" not in text and "== SQL" not in text
+    assert "AlertV2" not in text and "custom_subject" not in text
+    # the owner's own: one line each, repeats folded, with what to do
+    assert text.count("Document expiring") == 1 and "Rates 2026" in text
+    assert text.count("Quality dropped") == 1 and "raised 2 times" in text and "What to do:" in text
+    # what the owner can't act on is one quiet line, not a warning
+    assert "MLOps has been told about 1 other issue(s)" in text and "email alerts not set up" in text
+    assert "Open them" not in [b.label for b in at.button]
+
+
+def test_home_points_an_admin_to_the_alerts_that_are_theirs(workspace):
+    common, wh, _ = workspace(admin=True)
+    wh.on(r"_platform\.alerts a LEFT JOIN", ALERTS + [alert_row("a7", None, "availability", "97.0%", None, 1)])
+    at = run("home")
+    text = page_text(at)
+    assert problems(at) == [] and "2 alert(s) for MLOps to look at" in text and "AlertV2" not in text
+    assert "Open them" in [b.label for b in at.button]
+
+
+def test_admin_alerts_are_grouped_readable_and_stale_ones_are_closed(workspace):
+    common, wh, _ = workspace(admin=True)
+    wh.on(r"_platform\.alerts a LEFT JOIN", lambda s, p: [a for a in ALERTS if a["alert_id"] not in closed])
+    closed: set = set()
+    at = run("admin", admin_section="Alerts")
+    assert problems(at) == []
+    update = [(s, p) for s, p in wh.writes if s.startswith("UPDATE") and "alert_id IN" in s]
+    assert sorted(update[0][1].values()) == ["a1", "a2"]                  # their setup finished long ago
+    text = page_text(at)
+    assert "2 older alert(s) whose cause had gone were closed" in text
+    assert "Email alerts not set up" in text and "Try setting them up again" in text      # advice for MLOps
+    # the recorded message is shown as typed in a code block, never as formatted text
+    assert any("custom_subject" in c.value for c in at.code) and "custom_subject" not in text
+    labels = [b.label for b in at.button]
+    assert labels.count("Resolve") == 3 and "Try setting them up again" in labels
+
+
+# --- documents: the chooser, identical copies and a failed delete ------------------------------
+
+def manifest_row(doc_id, name, content_hash, uploaded_at, status="approved") -> dict:
+    return {"doc_id": doc_id, "doc_name": name, "doc_version": "1", "status": status, "readability": "green",
+            "content_hash": content_hash, "uploaded_at": uploaded_at, "uploaded_by": "ana@corp.com", "page_count": "3",
+            "no_expiry": "true", "expires_at": None, "qa_json": "{}", "parser": "ai_parse_document", "flag_reason": None,
+            "chunk_count": "2", "doc_owner": None, "page_range": None, "is_active": "true", "file_ext": "pdf",
+            "file_path": f"/Volumes/chatbots_test/hr_bot/docs/files/{doc_id}.pdf"}
+
+
+COPIES = [manifest_row("a", "Guide.pdf", "h1", "2026-10-01 09:00:00"),
+          manifest_row("b", "Guide (1).pdf", "h1", "2026-10-05 09:00:00", "pending_review"),
+          manifest_row("c", "Leave policy.pdf", "h2", "2026-10-02 09:00:00")]
+
+
+def test_documents_offers_three_clear_choices(workspace):
+    common, wh, _ = workspace(bots=[bot_row()])
+    wh.on(r"`manifest`", COPIES)
+    at = run("documents", docs_bot_id="hr_bot")
+    assert problems(at) == []
+    assert [b.label for b in at.button] == ["Add documents", "Curate documents", "Review a document"]
+    assert any("What would you like to do?" in m.value for m in at.markdown)
+    at.button(key="docs_action_curate").click().run()
+    assert at.session_state["docs_section"] == "Curate documents" and "Curate documents" in [x.value for x in at.subheader]
+
+
+def test_identical_copies_are_archived_in_one_click_and_only_offered_when_there_are_some(workspace):
+    common, wh, jobs = workspace(bots=[bot_row()])
+    wh.on(r"`manifest`", COPIES)
+    at = run("documents", docs_bot_id="hr_bot", docs_section="Curate documents")
+    assert problems(at) == [] and "Archive the 1 older copy" in [b.label for b in at.button]
+    assert "approve the copy that is kept" in page_text(at)                 # the older copy was the approved one
+    at.button(key="archive_identical").click().run()
+    archive = [(s, p) for s, p in wh.writes if s.startswith("UPDATE") and "status = 'archived'" in s]
+    assert archive and archive[0][1] == {"d0": "a"} and ("ingest", {"bot_id": "hr_bot", "publish_only": "true"}) in jobs
+    assert any("Archived the older copy of 1 document(s)." in x.value for x in at.success)
+
+    common, wh, _ = workspace(bots=[bot_row()])
+    wh.on(r"`manifest`", [COPIES[0], COPIES[2]])                            # similar files, but no identical ones
+    at = run("documents", docs_bot_id="hr_bot", docs_section="Curate documents")
+    assert problems(at) == [] and not [b for b in at.button if b.label.startswith("Archive the 1 older")]
+
+
+def test_a_failed_delete_says_what_to_do_and_keeps_the_details(workspace):
+    common, wh, _ = workspace(bots=[bot_row()], admin=True)
+    wh.on(r"`manifest`", COPIES)
+    wh.fail(r"DELETE FROM \S+`chunked`", RuntimeError("[DELTA_CONCURRENT_APPEND] a concurrent update added files"))
+    at = AppTest.from_file(str(ROOT / "app" / "pages" / "documents.py"), default_timeout=30)
+    at.session_state["docs_bot_id"], at.session_state["docs_section"] = "hr_bot", "Curate documents"
+    at.session_state["manage_In use or waiting_0"] = {"edited_rows": {0: {"Select": True}}, "added_rows": [],
+                                                       "deleted_rows": []}
+    at.run()
+    at.text_input(key="manage_why").set_value("Duplicate uploads").run()
+    at.checkbox(key="manage_sure").check().run()
+    at.button(key="manage_delete").click().run()
+    assert problems(at) == []
+    assert any("That didn't work" in e.value and "same moment" in e.value for e in at.error)
+    assert any("What to do:" in m.value and "deleting it again finishes the job" in m.value for m in at.markdown)
+    assert "Show technical details" in [e.label for e in at.expander]
+    assert not [x for x in at.success if "Deleted" in x.value]
+
+
+
+def test_stored_text_is_shown_as_plain_words(workspace):
+    workspace()
+    import ui
+
+    out = ui.plain("used $950 of $1,000\n== SQL (line 5) ==\n-----^^^ <b>x</b> # big *bold* `code`")
+    assert "\n" not in out and "<b>" not in out and "&lt;b&gt;" in out
+    for defused in ("\\$950", "\\=\\=", "\\-\\-\\-", "\\#", "\\*bold\\*", "\\`code\\`"):
+        assert defused in out
+    assert ui.plain(None) == ""
