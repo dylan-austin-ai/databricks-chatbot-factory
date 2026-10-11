@@ -9,7 +9,7 @@ from typing import Any
 
 from .lifecycle import check_transition
 from .config import BotConfig, PlatformSettings
-from .sql import SqlRunner, ident
+from .sql import SqlRunner, ident, json_rows
 
 SQL_DIR = Path(__file__).resolve().parents[2] / "sql"
 
@@ -143,6 +143,19 @@ class ControlPlane:
             {"id": str(uuid.uuid4()), "actor": actor, "bot": bot_id, "action": action,
              "target": target, "detail": json.dumps(detail or {})},
         )
+
+    def audit_many(self, actor: str, bot_id: str | None, action: str,
+                   items: list[tuple[str, dict | None]]) -> None:
+        """One audit row per (target, detail), written in a single statement."""
+        if not items:
+            return
+        source, params = json_rows(
+            [{"id": str(uuid.uuid4()), "target": target, "detail": json.dumps(detail or {})}
+             for target, detail in items], {"id": "STRING", "target": "STRING", "detail": "STRING"})
+        self.sql.execute(
+            f"INSERT INTO {self.s.fq('audit_log')} "
+            f"SELECT id, current_timestamp(), :actor, :bot, :action, target, detail FROM {source}",
+            {**params, "actor": actor, "bot": bot_id, "action": action})
 
     # Platform releases (REL-7, REL-8) ------------------------------------------
     def record_platform_release(self, platform_version: str, git_commit: str, environment: str,

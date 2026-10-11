@@ -12,7 +12,7 @@ from typing import Callable
 from .config import BotConfig, PlatformSettings
 from .controlplane import ControlPlane, render
 from .ingestion import BotPaths
-from .sql import SqlRunner, ident
+from .sql import SqlRunner, ident, run_lanes
 
 
 def principal(name: str) -> str:
@@ -113,10 +113,11 @@ class Provisioner:
                 f"'{t['function']}' = '{_tag_value(cfg.business_function)}', "
                 f"'{t['chatbot_name']}' = '{_tag_value(cfg.bot_id)}'")
         schema = ident(self.s.catalog, cfg.bot_id)
-        self.sql.execute(f"ALTER SCHEMA {schema} SET TAGS ({tags})")
-        self.sql.execute(f"ALTER VOLUME {schema}.`docs` SET TAGS ({tags})")
-        for table in ("manifest", "parsed_elements", "chunked", "index_source", "golden_set"):
-            self.sql.execute(f"ALTER TABLE {schema}.{ident(table)} SET TAGS ({tags})")
+        # One statement per object, so they don't depend on each other.
+        run_lanes(self.sql, [[f"ALTER SCHEMA {schema} SET TAGS ({tags})"],
+                             [f"ALTER VOLUME {schema}.`docs` SET TAGS ({tags})"]]
+                  + [[f"ALTER TABLE {schema}.{ident(table)} SET TAGS ({tags})"]
+                     for table in ("manifest", "parsed_elements", "chunked", "index_source", "golden_set")])
 
     def grant_access(self, cfg: BotConfig) -> None:
         """Bot access = UC grants on the bot's schema (GOV-3). Users never get MODIFY on
@@ -135,20 +136,21 @@ class Provisioner:
             owners.add(self.agent_principal)
         users = set(cfg.allowed_principals) if cfg.access_mode == "restricted" else \
             set(self.s.get("access.trusted_callers", []))
-        for p in sorted(x for x in owners | testers | users if x):
-            self.sql.execute(f"GRANT USE CATALOG ON CATALOG {cat} TO {principal(p)}")
-            self.sql.execute(f"GRANT USE SCHEMA ON SCHEMA {schema} TO {principal(p)}")
-        for p in sorted(x for x in owners | users if x):
-            self.sql.execute(f"GRANT SELECT ON TABLE {schema}.`access_probe` TO {principal(p)}")
-        for p in sorted(x for x in testers if x):
-            self.sql.execute(f"GRANT SELECT ON TABLE {schema}.`tester_probe` TO {principal(p)}")
-        for p in sorted(x for x in owners if x):
-            for table in ("manifest", "chunked", "golden_set"):
-                self.sql.execute(f"GRANT SELECT ON TABLE {schema}.{ident(table)} TO {principal(p)}")
-            self.sql.execute(f"GRANT READ VOLUME ON VOLUME {schema}.`docs` TO {principal(p)}")
-        for probe in ("access_probe", "tester_probe"):
-            self.sql.execute(f"INSERT INTO {schema}.{ident(probe)} SELECT true "
-                             f"WHERE NOT EXISTS (SELECT 1 FROM {schema}.{ident(probe)})")
+        everyone = sorted(x for x in owners | testers | users if x)
+        owner_list = sorted(x for x in owners if x)
+        # Grants on different objects don't depend on each other, so each object is a lane; the
+        # grants on one object stay in order inside its lane.
+        lanes = [
+            [f"GRANT USE CATALOG ON CATALOG {cat} TO {principal(p)}" for p in everyone],
+            [f"GRANT USE SCHEMA ON SCHEMA {schema} TO {principal(p)}" for p in everyone],
+            [f"GRANT SELECT ON TABLE {schema}.`access_probe` TO {principal(p)}" for p in sorted(x for x in owners | users if x)]
+            + [f"INSERT INTO {schema}.`access_probe` SELECT true WHERE NOT EXISTS (SELECT 1 FROM {schema}.`access_probe`)"],
+            [f"GRANT SELECT ON TABLE {schema}.`tester_probe` TO {principal(p)}" for p in sorted(x for x in testers if x)]
+            + [f"INSERT INTO {schema}.`tester_probe` SELECT true WHERE NOT EXISTS (SELECT 1 FROM {schema}.`tester_probe`)"],
+            [f"GRANT READ VOLUME ON VOLUME {schema}.`docs` TO {principal(p)}" for p in owner_list],
+        ] + [[f"GRANT SELECT ON TABLE {schema}.{ident(table)} TO {principal(p)}" for p in owner_list]
+             for table in ("manifest", "chunked", "golden_set")]
+        run_lanes(self.sql, lanes)
 
     def set_testers(self, cfg: BotConfig, new_testers: list[str], actor: str) -> None:
         """Invite or remove candidate testers (max 10, REL-1)."""

@@ -11,6 +11,7 @@ import copy
 import json
 import os
 from dataclasses import asdict, dataclass, field
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,12 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return out
 
 
+@lru_cache(maxsize=4)
+def _defaults(path: str) -> dict:
+    with open(path) as f:
+        return yaml.safe_load(f)
+
+
 def _set_path(d: dict, dotted: str, value: Any) -> None:
     parts = dotted.split(".")
     for p in parts[:-1]:
@@ -44,8 +51,7 @@ class PlatformSettings:
 
     @classmethod
     def load(cls, overrides: dict[str, Any] | None = None, path: Path = DEFAULTS_PATH):
-        with open(path) as f:
-            data = yaml.safe_load(f)
+        data = _defaults(str(path))   # parsed once per process; the merge below works on a copy
         nested: dict = {}
         for dotted, value in (overrides or {}).items():
             _set_path(nested, dotted, value)

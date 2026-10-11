@@ -26,15 +26,19 @@ def average(per_question: list[dict[str, float]]) -> dict[str, float]:
         if per_question else {}
 
 
-def evaluate(strategy: dict, cases: list[dict], search) -> dict[str, float]:
-    """search(question, strategy) -> ranked [{rank, doc_id, pages}]."""
-    per_q = []
-    for c in cases:
-        if not c.get("source_doc_id"):
-            continue
-        per_q.append(retrieval_metrics(search(c["question"], strategy), c["source_doc_id"],
-                                       c.get("expected_pages")))
-    return average(per_q)
+def evaluate(strategy: dict, cases: list[dict], search, workers: int = 1) -> dict[str, float]:
+    """search(question, strategy) -> ranked [{rank, doc_id, pages}]. With workers > 1 the searches
+    for the questions run side by side; each is an independent request."""
+    cases = [c for c in cases if c.get("source_doc_id")]
+
+    def one(c: dict) -> dict[str, float]:
+        return retrieval_metrics(search(c["question"], strategy), c["source_doc_id"], c.get("expected_pages"))
+
+    if workers > 1 and len(cases) > 1:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(workers, len(cases))) as pool:
+            return average(list(pool.map(one, cases)))
+    return average([one(c) for c in cases])
 
 
 def choose(results: list[tuple[dict, dict[str, float]]]) -> tuple[dict, dict[str, float]]:

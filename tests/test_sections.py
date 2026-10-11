@@ -13,6 +13,9 @@ class _Cp:
     def audit(self, actor, bot_id, action, target="", detail=None):
         self.audits.append((action, target))
 
+    def audit_many(self, actor, bot_id, action, items):
+        self.audits += [(action, target) for target, _ in items]
+
 
 def _docs(settings, answers=()):
     sql, cp = FakeSql(answers=list(answers)), _Cp()
@@ -189,15 +192,22 @@ def test_copies_of_a_document_are_spotted_by_name():
 
 
 def test_many_documents_can_be_archived_restored_or_deleted_at_once(settings):
+    import json
+
     docs, sql, cp = _docs(settings, [(r"SELECT file_path", [{"file_path": "/Volumes/x/a.pdf"}])])
-    assert docs.change_many("claims_chatbot", ["a", "b"], "archive", "ana@corp.com") == {"a": "", "b": ""}
+    assert docs.change_many("claims_chatbot", ["a", "b", "a"], "archive", "ana@corp.com") == {"a": "", "b": ""}
+    archive, params = sql.statements[-1]
+    assert "status = 'archived'" in archive and "flag_reason" not in archive
+    assert json.loads(params["rows"]) == [{"d": "a"}, {"d": "b"}] and len(sql.statements) == 1   # one statement for all
     assert [a for a in cp.audits if a[0] == "doc_archived"] == [("doc_archived", "a"), ("doc_archived", "b")]
     assert docs.change_many("claims_chatbot", ["a"], "restore", "ana@corp.com") == {"a": ""}
+    assert "THEN 'flagged' ELSE 'pending_review' END" in sql.statements[-1][0]     # restoring never approves
     assert docs.change_many("claims_chatbot", ["a", "b"], "delete", "admin@corp.com", is_admin=True,
                             reason=" Duplicate uploads ") == {"a": "", "b": ""}
-    deletes = [s for s, _ in sql.statements if s.startswith("DELETE FROM")]
-    assert sum("`manifest`" in s for s in deletes) == 2 and sum("`chunk_edits`" in s for s in deletes) == 2
+    deleted = [s.split("`")[5] for s, _ in sql.statements if s.startswith("DELETE FROM")]
+    assert deleted == ["chunk_edits", "chunk_archive", "chunked", "parsed_elements", "manifest"]
     assert [a for a in cp.audits if a[0] == "doc_hard_deleted"] == [("doc_hard_deleted", "a"), ("doc_hard_deleted", "b")]
+    assert docs.change_many("claims_chatbot", [], "archive", "ana@corp.com") == {}
 
 
 def test_deleting_needs_an_admin_and_a_reason(settings):
@@ -211,16 +221,14 @@ def test_deleting_needs_an_admin_and_a_reason(settings):
     assert not [s for s, _ in sql.statements if s.startswith(("DELETE", "UPDATE"))]
 
 
-def test_one_failure_does_not_stop_the_rest(settings):
-    docs, _, _ = _docs(settings)
-
-    def archive(bot_id, doc_id, actor):
-        if doc_id == "bad":
+def test_a_failed_bulk_change_says_which_documents_were_not_changed(settings):
+    class Broken(FakeSql):
+        def execute(self, statement, params=None):
             raise RuntimeError("warehouse hiccup")
 
-    docs.archive = archive
-    assert docs.change_many("claims_chatbot", ["a", "bad", "c"], "archive", "ana@corp.com") == {
-        "a": "", "bad": "RuntimeError", "c": ""}
+    docs = Documents(Broken(), settings, _Cp())
+    assert docs.change_many("claims_chatbot", ["a", "c"], "archive", "ana@corp.com") == {
+        "a": "RuntimeError", "c": "RuntimeError"}
 
 
 # --- the restricted-data block can't be removed by changing a document's status ----------------

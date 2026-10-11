@@ -47,7 +47,7 @@ def search(question: str, strategy: dict) -> list[dict]:
 results = []
 for strat in settings.get("ai_search.strategies"):
     try:
-        results.append((strat, strategies.evaluate(strat, cases, search)))
+        results.append((strat, strategies.evaluate(strat, cases, search, workers=8)))
     except Exception as e:  # noqa: BLE001 - e.g. reranker unavailable; skip that strategy
         print(f"Skipped {strat['name']}: {e}")
 chosen, metrics = strategies.choose(results)

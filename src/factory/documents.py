@@ -6,11 +6,13 @@ import io
 import json
 import re
 import uuid
+from datetime import date
 
 from .config import PlatformSettings
 from .controlplane import ControlPlane
 from . import guardrails, sensitive
 from .ingestion import BotPaths, archive_chunks_sql, chunk_archive_ddl, chunk_id_for
+from .sql import json_rows
 from .validation import ValidationResult, validate_file
 
 FLAG_REASONS = ["Missing text", "Garbled table", "Wrong pages", "Contains sensitive info", "Other"]
@@ -40,6 +42,16 @@ def possible_duplicates(rows: list[dict]) -> dict[str, list[str]]:
             groups.setdefault(key, []).append(r)
     return {r["doc_id"]: [o["doc_name"] for o in group if o["doc_id"] != r["doc_id"]]
             for group in groups.values() if len({g["doc_id"] for g in group}) > 1 for r in group}
+
+
+def inherited_expiry(prior: dict | None, no_expiry: bool, expires_at: str | None) -> tuple[bool, str | None]:
+    """Expiry for a new version when the uploader didn't choose one: it keeps the previous
+    version's expiry date if that date is still ahead; otherwise it is valid until replaced."""
+    if prior and expires_at is None and no_expiry is True and str(prior.get("no_expiry")).lower() == "false":
+        when = str(prior.get("expires_at") or "")
+        if when[:10] > date.today().isoformat():
+            return False, when
+    return no_expiry, expires_at
 
 
 class Documents:
@@ -83,9 +95,7 @@ class Documents:
                 f"UPDATE {p.t('manifest')} SET status = 'superseded', is_active = false, "
                 "updated_at = current_timestamp() WHERE doc_id = :d AND doc_version = :v",
                 {"d": doc_id, "v": int(prior["doc_version"])})
-        if prior and expires_at is None and no_expiry is True and not prior.get("no_expiry", True):
-            # A new version inherits the previous version's expiry choice by default.
-            no_expiry = bool(prior.get("no_expiry"))
+        no_expiry, expires_at = inherited_expiry(prior, no_expiry, expires_at)
         self.sql.execute(
             f"""INSERT INTO {p.t('manifest')} (doc_id, doc_version, doc_name, file_path, file_ext,
                 content_hash, size_bytes, page_count, source, source_ref, uploaded_by, uploaded_at,
@@ -105,24 +115,106 @@ class Documents:
                       {"name": file_name, "version": version, "source": source})
         return res
 
+    MANIFEST_BATCH = {"doc_id": "STRING", "doc_version": "INT", "doc_name": "STRING", "file_path": "STRING",
+                      "file_ext": "STRING", "content_hash": "STRING", "size_bytes": "BIGINT", "page_count": "INT",
+                      "source": "STRING", "source_ref": "STRING", "parser": "STRING", "status": "STRING",
+                      "doc_owner": "STRING", "effective_date": "STRING", "expires_at": "STRING",
+                      "no_expiry": "BOOLEAN", "security_scope": "STRING", "geo_scope": "STRING"}
+
     def upload_many(self, bot_id: str, files: list[dict], actor: str) -> list[dict]:
         """Register several files and report on every one of them, so nothing is dropped
         silently. Each entry of `files` has `name`, `data` and any other `register` arguments.
         Returns one row per file: name, ok, reasons, and duplicate (already stored, so nothing
         was lost). A file that fails for a technical reason is reported and recorded too, and
-        the rest of the batch still goes ahead."""
-        report = []
+        the rest of the batch still goes ahead.
+
+        What the chatbot already holds is read once and every table write is one statement for
+        the whole batch, so adding twenty files costs about the same as adding one.
+        """
+        p = BotPaths(self.s, bot_id)
+        known = self.sql.query(f"SELECT doc_id, doc_version, doc_name, content_hash, status, no_expiry, doc_owner, "
+                               f"CAST(expires_at AS STRING) AS expires_at FROM {p.t('manifest')}")
+        hashes = {r["content_hash"]: r["doc_name"] for r in known}   # every version ever uploaded (DCL-7)
+        latest: dict[str, dict] = {}
+        for r in known:
+            if r["status"] != "superseded" and int(r["doc_version"]) >= int(latest.get(r["doc_name"], r)["doc_version"]):
+                latest[r["doc_name"]] = r
+        report, rows, replaced, uploaded, rejected, failed = [], [], [], [], [], []
+        in_batch: dict[str, dict] = {}   # a name uploaded twice in one go: the second replaces the first
         for f in files:
-            extra = {k: v for k, v in f.items() if k not in ("name", "data")}
+            name = f["name"]
             try:
-                res = self.register(bot_id, f["name"], f["data"], actor, **extra)
-                report.append({"name": f["name"], "ok": res.ok, "reasons": list(res.reasons),
-                               "duplicate": bool(res.duplicate_of)})
+                res = validate_file(name, f["data"], self.s.get("ingestion"), hashes)
+                if not res.ok:
+                    rejected.append((name, {"reasons": res.reasons}))
+                    report.append({"name": name, "ok": False, "reasons": list(res.reasons),
+                                   "duplicate": bool(res.duplicate_of)})
+                    continue
+                prior = latest.get(name)
+                doc_id = prior["doc_id"] if prior else uuid.uuid4().hex[:16]
+                version = int(prior["doc_version"]) + 1 if prior else 1
+                path = f"{p.files}/{doc_id}_v{version}.{res.ext}"
+                if self.w is not None:
+                    self.w.files.upload(path, io.BytesIO(f["data"]), overwrite=True)
+                no_expiry, expires_at = inherited_expiry(prior, f.get("no_expiry", True), f.get("expires_at"))
+                row = {"doc_id": doc_id, "doc_version": version, "doc_name": name, "file_path": path,
+                       "file_ext": res.ext, "content_hash": res.content_hash, "size_bytes": int(res.size_bytes),
+                       "page_count": int(res.page_count) if res.page_count is not None else None,
+                       "source": f.get("source", "upload"), "source_ref": f.get("source_ref", ""),
+                       "parser": res.parser, "status": "pending_review",
+                       "doc_owner": f.get("doc_owner") or (prior or {}).get("doc_owner") or actor,
+                       "effective_date": f.get("effective_date"), "expires_at": None if no_expiry else expires_at,
+                       "no_expiry": bool(no_expiry or not expires_at),
+                       "security_scope": f.get("security_scope", "general"), "geo_scope": f.get("geo_scope", "ALL")}
+                if name in in_batch:
+                    in_batch[name]["status"] = "superseded"
+                elif prior:
+                    replaced.append(f"{doc_id}_v{int(prior['doc_version'])}")
+                rows.append(row)
+                in_batch[name] = row
+                hashes[res.content_hash] = name
+                latest[name] = {"doc_id": doc_id, "doc_version": version, "doc_name": name,
+                                "no_expiry": row["no_expiry"], "expires_at": row["expires_at"],
+                                "doc_owner": row["doc_owner"]}
+                uploaded.append((doc_id, {"name": name, "version": version, "source": row["source"]}))
+                report.append({"name": name, "ok": True, "reasons": [], "duplicate": False})
             except Exception as e:  # noqa: BLE001 - one bad file must not hide the others
                 reason = f"We couldn't store this file ({type(e).__name__}). Please try again."
-                self.cp.audit(actor, bot_id, "upload_failed", f["name"], {"reasons": [reason]})
-                report.append({"name": f["name"], "ok": False, "reasons": [reason], "duplicate": False})
+                failed.append((name, {"reasons": [reason]}))
+                report.append({"name": name, "ok": False, "reasons": [reason], "duplicate": False})
+        if rows:
+            try:
+                self._write_manifest(p, rows, replaced, actor)
+            except Exception as e:  # noqa: BLE001 - none of the batch reached the table
+                reason = f"We couldn't store this file ({type(e).__name__}). Please try again."
+                for entry in report:
+                    if entry["ok"]:
+                        entry.update(ok=False, reasons=[reason])
+                        failed.append((entry["name"], {"reasons": [reason]}))
+                uploaded = []
+        for action, items in (("doc_uploaded", uploaded), ("upload_rejected", rejected), ("upload_failed", failed)):
+            self.cp.audit_many(actor, bot_id, action, items)
         return report
+
+    def _write_manifest(self, p: BotPaths, rows: list[dict], replaced: list[str], actor: str) -> None:
+        """Add the new document versions, after marking the versions they replace."""
+        if replaced:
+            source, params = json_rows([{"k": k} for k in replaced], {"k": "STRING"})
+            self.sql.execute(
+                f"UPDATE {p.t('manifest')} SET status = 'superseded', is_active = false, "
+                f"updated_at = current_timestamp() WHERE concat(doc_id, '_v', doc_version) IN (SELECT k FROM {source})",
+                params)
+        source, params = json_rows(rows, self.MANIFEST_BATCH)
+        self.sql.execute(
+            f"""INSERT INTO {p.t('manifest')} (doc_id, doc_version, doc_name, file_path, file_ext,
+                content_hash, size_bytes, page_count, source, source_ref, uploaded_by, uploaded_at,
+                parser, status, is_active, doc_owner, effective_date, expires_at, no_expiry,
+                security_scope, geo_scope, updated_at)
+                SELECT doc_id, doc_version, doc_name, file_path, file_ext, content_hash, size_bytes, page_count,
+                       source, source_ref, :a, current_timestamp(), parser, status, false, doc_owner,
+                       CAST(effective_date AS DATE), CAST(expires_at AS TIMESTAMP), no_expiry,
+                       security_scope, geo_scope, current_timestamp()
+                FROM {source}""", {**params, "a": actor})
 
     def not_uploaded(self, bot_id: str, days: int = 30) -> list[dict]:
         """Files someone tried to add in the last `days` that are still not in the chatbot: the
@@ -165,23 +257,28 @@ class Documents:
                                   "Upload a clean copy instead (ING-8).")
         self._set_status(bot_id, doc_id, "approved", True, actor, "doc_approved")
 
-    def bulk_approve_green(self, bot_id, actor) -> int:
+    def _approve_waiting(self, bot_id: str, actor: str, only: str = "") -> int:
+        """Approve the documents waiting for review (optionally only those matching `only`) in one
+        go. Documents blocked for restricted data are flagged, not waiting, and are excluded."""
         p = BotPaths(self.s, bot_id)
-        rows = self.sql.query(f"SELECT doc_id FROM {p.t('manifest')} WHERE status = 'pending_review' "
-                              "AND readability IN ('green', 'n/a')")
-        for r in rows:
-            self.approve(bot_id, r["doc_id"], actor)
-        return len(rows)
+        ids = [r["doc_id"] for r in self.sql.query(
+            f"SELECT doc_id FROM {p.t('manifest')} WHERE status = 'pending_review' "
+            f"AND coalesce(flag_reason, '') <> '{BLOCKED}'{only}")]
+        if ids:
+            source, params = json_rows([{"d": d} for d in ids], {"d": "STRING"})
+            self.sql.execute(
+                f"UPDATE {p.t('manifest')} SET status = 'approved', is_active = true, flag_reason = NULL, "
+                f"updated_at = current_timestamp() WHERE status = 'pending_review' "
+                f"AND coalesce(flag_reason, '') <> '{BLOCKED}' AND doc_id IN (SELECT d FROM {source})", params)
+            self.cp.audit_many(actor, bot_id, "doc_approved", [(d, None) for d in ids])
+        return len(ids)
+
+    def bulk_approve_green(self, bot_id, actor) -> int:
+        return self._approve_waiting(bot_id, actor, " AND readability IN ('green', 'n/a')")
 
     def bulk_approve_pending(self, bot_id, actor) -> int:
-        """Approve every document waiting for review, whatever its badge. Documents blocked for
-        restricted data are flagged, not waiting, so they are never included."""
-        p = BotPaths(self.s, bot_id)
-        rows = self.sql.query(f"SELECT doc_id FROM {p.t('manifest')} WHERE status = 'pending_review' "
-                              f"AND coalesce(flag_reason, '') <> '{BLOCKED}'")
-        for r in rows:
-            self.approve(bot_id, r["doc_id"], actor)
-        return len(rows)
+        """Approve every document waiting for review, whatever its badge."""
+        return self._approve_waiting(bot_id, actor)
 
     def flag(self, bot_id, doc_id, actor, reason):
         """Flag for fixing with the owner's reason. A document blocked for restricted data keeps
@@ -425,8 +522,9 @@ class Documents:
 
     def change_many(self, bot_id: str, doc_ids: list[str], action: str, actor: str,
                     is_admin: bool = False, reason: str = "") -> dict[str, str]:
-        """Archive, restore or permanently delete several documents. Returns {doc_id: "" when done,
-        else why not}; one failure doesn't stop the rest. Deleting is for MLOps and needs a reason."""
+        """Archive, restore or permanently delete several documents, each action as one statement
+        for all of them. Returns {doc_id: "" when done, else why not}. Deleting is for MLOps and
+        needs a reason."""
         if action not in ("archive", "restore", "delete"):
             raise ValueError(f"Unknown action: {action}")
         if action == "delete":
@@ -434,19 +532,45 @@ class Documents:
                 raise PermissionError("Only MLOps admins can permanently delete documents.")
             if not (reason or "").strip():
                 raise ValueError("Give a reason for deleting; it is kept in the audit log.")
-        outcome: dict[str, str] = {}
-        for doc_id in doc_ids:
-            try:
-                if action == "archive":
-                    self.archive(bot_id, doc_id, actor)
-                elif action == "restore":
-                    self.restore(bot_id, doc_id, actor)
-                else:
-                    self.hard_delete(bot_id, doc_id, actor, is_admin, reason.strip())
-                outcome[doc_id] = ""
-            except Exception as e:  # noqa: BLE001 - report it and carry on with the others
-                outcome[doc_id] = f"{type(e).__name__}"
-        return outcome
+        doc_ids = list(dict.fromkeys(doc_ids))
+        if not doc_ids:
+            return {}
+        p = BotPaths(self.s, bot_id)
+        source, params = json_rows([{"d": d} for d in doc_ids], {"d": "STRING"})
+        chosen = f"doc_id IN (SELECT d FROM {source})"
+        try:
+            if action == "archive":
+                self.sql.execute(
+                    f"UPDATE {p.t('manifest')} SET status = 'archived', is_active = false, "
+                    f"updated_at = current_timestamp() WHERE status <> 'superseded' AND {chosen}", params)
+                self.cp.audit_many(actor, bot_id, "doc_archived", [(d, None) for d in doc_ids])
+            elif action == "restore":
+                self.sql.execute(
+                    f"UPDATE {p.t('manifest')} SET "
+                    f"status = CASE WHEN flag_reason = '{BLOCKED}' THEN 'flagged' ELSE 'pending_review' END, "
+                    f"is_active = NOT coalesce(flag_reason = '{BLOCKED}', false), "
+                    f"flag_reason = CASE WHEN flag_reason = '{BLOCKED}' THEN flag_reason ELSE NULL END, "
+                    f"updated_at = current_timestamp() WHERE status = 'archived' AND {chosen}", params)
+                self.cp.audit_many(actor, bot_id, "doc_restored", [(d, None) for d in doc_ids])
+            else:
+                paths = [r["file_path"] for r in self.sql.query(
+                    f"SELECT file_path FROM {p.t('manifest')} WHERE {chosen}", params)]
+                for table in ("chunk_edits", "chunk_archive"):   # only exist once they were needed
+                    try:
+                        self.sql.execute(f"DELETE FROM {p.t(table)} WHERE {chosen}", params)
+                    except Exception:  # noqa: BLE001
+                        pass
+                for table in ("chunked", "parsed_elements", "manifest"):
+                    self.sql.execute(f"DELETE FROM {p.t(table)} WHERE {chosen}", params)
+                for path in paths if self.w is not None else []:
+                    try:
+                        self.w.files.delete(path)
+                    except Exception:  # noqa: BLE001 - the table rows are gone; the job can't read it
+                        pass
+                self.cp.audit_many(actor, bot_id, "doc_hard_deleted", [(d, {"reason": reason.strip()}) for d in doc_ids])
+        except Exception as e:  # noqa: BLE001 - tell the page which documents were not changed
+            return {d: type(e).__name__ for d in doc_ids}
+        return {d: "" for d in doc_ids}
 
     def hard_delete(self, bot_id, doc_id, actor, is_admin: bool, legal_reason: str):
         """Admin only, for legal or retention requests (DOC-10)."""
