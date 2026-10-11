@@ -423,15 +423,22 @@ if section == "User access":  # User access (IDN-3) ----------------------------
                      "security_scopes": r.get("security_scopes", ""), "active": r.get("active") or "true"}
                     for r in df.to_dict("records")]
             source, params = json_rows(rows, {c: "STRING" for c in COLS})
-            sql().execute(f"DELETE FROM {s.fq('user_access')} WHERE lower(user_id) IN (SELECT user_id FROM {source})",
-                          params)
-            sql().execute(
-                f"""INSERT INTO {s.fq('user_access')}
-                    SELECT user_id, country, state, business_function, split(security_scopes, ';'),
-                           CAST(active AS BOOLEAN), CAST(nullif(valid_from, '') AS DATE),
-                           CAST(nullif(valid_to, '') AS DATE), 'csv', current_timestamp() FROM {source}""", params)
-            control.audit(user, None, "user_access_loaded", f.name, {"rows": len(rows)})
-            st.success(f"Loaded {len(rows)} row(s) for {len({r['user_id'] for r in rows})} user(s).")
+            typed = f"""SELECT user_id, country, state, business_function, split(security_scopes, ';') AS scopes,
+                               CAST(active AS BOOLEAN) AS active, CAST(nullif(valid_from, '') AS DATE) AS valid_from,
+                               CAST(nullif(valid_to, '') AS DATE) AS valid_to FROM {source}"""
+            try:  # read every value before anything is removed, so a bad file changes nothing
+                sql().query(f"SELECT count(*) AS n FROM ({typed}) WHERE active IS NOT NULL", params)
+            except Exception as e:  # noqa: BLE001
+                st.error("Nothing was loaded: a value in the file couldn't be read. Dates must look like "
+                         "2026-01-31 and **active** must be true or false. Fix the file and load it again.")
+                soft("The file check", e)
+            else:
+                sql().execute(f"DELETE FROM {s.fq('user_access')} "
+                              f"WHERE lower(user_id) IN (SELECT user_id FROM {source})", params)
+                sql().execute(f"INSERT INTO {s.fq('user_access')} "
+                              f"SELECT t.*, 'csv', current_timestamp() FROM ({typed}) t", params)
+                control.audit(user, None, "user_access_loaded", f.name, {"rows": len(rows)})
+                st.success(f"Loaded {len(rows)} row(s) for {len({r['user_id'] for r in rows})} user(s).")
 
 if section == "Alerts":  # Alerts -------------------------------------------------------------------------
     try:
