@@ -43,7 +43,7 @@ failure. `releases`, `release_chunks` and `index_history` reconstruct the index 
 | `jobs/` | setup_platform, setup_observability, provision, ingest (+ per-bot file-arrival triggers), compare_strategies, run_evals (`mlflow.genai.evaluate`), promote, monitor, prod_judging, drift, optimize_prompt, reindex, git_sync, maintenance |
 | `sql/` | Control-plane DDL, per-bot DDL, dashboard views, ABAC governance, metric views, system-table cost views |
 | `resources/`, `databricks.yml` | Declarative Automation Bundle (qa and prod targets, direct deployment engine) |
-| `tests/` | 247 unit tests for the pure logic |
+| `tests/` | 248 unit tests for the pure logic, and 54 that run every page of the app against a pretend workspace (these need the `app` extra) |
 
 ## Prerequisites
 
@@ -103,6 +103,7 @@ The project is managed with [uv](https://docs.astral.sh/uv/); `uv.lock` pins eve
 uv sync                 # create .venv with the library and the dev tools
 uv run pytest           # run the unit tests
 uv sync --extra app     # also install what the Streamlit app needs
+uv run --extra app pytest   # the unit tests plus every page of the app, run against a pretend workspace
 ```
 
 Databricks Apps installs from `requirements.txt`, so keep it in step with the `app` extra in

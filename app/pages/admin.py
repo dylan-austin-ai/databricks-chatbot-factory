@@ -13,8 +13,8 @@ import pandas as pd
 import streamlit as st
 import yaml
 
-from common import (JOB_IDS, STATE_LABEL, all_bots, app_client, bot_config, cp, current_user, forget, is_admin,
-                    run_job, settings, soft, sql)
+from common import (JOB_IDS, STATE_LABEL, all_bots, app_client, bot_config, cp, current_user, forget, fresh_sql,
+                    is_admin, run_job, settings, soft, sql)
 from factory.explain import help_text
 from factory.config import DEFAULT_JUDGES, DEFAULT_OBSERVABILITY
 from factory.gateway import ui_checklist
@@ -52,7 +52,7 @@ OBS_LABEL = {"link_versions": "Link traces to release versions (MLflow LoggedMod
 
 
 def provisioner() -> Provisioner:
-    return Provisioner(sql(), s, control, app_client(), ingest_job_id=JOB_IDS.get("ingest"))
+    return Provisioner(fresh_sql(), s, control, app_client(), ingest_job_id=JOB_IDS.get("ingest"))
 
 
 def frame(query: str, params: dict | None = None) -> pd.DataFrame:

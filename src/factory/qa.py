@@ -201,7 +201,7 @@ def next_step(badge: str | None, status: str, messages: list[str]) -> str:
     if status == "approved":
         return "Nothing to do. It's approved and in the test version."
     if not badge:
-        return "Still being read. Refresh in a few minutes."
+        return "Still being read, which takes a few minutes. Press Refresh in the menu on the left to check."
     if status == "flagged" or "problem" in kinds:
         return "Fix the problem listed below, or archive the document if it isn't needed."
     if "check" in kinds:

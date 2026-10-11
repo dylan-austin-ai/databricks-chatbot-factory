@@ -13,6 +13,7 @@ from .ingestion import BotPaths
 from .sql import union_by_key
 
 DONE, NOW, WAITING, PROBLEM, LATER = "done", "now", "waiting", "problem", "later"
+REVIEW = "Review your documents"
 STATUS_LABEL = {DONE: "Done", NOW: "Your turn", WAITING: "Nothing to do yet", PROBLEM: "Needs fixing",
                 LATER: "Later"}
 
@@ -60,23 +61,23 @@ def steps(state: str, docs: dict | None, questions: dict | None, needed: int, ca
                     "chatbot should answer from.", "documents"))
 
     if d["flagged"]:
-        review = Step("Review your documents", PROBLEM, f"{_n(d['flagged'], 'document')} "
+        review = Step(REVIEW, PROBLEM, f"{_n(d['flagged'], 'document')} "
                       f"{'has' if d['flagged'] == 1 else 'have'} a problem. Open **Documents**, choose **Review a "
                       "document** and follow the steps shown for each one. A document you don't need can be "
                       "archived instead.", "documents")
     elif d["waiting"]:
-        review = Step("Review your documents", NOW, f"{_n(d['waiting'], 'document')} "
+        review = Step(REVIEW, NOW, f"{_n(d['waiting'], 'document')} "
                       f"{'is' if d['waiting'] == 1 else 'are'} waiting for your decision. Open **Documents**, choose "
                       "**Review a document**, check each one reads correctly and press **Approve**.", "documents")
     elif d["reading"] and not d["approved"]:
-        review = Step("Review your documents", WAITING, f"{_n(d['reading'], 'document')} "
+        review = Step(REVIEW, WAITING, f"{_n(d['reading'], 'document')} "
                       f"{'is' if d['reading'] == 1 else 'are'} still being read. This takes a few minutes per "
                       "document. Press **Refresh** to check.")
     elif d["approved"]:
-        review = Step("Review your documents", DONE, f"{_n(d['approved'], 'document')} approved."
+        review = Step(REVIEW, DONE, f"{_n(d['approved'], 'document')} approved."
                       + (f" {_n(d['reading'], 'more')} still being read." if d["reading"] else ""))
     else:
-        review = Step("Review your documents", LATER, "Approve each document once it has been read.", "documents")
+        review = Step(REVIEW, LATER, "Approve each document once it has been read.", "documents")
     out.append(review)
 
     if q["approved"] >= needed:
@@ -136,6 +137,10 @@ def next_step(state: str, path: list[Step], has_candidate: bool = False) -> Step
     current = next((step for step in path if step.status != DONE), None)
     working_on_a_version = has_candidate and current is not None
     if state == "live" and not working_on_a_version:
+        # New documents added to a live chatbot wait for a decision before a test version exists.
+        waiting = next((step for step in path if step.title == REVIEW and step.status in (NOW, PROBLEM)), None)
+        if waiting:
+            return waiting
         return Step("Live", DONE, "Live and answering questions. Nothing to do. Changes you make to documents "
                     "go into a new test version first.")
     if state == "paused":

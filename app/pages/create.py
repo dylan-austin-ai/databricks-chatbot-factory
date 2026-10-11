@@ -13,7 +13,8 @@ import pandas as pd
 import streamlit as st
 
 from common import (STATE_LABEL, all_bots, all_groups, app_client, bot_config, check_emails, cp, current_user, docs,
-                    is_owner, remember_upload, run_job, settings, show_upload_report, sql, technical_details, user_groups)
+                    fresh_sql, is_owner, remember_upload, run_job, settings, show_upload_report, sql,
+                    technical_details, user_groups)
 from factory.config import EVERYONE, MAX_TESTERS, BotConfig
 from factory.explain import help_text
 from factory.guardrails import platform_rules
@@ -104,7 +105,7 @@ def create(cfg: BotConfig) -> None:
             control.save_config(cfg, user, "setup resumed" if existing else "created",
                                 state=None if existing else State.DRAFT.value)
             w["resume"] = cfg.bot_id  # restore point: from here the wizard continues this chatbot
-            Provisioner(sql(), s, control, app_client()).run(
+            Provisioner(fresh_sql(), s, control, app_client()).run(
                 cfg, user, progress=st.write, only=["create_objects", "tag_objects", "grant_access", "write_config"])
             expiry = w.get("expiry", {})  # per document: a date, or valid until replaced (DCL-1)
             report = docs().upload_many(cfg.bot_id, [

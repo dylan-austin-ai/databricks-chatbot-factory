@@ -153,3 +153,12 @@ def test_chat_apology_never_shows_technical_text():
     assert "waking up" in problems.chat_apology(RuntimeError("503 TEMPORARILY_UNAVAILABLE"))
     other = problems.chat_apology(KeyError("custom_outputs"))
     assert "ask again" in other and "custom_outputs" not in other and "MLOps" not in other
+
+
+def test_a_live_chatbot_with_documents_waiting_is_not_nothing_to_do():
+    for docs, status in (({"waiting": 2, "approved": 4}, NOW), ({"flagged": 1, "approved": 4}, PROBLEM)):
+        path = journey.steps("live", docs, QUESTIONS_OK, 50, None, True)
+        step = journey.next_step("live", path)
+        assert step.title == journey.REVIEW and step.status == status and step.page == "documents"
+    reading = journey.steps("live", {"reading": 1, "approved": 4}, QUESTIONS_OK, 50, None, True)
+    assert journey.next_step("live", reading).title == "Live"       # nothing to decide until it has been read

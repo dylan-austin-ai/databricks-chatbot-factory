@@ -176,6 +176,17 @@ def docs() -> Documents:
     return Documents(AppSql(fresh=True), settings(), cp(), app_client())
 
 
+def fresh_sql() -> AppSql:
+    """For a service a page builds itself (the Provisioner): reads go to the warehouse every time."""
+    return AppSql(fresh=True)
+
+
+def refresh() -> None:
+    """The Refresh button: forget everything remembered, including who is in which group."""
+    forget(settings_too=True)
+    user_groups.clear()
+
+
 def docs_view() -> Documents:
     """The document service for showing things: its reads are the remembered ones. Use docs() to
     change anything."""

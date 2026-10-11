@@ -7,8 +7,8 @@ import time
 
 import streamlit as st
 
-from common import (METRIC_LABEL, PAGES, RETRIEVAL_METRICS, STATE_LABEL, cp, current_user, is_admin, pick_bot,
-                    read_many, run_job, settings, soft, sql, user_groups)
+from common import (METRIC_LABEL, PAGES, RETRIEVAL_METRICS, STATE_LABEL, cp, current_user, fresh_sql, is_admin,
+                    pick_bot, read_many, run_job, settings, soft, sql, user_groups)
 from factory import journey
 from factory.config import MAX_TESTERS
 from factory.explain import help_text
@@ -230,7 +230,7 @@ if cand:
             txt = st.text_area("One email per line", "\n".join(cfg.testers))
             if st.button("Save testers"):
                 try:
-                    Provisioner(sql(), s, control).set_testers(cfg, txt.splitlines(), user)
+                    Provisioner(fresh_sql(), s, control).set_testers(cfg, txt.splitlines(), user)
                     st.success("Saved. Testers can pick \"Test version\" on the Chat page.")
                 except ValueError as e:
                     st.error(str(e))

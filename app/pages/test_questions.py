@@ -130,8 +130,11 @@ with c2.container(border=True):
     st.markdown("**Ready to see how the chatbot does?**")
     st.caption("Asks the chatbot every approved question and scores the answers. Takes about 15 minutes. "
                "The results appear on the **Launch** page.")
-    if st.button("Run the quality check", disabled=n_ok < n_req,
-                 help=None if n_ok >= n_req else f"Available once {n_req} questions are approved."):
+    has_version = bool(bot.get("candidate_release_id"))
+    if st.button("Run the quality check", disabled=n_ok < n_req or not has_version,
+                 help=f"Available once {n_req} questions are approved." if n_ok < n_req else
+                 None if has_version else "There is no test version to check yet. One is built a few minutes "
+                                          "after you approve documents or save questions."):
         run_job("evals", bot_id=cfg.bot_id, trigger="manual", channel="candidate")
         st.session_state["questions_saved"] = ("The quality check has started. It takes about 15 minutes; the "
                                                "results appear on the **Launch** page.")

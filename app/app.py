@@ -1,7 +1,7 @@
 """Chatbot Factory app entry point (Databricks App, Streamlit). Look: docs/design."""
 import streamlit as st
 
-from common import READ_TTL, forget, is_admin, report, start_probe
+from common import READ_TTL, is_admin, refresh, report, start_probe
 from ui import style
 
 st.set_page_config(page_title="Chatbot Factory", page_icon=":material/forum:", layout="wide")
@@ -36,7 +36,7 @@ page = st.navigation(pages)
 if st.sidebar.button("Refresh", icon=":material/refresh:", width="stretch",
                      help="Reading documents and quality checks run in the background and take a few minutes. "
                           f"The pages pick up their results within {READ_TTL} seconds; press this to see them now."):
-    forget(settings_too=True)
+    refresh()
     st.rerun()
 try:
     page.run()
