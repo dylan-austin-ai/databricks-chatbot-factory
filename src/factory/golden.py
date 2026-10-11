@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 
 from .ingestion import BotPaths
-from .sql import json_rows
+from .sql import in_list, json_rows
 
 KIND_LABEL = {"in_scope": "Should answer", "out_of_scope": "Should refuse", "feedback": "From user feedback"}
 _KIND = {label: kind for kind, label in KIND_LABEL.items()}
@@ -83,7 +83,7 @@ def save_statements(p: BotPaths, delta: dict[str, list], actor: str) -> list[tup
                           kind = s.kind, approved = s.approved, updated_by = :u, updated_at = current_timestamp()""",
                     {**params, "u": actor}))
     if delta["remove"]:
-        source, params = json_rows([{"eval_id": e} for e in delta["remove"]], {"eval_id": "STRING"})
+        chosen, params = in_list(delta["remove"], "e")
         out.append((f"UPDATE {table} SET active = false, updated_by = :u, updated_at = current_timestamp() "
-                    f"WHERE eval_id IN (SELECT eval_id FROM {source})", {**params, "u": actor}))
+                    f"WHERE eval_id IN {chosen}", {**params, "u": actor}))
     return out

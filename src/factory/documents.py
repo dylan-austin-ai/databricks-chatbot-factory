@@ -12,7 +12,7 @@ from .config import PlatformSettings
 from .controlplane import ControlPlane
 from . import guardrails, sensitive
 from .ingestion import BotPaths, archive_chunks_sql, chunk_archive_ddl, chunk_id_for
-from .sql import json_rows
+from .sql import in_list, json_rows
 from .validation import ValidationResult, validate_file
 
 FLAG_REASONS = ["Missing text", "Garbled table", "Wrong pages", "Contains sensitive info", "Other"]
@@ -30,6 +30,21 @@ def name_key(doc_name: str) -> str:
     name = re.sub(r"[^a-z0-9]+", " ", name)                 # punctuation first, so "_unlocked" is a word
     name = re.sub(rf"\b({_COPY_WORDS})\b", " ", name)
     return re.sub(r"\s+", " ", name).strip()
+
+
+def identical_copies(rows: list[dict]) -> list[str]:
+    """Documents that are byte-for-byte the same file as a newer one: the doc_ids of the older
+    copies, to archive. Of each set of identical files the most recently uploaded is kept.
+    Archived documents and replaced versions are ignored."""
+    by_hash: dict[str, list[dict]] = {}
+    for r in rows:
+        if r.get("content_hash") and r.get("status") not in ("archived", "superseded"):
+            by_hash.setdefault(r["content_hash"], []).append(r)
+    older = []
+    for same in by_hash.values():
+        newest_first = sorted(same, key=lambda r: (str(r.get("uploaded_at") or ""), str(r["doc_id"])), reverse=True)
+        older += [r["doc_id"] for r in newest_first[1:] if r["doc_id"] != newest_first[0]["doc_id"]]
+    return older
 
 
 def possible_duplicates(rows: list[dict]) -> dict[str, list[str]]:
@@ -521,10 +536,11 @@ class Documents:
         self.cp.audit(actor, bot_id, "doc_override_removed", doc_id)
 
     def change_many(self, bot_id: str, doc_ids: list[str], action: str, actor: str,
-                    is_admin: bool = False, reason: str = "") -> dict[str, str]:
+                    is_admin: bool = False, reason: str = "") -> int:
         """Archive, restore or permanently delete several documents, each action as one statement
-        for all of them. Returns {doc_id: "" when done, else why not}. Deleting is for MLOps and
-        needs a reason."""
+        for all of them. Returns how many were asked for. Deleting is for MLOps and needs a
+        reason. A failure raises, so the page can say what went wrong; a delete that stops
+        part-way leaves the document listed, and deleting it again finishes the job."""
         if action not in ("archive", "restore", "delete"):
             raise ValueError(f"Unknown action: {action}")
         if action == "delete":
@@ -534,43 +550,40 @@ class Documents:
                 raise ValueError("Give a reason for deleting; it is kept in the audit log.")
         doc_ids = list(dict.fromkeys(doc_ids))
         if not doc_ids:
-            return {}
+            return 0
         p = BotPaths(self.s, bot_id)
-        source, params = json_rows([{"d": d} for d in doc_ids], {"d": "STRING"})
-        chosen = f"doc_id IN (SELECT d FROM {source})"
-        try:
-            if action == "archive":
-                self.sql.execute(
-                    f"UPDATE {p.t('manifest')} SET status = 'archived', is_active = false, "
-                    f"updated_at = current_timestamp() WHERE status <> 'superseded' AND {chosen}", params)
-                self.cp.audit_many(actor, bot_id, "doc_archived", [(d, None) for d in doc_ids])
-            elif action == "restore":
-                self.sql.execute(
-                    f"UPDATE {p.t('manifest')} SET "
-                    f"status = CASE WHEN flag_reason = '{BLOCKED}' THEN 'flagged' ELSE 'pending_review' END, "
-                    f"is_active = NOT coalesce(flag_reason = '{BLOCKED}', false), "
-                    f"flag_reason = CASE WHEN flag_reason = '{BLOCKED}' THEN flag_reason ELSE NULL END, "
-                    f"updated_at = current_timestamp() WHERE status = 'archived' AND {chosen}", params)
-                self.cp.audit_many(actor, bot_id, "doc_restored", [(d, None) for d in doc_ids])
-            else:
-                paths = [r["file_path"] for r in self.sql.query(
-                    f"SELECT file_path FROM {p.t('manifest')} WHERE {chosen}", params)]
-                for table in ("chunk_edits", "chunk_archive"):   # only exist once they were needed
-                    try:
-                        self.sql.execute(f"DELETE FROM {p.t(table)} WHERE {chosen}", params)
-                    except Exception:  # noqa: BLE001
-                        pass
-                for table in ("chunked", "parsed_elements", "manifest"):
+        listed, params = in_list(doc_ids, "d")
+        chosen = f"doc_id IN {listed}"
+        if action == "archive":
+            self.sql.execute(
+                f"UPDATE {p.t('manifest')} SET status = 'archived', is_active = false, "
+                f"updated_at = current_timestamp() WHERE status <> 'superseded' AND {chosen}", params)
+            self.cp.audit_many(actor, bot_id, "doc_archived", [(d, None) for d in doc_ids])
+        elif action == "restore":
+            self.sql.execute(
+                f"UPDATE {p.t('manifest')} SET "
+                f"status = CASE WHEN flag_reason = '{BLOCKED}' THEN 'flagged' ELSE 'pending_review' END, "
+                f"is_active = NOT coalesce(flag_reason = '{BLOCKED}', false), "
+                f"flag_reason = CASE WHEN flag_reason = '{BLOCKED}' THEN flag_reason ELSE NULL END, "
+                f"updated_at = current_timestamp() WHERE status = 'archived' AND {chosen}", params)
+            self.cp.audit_many(actor, bot_id, "doc_restored", [(d, None) for d in doc_ids])
+        else:
+            paths = [r["file_path"] for r in self.sql.query(
+                f"SELECT file_path FROM {p.t('manifest')} WHERE {chosen}", params)]
+            for table in ("chunk_edits", "chunk_archive"):   # only exist once they were needed
+                try:
                     self.sql.execute(f"DELETE FROM {p.t(table)} WHERE {chosen}", params)
-                for path in paths if self.w is not None else []:
-                    try:
-                        self.w.files.delete(path)
-                    except Exception:  # noqa: BLE001 - the table rows are gone; the job can't read it
-                        pass
-                self.cp.audit_many(actor, bot_id, "doc_hard_deleted", [(d, {"reason": reason.strip()}) for d in doc_ids])
-        except Exception as e:  # noqa: BLE001 - tell the page which documents were not changed
-            return {d: type(e).__name__ for d in doc_ids}
-        return {d: "" for d in doc_ids}
+                except Exception:  # noqa: BLE001
+                    pass
+            for table in ("chunked", "parsed_elements", "manifest"):   # the list entry goes last
+                self.sql.execute(f"DELETE FROM {p.t(table)} WHERE {chosen}", params)
+            for path in paths if self.w is not None else []:
+                try:
+                    self.w.files.delete(path)
+                except Exception:  # noqa: BLE001 - the table rows are gone; the job can't read it
+                    pass
+            self.cp.audit_many(actor, bot_id, "doc_hard_deleted", [(d, {"reason": reason.strip()}) for d in doc_ids])
+        return len(doc_ids)
 
     def hard_delete(self, bot_id, doc_id, actor, is_admin: bool, legal_reason: str):
         """Admin only, for legal or retention requests (DOC-10)."""

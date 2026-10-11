@@ -9,12 +9,13 @@ import streamlit as st
 
 from common import (ALL_BOTS, BADGE, across_bots, app_client, bot_config, current_user, docs, docs_view, is_admin,
                     not_ready, page_picture, pick_owned_bot, remember_upload, run_job, settings, show_upload_report,
-                    sql)
+                    sql, technical_details)
 from factory.explain import help_text
 from factory.llm import openai_client
 from factory.qa import guidance, next_step, page_issues
 from factory.reread import propose_section_text
-from factory.documents import FLAG_REASONS, possible_duplicates
+from factory.documents import FLAG_REASONS, identical_copies, possible_duplicates
+from factory.problems import describe
 from factory.ingestion import BotPaths, page_images, page_images_sql, page_order
 from ui import md_text
 
@@ -95,14 +96,26 @@ show_upload_report(cfg.bot_id)  # the last upload's result stays visible whichev
 if st.session_state.get("manage_result"):
     st.success(st.session_state.pop("manage_result"))
 
-# Three things to do here, one open at a time: choosing one opens it and closes the other.
-SECTIONS = ["Add documents", "Curate documents", "Review a document"]
+# Three things to do here, one open at a time: choosing one opens it and closes the other. They
+# are the main controls of the page, so they get a panel of their own and large buttons.
 dupes = possible_duplicates(rows)
-section = st.segmented_control("What would you like to do?", SECTIONS, key="docs_section")
+ACTIONS = [("Add documents", ":material/upload_file:", "Upload new files, or a new version of one."),
+           ("Curate documents", ":material/checklist:", "See every document. Approve, archive or delete several "
+                                                         "at once."),
+           ("Review a document", ":material/find_in_page:", "Open one document, check how it was read and "
+                                                            "decide whether to use it.")]
+with st.container(border=True, key="docs_actions"):
+    st.markdown("#### What would you like to do?")
+    st.caption("Choose one. It opens underneath; choosing another closes it.")
+    for column, (name, icon, about) in zip(st.columns(3), ACTIONS):
+        is_open = st.session_state.get("docs_section") == name
+        if column.button(name, icon=icon, key=f"docs_action_{name.split()[0].lower()}", width="stretch",
+                         type="primary" if is_open else "secondary"):
+            st.session_state["docs_section"] = None if is_open else name
+            st.rerun()
+        column.caption(about)
+section = st.session_state.get("docs_section")
 if section is None:
-    st.caption("Choose one to open it. **Add documents** uploads files. **Curate documents** lists every document "
-               "so you can approve, archive or delete several at once. **Review a document** opens one document "
-               "to check how it was read and decide whether to use it.")
     if pending:
         st.info(f"{len(pending)} document(s) are waiting for a decision. Open **Review a document** to check them, "
                 "or **Curate documents** to approve several at once.")
@@ -146,6 +159,44 @@ elif section == "Curate documents":
         st.subheader("Curate documents")
         st.caption("Every document of this chatbot in one table. Approve the ones waiting, or tick documents to "
                    "archive, restore or delete them.")
+
+        def change(action: str, ids: list[str], done: str, reason: str = "") -> None:
+            """Archive, restore or delete the given documents and say what happened, or, if it
+            fails, why and what to do."""
+            try:
+                n = D.change_many(cfg.bot_id, ids, action, user, is_admin=is_admin(), reason=reason)
+            except Exception as e:  # noqa: BLE001
+                problem = describe(e)
+                st.error(f"**That didn't work.** {problem.what}")
+                st.markdown(f"**What to do:** {problem.do}" + (
+                    " A delete that stopped part-way leaves the document in the list; deleting it again "
+                    "finishes the job." if action == "delete" else ""))
+                with st.expander("Show technical details"):
+                    technical_details(f"{action} documents", e)
+                return
+            republish()
+            st.session_state["manage_round"] = st.session_state.get("manage_round", 0) + 1
+            st.session_state["manage_result"] = f"{done} {n} document(s)."
+            st.rerun()
+
+        # Only when the very same file was uploaded more than once (identical byte for byte).
+        same = identical_copies(rows)
+        if same:
+            by_id = {r["doc_id"]: r for r in rows}
+            with st.container(border=True):
+                st.markdown(f"**{len(same)} document(s) are exact copies of a file that was uploaded again later** "
+                            "(the same file, byte for byte)")
+                st.caption("One click archives the older copy of each and keeps the most recent upload. Archived "
+                           "documents can be restored. Older copies: "
+                           + ", ".join(by_id[i]["doc_name"] for i in same[:8]) + ("…" if len(same) > 8 else ""))
+                approved = [by_id[i]["doc_name"] for i in same if by_id[i]["status"] == "approved"]
+                if approved:
+                    st.caption(f"{len(approved)} of the older copies are approved ({', '.join(approved[:4])}"
+                               + ("…" if len(approved) > 4 else "") + "). After archiving them, approve the copy "
+                               "that is kept so its content stays in the chatbot.")
+                if st.button(f"Archive the {len(same)} older cop{'y' if len(same) == 1 else 'ies'}", type="primary",
+                             key="archive_identical"):
+                    change("archive", same, "Archived the older copy of")
         if pending:
             good = [r for r in pending if r["readability"] in ("green", "n/a")]
             with st.container(border=True):
@@ -194,22 +245,11 @@ elif section == "Curate documents":
             st.markdown(f"**{len(chosen_ids)} selected**" + (": " + ", ".join(names_by_id[i] for i in chosen_ids[:8])
                                                              + ("…" if len(chosen_ids) > 8 else "") if chosen_ids else ""))
 
-            def apply(action: str, done: str, reason: str = "") -> None:
-                outcome = D.change_many(cfg.bot_id, chosen_ids, action, user, is_admin=is_admin(), reason=reason)
-                failed = {i: why for i, why in outcome.items() if why}
-                republish()
-                st.session_state["manage_round"] += 1
-                st.session_state["manage_result"] = (
-                    f"{done} {len(outcome) - len(failed)} document(s)."
-                    + (" Not done: " + ", ".join(f"{names_by_id.get(i, i)} ({why})" for i, why in failed.items())
-                       if failed else ""))
-                st.rerun()
-
             m1, m2 = st.columns(2)
             if m1.button(f"Archive the {len(chosen_ids)} selected", disabled=not chosen_ids, key="manage_archive"):
-                apply("archive", "Archived")
+                change("archive", chosen_ids, "Archived")
             if m2.button(f"Restore the {len(chosen_ids)} selected", disabled=not chosen_ids, key="manage_restore"):
-                apply("restore", "Restored")
+                change("restore", chosen_ids, "Restored")
             if is_admin():
                 with st.container(border=True):
                     st.markdown("**Delete for good** (MLOps only)")
@@ -219,7 +259,7 @@ elif section == "Curate documents":
                                        key="manage_sure")
                     if st.button(f"Delete the {len(chosen_ids)} selected for good", type="primary", key="manage_delete",
                                  disabled=not (chosen_ids and sure and why.strip())):
-                        apply("delete", "Deleted", why)
+                        change("delete", chosen_ids, "Deleted", why)
             else:
                 st.caption("Only MLOps can delete a document for good. Archive it and it stops being used.")
 

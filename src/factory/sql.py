@@ -43,6 +43,16 @@ def json_rows(rows: list[dict], schema: dict[str, str], name: str = "rows") -> t
             {name: payload})
 
 
+def in_list(values: list, prefix: str = "v") -> tuple[str, dict[str, str]]:
+    """`(:v0, :v1, ...)` and its parameters, for `WHERE id IN ...` in an UPDATE or DELETE. Those
+    statements take a plain list; a subquery there is subject to restrictions that vary by
+    runtime."""
+    if not _IDENT.match(prefix):
+        raise ValueError(f"Unsafe parameter prefix: {prefix!r}")
+    params = {f"{prefix}{i}": value for i, value in enumerate(values)}
+    return "(" + ", ".join(f":{name}" for name in params) + ")", params
+
+
 def union_by_key(selects: dict[str, str], key: str = "bot_id") -> tuple[str, dict[str, str]]:
     """The same SELECT against several chatbots' tables as one statement instead of one round
     trip each. `selects` maps the key value (a bot_id) to its SELECT; every row comes back with

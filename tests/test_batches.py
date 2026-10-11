@@ -8,7 +8,7 @@ import pytest
 from factory import golden
 from factory.ingestion import BotPaths
 from factory.jobruns import covered_by
-from factory.sql import json_rows, run_lanes, union_by_key
+from factory.sql import in_list, json_rows, run_lanes, union_by_key
 
 
 def test_json_rows_carries_a_whole_batch_in_one_parameter():
@@ -122,7 +122,7 @@ def test_only_the_differences_are_saved(settings):
     statements = golden.save_statements(BotPaths(settings, "claims_chatbot"), delta, "ana@corp.com")
     assert [s.split()[0] for s, _ in statements] == ["INSERT", "MERGE", "UPDATE"]      # three, whatever the size
     assert all(p["u"] == "ana@corp.com" for _, p in statements)
-    assert json.loads(statements[2][1]["rows"]) == [{"eval_id": "e3"}]
+    assert statements[2][0].endswith("WHERE eval_id IN (:e0)") and statements[2][1]["e0"] == "e3"   # a plain list
 
 
 def test_a_row_removed_from_the_table_is_removed_and_unknown_rows_are_left_alone():
@@ -180,3 +180,9 @@ def test_empty_checkbox_cells_are_not_ticks():
     delta = golden.changes(LOADED, edited)
     assert delta["update"] == [] and delta["remove"] == ["e2"]
     assert delta["add"] == [{"question": "New one", "expected_answer": "", "kind": "in_scope", "approved": False}]
+
+
+def test_in_list_is_a_plain_parameter_list():
+    assert in_list(["a", "b"], "d") == ("(:d0, :d1)", {"d0": "a", "d1": "b"})
+    with pytest.raises(ValueError):
+        in_list(["a"], "d; DROP")

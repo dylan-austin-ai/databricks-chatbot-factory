@@ -192,22 +192,24 @@ def test_copies_of_a_document_are_spotted_by_name():
 
 
 def test_many_documents_can_be_archived_restored_or_deleted_at_once(settings):
-    import json
 
     docs, sql, cp = _docs(settings, [(r"SELECT file_path", [{"file_path": "/Volumes/x/a.pdf"}])])
-    assert docs.change_many("claims_chatbot", ["a", "b", "a"], "archive", "ana@corp.com") == {"a": "", "b": ""}
+    assert docs.change_many("claims_chatbot", ["a", "b", "a"], "archive", "ana@corp.com") == 2
     archive, params = sql.statements[-1]
     assert "status = 'archived'" in archive and "flag_reason" not in archive
-    assert json.loads(params["rows"]) == [{"d": "a"}, {"d": "b"}] and len(sql.statements) == 1   # one statement for all
+    assert archive.endswith("doc_id IN (:d0, :d1)") and params == {"d0": "a", "d1": "b"}
+    assert len(sql.statements) == 1                                                 # one statement for all
     assert [a for a in cp.audits if a[0] == "doc_archived"] == [("doc_archived", "a"), ("doc_archived", "b")]
-    assert docs.change_many("claims_chatbot", ["a"], "restore", "ana@corp.com") == {"a": ""}
+    assert docs.change_many("claims_chatbot", ["a"], "restore", "ana@corp.com") == 1
     assert "THEN 'flagged' ELSE 'pending_review' END" in sql.statements[-1][0]     # restoring never approves
     assert docs.change_many("claims_chatbot", ["a", "b"], "delete", "admin@corp.com", is_admin=True,
-                            reason=" Duplicate uploads ") == {"a": "", "b": ""}
-    deleted = [s.split("`")[5] for s, _ in sql.statements if s.startswith("DELETE FROM")]
-    assert deleted == ["chunk_edits", "chunk_archive", "chunked", "parsed_elements", "manifest"]
+                            reason=" Duplicate uploads ") == 2
+    deletes = [s for s, _ in sql.statements if s.startswith("DELETE FROM")]
+    assert [s.split("`")[5] for s in deletes] == ["chunk_edits", "chunk_archive", "chunked", "parsed_elements", "manifest"]
+    # UPDATE and DELETE filter on a plain list of parameters: no subquery, nothing built from values
+    assert all(s.endswith("WHERE doc_id IN (:d0, :d1)") and "SELECT" not in s for s in deletes)
     assert [a for a in cp.audits if a[0] == "doc_hard_deleted"] == [("doc_hard_deleted", "a"), ("doc_hard_deleted", "b")]
-    assert docs.change_many("claims_chatbot", [], "archive", "ana@corp.com") == {}
+    assert docs.change_many("claims_chatbot", [], "archive", "ana@corp.com") == 0
 
 
 def test_deleting_needs_an_admin_and_a_reason(settings):
@@ -221,14 +223,46 @@ def test_deleting_needs_an_admin_and_a_reason(settings):
     assert not [s for s, _ in sql.statements if s.startswith(("DELETE", "UPDATE"))]
 
 
-def test_a_failed_bulk_change_says_which_documents_were_not_changed(settings):
+def test_a_failed_bulk_change_raises_so_the_page_can_say_why(settings):
     class Broken(FakeSql):
         def execute(self, statement, params=None):
-            raise RuntimeError("warehouse hiccup")
+            raise RuntimeError("[DELTA_CONCURRENT_APPEND] files were added by a concurrent update")
 
     docs = Documents(Broken(), settings, _Cp())
-    assert docs.change_many("claims_chatbot", ["a", "c"], "archive", "ana@corp.com") == {
-        "a": "RuntimeError", "c": "RuntimeError"}
+    with pytest.raises(RuntimeError, match="DELTA_CONCURRENT_APPEND"):
+        docs.change_many("claims_chatbot", ["a", "c"], "archive", "ana@corp.com")
+
+
+def test_a_delete_that_stops_part_way_leaves_the_document_listed(settings):
+    class StopsAtParsed(FakeSql):
+        def execute(self, statement, params=None):
+            if statement.startswith("DELETE FROM") and "parsed_elements" in statement:
+                raise RuntimeError("warehouse hiccup")
+            super().execute(statement, params)
+
+    sql = StopsAtParsed()
+    with pytest.raises(RuntimeError):
+        Documents(sql, settings, _Cp()).change_many("claims_chatbot", ["a"], "delete", "admin@corp.com",
+                                                    is_admin=True, reason="dupes")
+    assert not [s for s, _ in sql.statements if s.startswith("DELETE FROM") and "`manifest`" in s]   # can be retried
+
+
+def test_identical_copies_are_the_older_files_with_the_same_bytes():
+    from factory.documents import identical_copies
+
+    rows = [{"doc_id": "a", "content_hash": "h1", "uploaded_at": "2026-10-01 09:00:00", "status": "approved"},
+            {"doc_id": "b", "content_hash": "h1", "uploaded_at": "2026-10-05 09:00:00", "status": "pending_review"},
+            {"doc_id": "c", "content_hash": "h1", "uploaded_at": "2026-10-03 09:00:00", "status": "flagged"},
+            {"doc_id": "d", "content_hash": "h2", "uploaded_at": "2026-10-01 09:00:00", "status": "approved"},
+            {"doc_id": "e", "content_hash": "h2", "uploaded_at": "2026-10-02 09:00:00", "status": "archived"},
+            {"doc_id": "f", "content_hash": "h3", "uploaded_at": "2026-10-02 09:00:00", "status": "superseded"},
+            {"doc_id": "f", "content_hash": "h4", "uploaded_at": "2026-10-04 09:00:00", "status": "approved"},
+            {"doc_id": "g", "content_hash": None, "uploaded_at": "2026-10-04 09:00:00", "status": "approved"}]
+    assert sorted(identical_copies(rows)) == ["a", "c"]          # b is the newest of its three; d's copy is archived
+    assert identical_copies([]) == [] and identical_copies(rows[3:]) == []
+    # similar names with different bytes are not identical copies
+    assert identical_copies([{"doc_id": "x", "content_hash": "1", "status": "approved", "uploaded_at": "1"},
+                             {"doc_id": "y", "content_hash": "2", "status": "approved", "uploaded_at": "2"}]) == []
 
 
 # --- the restricted-data block can't be removed by changing a document's status ----------------

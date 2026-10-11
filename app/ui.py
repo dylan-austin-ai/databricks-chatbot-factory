@@ -3,6 +3,7 @@
 Colors: ink #111827, muted #4B5563, ground #F6F7F9, surface #FFFFFF, border #E5E7EB,
 accent #1D4ED8; status green/amber/red/gray always paired with a word.
 """
+import re
 from html import escape
 
 import streamlit as st
@@ -35,6 +36,11 @@ h1 { font-weight: 700 !important; letter-spacing: -0.01em; }
 .cf-quote { border-left: 3px solid #93C5FD; padding: 6px 12px; margin: 4px 0 10px; color: #1F2937; }
 .cf-locked { background: #F6F7F9; border-radius: 10px; padding: 14px 18px; margin-bottom: 12px; }
 .cf-locked li { margin: 2px 0; }
+.st-key-docs_actions { background: #EEF2FF; border-radius: 10px; padding: 4px 6px 2px; }
+.st-key-docs_actions h4 { margin: 0; padding-bottom: 2px; }
+.st-key-docs_actions .stButton button { min-height: 64px; font-size: 17px; font-weight: 700; }
+.st-key-docs_actions .stButton button[data-testid="stBaseButton-secondary"] { background: #FFFFFF; border: 2px solid #1D4ED8; color: #1D4ED8; }
+.st-key-docs_actions .stButton button[data-testid="stBaseButton-secondary"]:hover { background: #DBE4FF; }
 </style>
 """
 
@@ -47,6 +53,16 @@ def md_text(text: str | None) -> str:
     """Document or model text made safe to show with st.markdown: Streamlit reads the text between
     two dollar signs as a formula, which garbles amounts like "$315 ... $500"."""
     return (text or "").replace("$", "\\$")
+
+
+_MARKDOWN = re.compile(r"([\\`*_{}\[\]()#+\-.!|<>~$=^])")
+
+
+def plain(text: str | None) -> str:
+    """Stored text (an alert, an error message) made safe to place in st.markdown as plain words:
+    on one line, with every character defused that markdown or HTML would act on. Without this a
+    database error, with its lines of dashes and equals signs, comes out as page-wide headings."""
+    return _MARKDOWN.sub(r"\\\1", escape(" ".join((text or "").split()), quote=False))
 
 
 def pill(text: str, tone: str = "gray") -> str:
