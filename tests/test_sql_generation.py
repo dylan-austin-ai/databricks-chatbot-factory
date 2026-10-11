@@ -43,9 +43,15 @@ def test_pipeline_sql_shapes(settings):
     p = BotPaths(settings, "claims_chatbot")
     sql = parse_binary_sql(p, "abc123", 2, f"{p.files}/abc123_v2.pdf", "1-3, 5")
     assert "ai_parse_document" in sql and "'pageRange', '1-3,5'" in sql
-    delete, insert, count = chunk_sql(p, settings, 1)
+    ddl, archive, delete, insert, count = chunk_sql(p, settings, 1)
     assert "ai_prep_search(text_content" in insert and "ai_prep_search(parsed" in insert
     assert "doc_type" in insert and "'schema'" in insert
+    # replaced sections are archived before they are deleted, and only the DDL takes no parameters
+    assert ddl.startswith("CREATE TABLE IF NOT EXISTS") and "chunk_archive" in ddl and ":d0" not in ddl
+    assert "INSERT INTO `chatbots_test`.`claims_chatbot`.`chunk_archive`" in archive and "NOT EXISTS" in archive
+    assert all(":d0" in s for s in (archive, delete, insert, count))
+    # a section's id carries a fingerprint of its text, so changed text is a new id
+    assert "substr(sha2(coalesce(c.value:chunk_to_retrieve::STRING, ''), 256), 1, 10)) AS chunk_id" in insert
     sel = approved_chunks_select(p)
     assert "m.status = 'approved' AND m.is_active" in sel
     assert "expires_ts" in sel and "effective_ts" in sel and "'claims_chatbot' AS bot_id" in sel

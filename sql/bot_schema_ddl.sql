@@ -59,12 +59,25 @@ CREATE TABLE IF NOT EXISTS {catalog}.{schema}.chunked (
   updated_at TIMESTAMP
 ) TBLPROPERTIES (delta.enableChangeDataFeed = true);
 
+-- Sections that were replaced (by a re-read, typed text or a correction), kept so an earlier
+-- release can be restored exactly (REL-3). Same shape as chunked; also created on first use for
+-- chatbots that predate it.
+CREATE TABLE IF NOT EXISTS {catalog}.{schema}.chunk_archive (
+  chunk_id STRING NOT NULL,
+  doc_id STRING, doc_version INT, doc_name STRING, source_uri STRING,
+  chunk_position INT, page_ids ARRAY<INT>, section STRING,
+  chunk_to_retrieve STRING, chunk_to_embed STRING,
+  doc_type STRING, effective_date STRING, department STRING,
+  flagged BOOLEAN, injection_flag BOOLEAN, updated_at TIMESTAMP
+);
+
 -- Sections corrected by hand (QA-9): what the reader produced and what the owner changed it to,
--- so an edit can be seen and undone. Also created on first use for chatbots that predate it.
+-- so an edit can be seen and undone. chunk_id is the corrected section; original_chunk_id is the
+-- section it replaced. Also created on first use for chatbots that predate it.
 CREATE TABLE IF NOT EXISTS {catalog}.{schema}.chunk_edits (
   chunk_id STRING NOT NULL, doc_id STRING, doc_version INT,
   original_text STRING, original_embed STRING, edited_text STRING,
-  edited_by STRING, edited_at TIMESTAMP
+  edited_by STRING, edited_at TIMESTAMP, original_chunk_id STRING
 );
 
 -- Dedicated index source, confidential bots only (ARC-4); same shape as shared_chunks

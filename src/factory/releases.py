@@ -22,7 +22,7 @@ import os
 from . import PLATFORM_VERSION
 from .config import BotConfig, PlatformSettings
 from .controlplane import ControlPlane
-from .ingestion import PARSER_VERSION, BotPaths, approved_chunks_select
+from .ingestion import PARSER_VERSION, BotPaths, approved_chunks_select, chunk_archive_ddl
 from .sql import SqlRunner, ident
 
 
@@ -41,6 +41,7 @@ def index_table(settings: PlatformSettings, cfg: BotConfig) -> str:
 
 
 META_COLS = ["effective_ts", "expires_ts", "security_scope", "geo_scope"]
+TEXT_COLS = ["chunk_to_retrieve", "chunk_to_embed"]
 
 
 class Releases:
@@ -124,17 +125,20 @@ class Releases:
         tbl = index_table(self.s, cfg)
         approved = approved_chunks_select(p)
         params = {"b": cfg.bot_id}
-        meta_differs = " OR ".join(f"NOT (t.{c} <=> s.{c})" for c in META_COLS)
-        # Only rows whose flag or (candidate-only) metadata changes are touched.
+        differs = " OR ".join(f"NOT (t.{c} <=> s.{c})" for c in META_COLS + TEXT_COLS)
+        # Only rows whose flag or content changes are touched. A row that is live is never
+        # rewritten: changed text arrives under a new chunk_id (ingestion.chunk_id_for), so the
+        # first clause can only apply to rows that are in the test version alone.
         self.sql.execute(f"""
             MERGE INTO {tbl} t USING ({approved}) s
             ON t.chunk_id = s.chunk_id AND t.bot_id = s.bot_id
+            WHEN MATCHED AND NOT coalesce(t.in_live, false) AND ({differs}) THEN
+              UPDATE SET in_candidate = true, effective_ts = s.effective_ts, expires_ts = s.expires_ts,
+                security_scope = s.security_scope, geo_scope = s.geo_scope, doc_name = s.doc_name,
+                chunk_to_retrieve = s.chunk_to_retrieve, chunk_to_embed = s.chunk_to_embed,
+                page_ids = s.page_ids, section = s.section, updated_at = current_timestamp()
             WHEN MATCHED AND NOT coalesce(t.in_candidate, false) THEN
               UPDATE SET in_candidate = true, updated_at = current_timestamp()
-            WHEN MATCHED AND NOT coalesce(t.in_live, false) AND ({meta_differs}) THEN
-              UPDATE SET effective_ts = s.effective_ts, expires_ts = s.expires_ts,
-                security_scope = s.security_scope, geo_scope = s.geo_scope,
-                doc_name = s.doc_name, updated_at = current_timestamp()
             WHEN NOT MATCHED THEN INSERT (chunk_id, bot_id, doc_id, doc_version, doc_name,
                 source_uri, page_ids, section, chunk_to_retrieve, chunk_to_embed, doc_type,
                 effective_date, department, in_live, in_candidate, effective_ts, expires_ts,
@@ -195,6 +199,25 @@ class Releases:
               SELECT 1 FROM {hist} h WHERE h.bot_id = r.bot_id AND h.chunk_id = r.chunk_id
                 AND h.live_to IS NULL AND {same})""", {"r": release_id})
 
+    def _release_sections(self, p: BotPaths) -> str:
+        """Where a release's sections are read from: the current sections, plus any the release
+        recorded that have since been replaced (a re-read, typed text, a corrected section). The
+        archive keeps those, so the release goes live, or comes back on rollback, exactly as it
+        was approved. A chatbot whose archive can't be created falls back to current sections."""
+        cols = ("chunk_id, doc_id, doc_version, doc_name, source_uri, page_ids, section, chunk_to_retrieve, "
+                "chunk_to_embed, doc_type, effective_date, department")
+        try:
+            self.sql.execute(chunk_archive_ddl(p))
+        except Exception:  # noqa: BLE001 - rather publish from current sections than not at all
+            return p.t("chunked")
+        return f"""(
+              SELECT {cols} FROM {p.t('chunked')}
+              UNION ALL
+              SELECT {cols} FROM (
+                SELECT * FROM {p.t('chunk_archive')} a
+                WHERE NOT EXISTS (SELECT 1 FROM {p.t('chunked')} k WHERE k.chunk_id = a.chunk_id)
+                QUALIFY ROW_NUMBER() OVER (PARTITION BY a.chunk_id ORDER BY a.updated_at DESC) = 1))"""
+
     def _apply_live(self, cfg: BotConfig, release_id: str, keep_candidate: bool) -> None:
         """Make the index's live set equal the release's membership and metadata."""
         tbl = index_table(self.s, cfg)
@@ -208,7 +231,7 @@ class Releases:
                      c.page_ids, c.section, c.chunk_to_retrieve, c.chunk_to_embed, c.doc_type,
                      c.effective_date, c.department, r.effective_ts, r.expires_ts,
                      r.security_scope, r.geo_scope
-              FROM {rc} r JOIN {p.t('chunked')} c ON c.chunk_id = r.chunk_id
+              FROM {rc} r JOIN {self._release_sections(p)} c ON c.chunk_id = r.chunk_id
               WHERE r.release_id = :r) s
             ON t.chunk_id = s.chunk_id AND t.bot_id = s.bot_id
             WHEN MATCHED AND (NOT coalesce(t.in_live, false)

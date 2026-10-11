@@ -9,10 +9,12 @@ import uuid
 
 from .config import PlatformSettings
 from .controlplane import ControlPlane
-from .ingestion import BotPaths
+from . import guardrails, sensitive
+from .ingestion import BotPaths, archive_chunks_sql, chunk_archive_ddl, chunk_id_for
 from .validation import ValidationResult, validate_file
 
 FLAG_REASONS = ["Missing text", "Garbled table", "Wrong pages", "Contains sensitive info", "Other"]
+BLOCKED = "Contains sensitive info"   # set by the restricted-data scan; only a clean upload clears it
 
 # Words people add to a file name when they save another copy of the same document.
 _COPY_WORDS = r"copy|copie|decrypted|unlocked|unprotected|unsecured|unrestricted|nopassword|no password|final|new|updated"
@@ -158,7 +160,7 @@ class Documents:
         p = BotPaths(self.s, bot_id)
         row = self.sql.query(f"SELECT flag_reason FROM {p.t('manifest')} WHERE doc_id = :d "
                              "AND status <> 'superseded'", {"d": doc_id})
-        if row and row[0]["flag_reason"] == "Contains sensitive info":
+        if row and row[0]["flag_reason"] == BLOCKED:
             raise PermissionError("This document contains restricted data and can't be approved. "
                                   "Upload a clean copy instead (ING-8).")
         self._set_status(bot_id, doc_id, "approved", True, actor, "doc_approved")
@@ -176,19 +178,42 @@ class Documents:
         restricted data are flagged, not waiting, so they are never included."""
         p = BotPaths(self.s, bot_id)
         rows = self.sql.query(f"SELECT doc_id FROM {p.t('manifest')} WHERE status = 'pending_review' "
-                              "AND coalesce(flag_reason, '') <> 'Contains sensitive info'")
+                              f"AND coalesce(flag_reason, '') <> '{BLOCKED}'")
         for r in rows:
             self.approve(bot_id, r["doc_id"], actor)
         return len(rows)
 
     def flag(self, bot_id, doc_id, actor, reason):
-        self._set_status(bot_id, doc_id, "flagged", False, actor, "doc_flagged", reason)
+        """Flag for fixing with the owner's reason. A document blocked for restricted data keeps
+        that block: replacing its reason would make it approvable."""
+        p = BotPaths(self.s, bot_id)
+        self.sql.execute(
+            f"UPDATE {p.t('manifest')} SET status = 'flagged', is_active = false, "
+            f"flag_reason = CASE WHEN flag_reason = '{BLOCKED}' THEN flag_reason ELSE :r END, "
+            "updated_at = current_timestamp() WHERE doc_id = :d AND status <> 'superseded'",
+            {"r": reason, "d": doc_id})
+        self.cp.audit(actor, bot_id, "doc_flagged", doc_id, {"reason": reason} if reason else {})
 
     def archive(self, bot_id, doc_id, actor):
-        self._set_status(bot_id, doc_id, "archived", False, actor, "doc_archived")
+        """Take the document out of the chatbot and keep it. Its flag reason stays, so a document
+        blocked for restricted data is still blocked if it is restored."""
+        p = BotPaths(self.s, bot_id)
+        self.sql.execute(
+            f"UPDATE {p.t('manifest')} SET status = 'archived', is_active = false, "
+            "updated_at = current_timestamp() WHERE doc_id = :d AND status <> 'superseded'", {"d": doc_id})
+        self.cp.audit(actor, bot_id, "doc_archived", doc_id)
 
     def restore(self, bot_id, doc_id, actor):
-        self._set_status(bot_id, doc_id, "approved", True, actor, "doc_restored")
+        """Bring an archived document back for a decision. It is not approved by restoring it:
+        it waits for review again, and one blocked for restricted data comes back flagged."""
+        p = BotPaths(self.s, bot_id)
+        self.sql.execute(
+            f"UPDATE {p.t('manifest')} SET "
+            f"status = CASE WHEN flag_reason = '{BLOCKED}' THEN 'flagged' ELSE 'pending_review' END, "
+            f"is_active = NOT coalesce(flag_reason = '{BLOCKED}', false), "
+            f"flag_reason = CASE WHEN flag_reason = '{BLOCKED}' THEN flag_reason ELSE NULL END, "
+            "updated_at = current_timestamp() WHERE doc_id = :d AND status = 'archived'", {"d": doc_id})
+        self.cp.audit(actor, bot_id, "doc_restored", doc_id)
 
     def defer(self, bot_id, doc_id, actor):
         """Put the decision off: back to waiting for review, out of the chatbot until someone
@@ -196,69 +221,117 @@ class Documents:
         p = BotPaths(self.s, bot_id)
         row = self.sql.query(f"SELECT flag_reason FROM {p.t('manifest')} WHERE doc_id = :d "
                              "AND status <> 'superseded'", {"d": doc_id})
-        if row and row[0]["flag_reason"] == "Contains sensitive info":
-            raise PermissionError("This document contains restricted data. Upload a clean copy instead (ING-8).")
+        if row and row[0]["flag_reason"] == BLOCKED:
+            raise PermissionError("This document contains restricted data. Upload a clean copy instead.")
         self._set_status(bot_id, doc_id, "pending_review", True, actor, "doc_deferred")
 
     # Section-level fixes (QA-9) ------------------------------------------------------------
+    _edit_tables_ready: set[str] = set()   # chatbots whose edit tables were checked by this process
+
     def _ensure_chunk_edits(self, p: BotPaths) -> None:
+        """The edit log and the archive exist for new chatbots; older ones get them here, once."""
+        key = p.t("chunk_edits")
+        if key in self._edit_tables_ready:
+            return
         self.sql.execute(
-            f"""CREATE TABLE IF NOT EXISTS {p.t('chunk_edits')} (
+            f"""CREATE TABLE IF NOT EXISTS {key} (
                 chunk_id STRING NOT NULL, doc_id STRING, doc_version INT,
                 original_text STRING, original_embed STRING, edited_text STRING,
-                edited_by STRING, edited_at TIMESTAMP)""")
+                edited_by STRING, edited_at TIMESTAMP, original_chunk_id STRING)""")
+        try:  # tables made before corrected sections got their own id lack this column
+            if "original_chunk_id" not in {str(r.get("col_name", "")).lower()
+                                           for r in self.sql.query(f"DESCRIBE TABLE {key}")}:
+                self.sql.execute(f"ALTER TABLE {key} ADD COLUMNS (original_chunk_id STRING)")
+        except Exception:  # noqa: BLE001 - the insert below reports a real problem
+            pass
+        self.sql.execute(chunk_archive_ddl(p))
+        self._edit_tables_ready.add(key)
 
-    def edit_chunk(self, bot_id: str, chunk_id: str, text: str, actor: str) -> None:
-        """Replace one section's text with a corrected version. The reader's original is kept so
-        the edit can be undone. Re-reading the whole document rebuilds its sections and drops
-        section edits."""
+    def edit_chunk(self, bot_id: str, chunk_id: str, text: str, actor: str) -> str:
+        """Replace one section's text with a corrected version; returns the section's new id.
+
+        The corrected section gets a new id, because the search index never rewrites a row that
+        is live: the correction enters the test version and reaches users when it is approved.
+        The section it replaces is archived (so an earlier release can be restored) and
+        remembered (so the edit can be undone). Re-reading the whole document rebuilds its
+        sections and drops section edits.
+        """
         text = (text or "").strip()
         if not text:
-            raise ValueError("A section can't be empty. Flag it instead if it shouldn't be used.")
+            raise ValueError("A section can't be empty. Choose \"Don't use this section\" instead.")
+        if sensitive.scan(text).blocked:
+            raise ValueError("This text looks like it contains restricted data (for example a Social Security, "
+                             "card or bank account number), so it wasn't saved. Remove it and save again.")
+        if guardrails.find_injection(text):
+            raise ValueError("This text contains wording that reads like instructions to an AI (for example "
+                             "\"ignore previous instructions\"), so it wasn't saved. Rephrase it and save again.")
         p = BotPaths(self.s, bot_id)
         rows = self.sql.query(
-            f"SELECT doc_id, doc_version, chunk_to_retrieve, chunk_to_embed FROM {p.t('chunked')} "
+            f"SELECT doc_id, doc_version, chunk_position, chunk_to_retrieve, chunk_to_embed FROM {p.t('chunked')} "
             "WHERE chunk_id = :c", {"c": chunk_id})
         if not rows:
             raise KeyError(chunk_id)
         row = rows[0]
         current, embed = row["chunk_to_retrieve"] or "", row["chunk_to_embed"] or ""
         if text == current:
-            return
+            return chunk_id
+        new_id = chunk_id_for(row["doc_id"], row["doc_version"], row["chunk_position"], text)
         self._ensure_chunk_edits(p)
-        known = self.sql.query(f"SELECT edited_text FROM {p.t('chunk_edits')} WHERE chunk_id = :c", {"c": chunk_id})
-        # Keep the reader's text only the first time; later edits of an edited section keep that original.
+        self.sql.execute(archive_chunks_sql(p, "c.chunk_id = :c"), {"c": chunk_id})
+        known = self.sql.query(f"SELECT edited_text, original_text FROM {p.t('chunk_edits')} WHERE chunk_id = :c",
+                               {"c": chunk_id})
+        if known and known[0]["edited_text"] == current and known[0]["original_text"] == text:
+            self.restore_chunk(bot_id, chunk_id, actor)   # typed back to what the reader produced: that is an undo
+            return new_id
         if known and known[0]["edited_text"] == current:
+            # Already a corrected section: keep pointing at the reader's original.
             self.sql.execute(
-                f"UPDATE {p.t('chunk_edits')} SET edited_text = :t, edited_by = :a, edited_at = current_timestamp() "
-                "WHERE chunk_id = :c", {"t": text, "a": actor, "c": chunk_id})
+                f"UPDATE {p.t('chunk_edits')} SET chunk_id = :n, edited_text = :t, edited_by = :a, "
+                "edited_at = current_timestamp() WHERE chunk_id = :c",
+                {"n": new_id, "t": text, "a": actor, "c": chunk_id})
         else:
             self.sql.execute(f"DELETE FROM {p.t('chunk_edits')} WHERE chunk_id = :c", {"c": chunk_id})
             self.sql.execute(
-                f"INSERT INTO {p.t('chunk_edits')} VALUES (:c, :d, CAST(:v AS INT), :o, :oe, :t, :a, current_timestamp())",
-                {"c": chunk_id, "d": row["doc_id"], "v": int(row["doc_version"]), "o": current, "oe": embed,
-                 "t": text, "a": actor})
+                f"INSERT INTO {p.t('chunk_edits')} (chunk_id, doc_id, doc_version, original_text, original_embed, "
+                "edited_text, edited_by, edited_at, original_chunk_id) "
+                "SELECT :n, :d, CAST(:v AS INT), :o, :oe, :t, :a, current_timestamp(), :c",
+                {"n": new_id, "d": row["doc_id"], "v": int(row["doc_version"]), "o": current, "oe": embed,
+                 "t": text, "a": actor, "c": chunk_id})
         # The search text carries a header before the section's words; keep the header, swap the words.
         new_embed = embed.replace(current, text, 1) if current and current in embed else text
         self.sql.execute(
-            f"UPDATE {p.t('chunked')} SET chunk_to_retrieve = :t, chunk_to_embed = :e, "
-            "updated_at = current_timestamp() WHERE chunk_id = :c", {"t": text, "e": new_embed, "c": chunk_id})
-        self.cp.audit(actor, bot_id, "chunk_edited", chunk_id, {"doc_id": row["doc_id"]})
+            f"UPDATE {p.t('chunked')} SET chunk_id = :n, chunk_to_retrieve = :t, chunk_to_embed = :e, "
+            "updated_at = current_timestamp() WHERE chunk_id = :c",
+            {"n": new_id, "t": text, "e": new_embed, "c": chunk_id})
+        self._repoint_questions(p, chunk_id, new_id)
+        self.cp.audit(actor, bot_id, "chunk_edited", new_id, {"doc_id": row["doc_id"], "replaces": chunk_id})
+        return new_id
+
+    def _repoint_questions(self, p: BotPaths, old_id: str, new_id: str) -> None:
+        """Test questions written from a section follow it when its id changes."""
+        if old_id != new_id:
+            self.sql.execute(f"UPDATE {p.t('golden_set')} SET source_chunk_id = :n WHERE source_chunk_id = :o",
+                             {"n": new_id, "o": old_id})
 
     def restore_chunk(self, bot_id: str, chunk_id: str, actor: str) -> bool:
-        """Undo a section edit: put back the text the reader produced. False if there was no edit."""
+        """Undo a section edit: put back the section the reader produced, under its own id.
+        False if there was no edit."""
         p = BotPaths(self.s, bot_id)
         self._ensure_chunk_edits(p)
-        rows = self.sql.query(f"SELECT original_text, original_embed FROM {p.t('chunk_edits')} WHERE chunk_id = :c",
-                              {"c": chunk_id})
+        rows = self.sql.query(
+            f"SELECT original_text, original_embed, original_chunk_id FROM {p.t('chunk_edits')} WHERE chunk_id = :c",
+            {"c": chunk_id})
         if not rows:
             return False
+        back_to = rows[0].get("original_chunk_id") or chunk_id   # edits saved before ids changed stay in place
+        self.sql.execute(archive_chunks_sql(p, "c.chunk_id = :c"), {"c": chunk_id})
         self.sql.execute(
-            f"UPDATE {p.t('chunked')} SET chunk_to_retrieve = :t, chunk_to_embed = :e, "
+            f"UPDATE {p.t('chunked')} SET chunk_id = :n, chunk_to_retrieve = :t, chunk_to_embed = :e, "
             "updated_at = current_timestamp() WHERE chunk_id = :c",
-            {"t": rows[0]["original_text"], "e": rows[0]["original_embed"], "c": chunk_id})
+            {"n": back_to, "t": rows[0]["original_text"], "e": rows[0]["original_embed"], "c": chunk_id})
         self.sql.execute(f"DELETE FROM {p.t('chunk_edits')} WHERE chunk_id = :c", {"c": chunk_id})
-        self.cp.audit(actor, bot_id, "chunk_edit_undone", chunk_id)
+        self._repoint_questions(p, chunk_id, back_to)
+        self.cp.audit(actor, bot_id, "chunk_edit_undone", back_to, {"replaces": chunk_id})
         return True
 
     def edited_chunks(self, bot_id: str, doc_id: str) -> dict[str, dict]:
@@ -381,10 +454,11 @@ class Documents:
             raise PermissionError("Only MLOps admins can permanently delete documents.")
         p = BotPaths(self.s, bot_id)
         rows = self.sql.query(f"SELECT file_path FROM {p.t('manifest')} WHERE doc_id = :d", {"d": doc_id})
-        try:  # hand edits of its sections go too; the table only exists once a section was edited
-            self.sql.execute(f"DELETE FROM {p.t('chunk_edits')} WHERE doc_id = :d", {"d": doc_id})
-        except Exception:  # noqa: BLE001
-            pass
+        for t in ("chunk_edits", "chunk_archive"):  # its corrected and replaced sections go too
+            try:
+                self.sql.execute(f"DELETE FROM {p.t(t)} WHERE doc_id = :d", {"d": doc_id})
+            except Exception:  # noqa: BLE001 - these tables only exist once they were needed
+                pass
         for t in ("chunked", "parsed_elements", "manifest"):
             self.sql.execute(f"DELETE FROM {p.t(t)} WHERE doc_id = :d", {"d": doc_id})
         if self.w is not None:

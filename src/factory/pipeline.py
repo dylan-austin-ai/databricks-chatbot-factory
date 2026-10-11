@@ -83,7 +83,7 @@ class Pipeline:
                 if any(t["parser"] == "text_reader" for t in targets):
                     self.sql.execute(parse_text_sql(p, len(ids)), params)
             for stmt in chunk_sql(p, self.s, len(ids)):
-                self.sql.execute(stmt, params)
+                self.sql.execute(stmt, params if ":d0" in stmt else None)
             injected = self.injection_scan(p, ids)
             self.extraction_qa(cfg, p, targets, injected)
             gen = (cfg.golden_set_mode == "generate") if generate_golden is None else generate_golden

@@ -14,6 +14,7 @@ of ai_parse_document, which must be constant: see parse_binary_sql.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 
@@ -138,13 +139,47 @@ def latest_parse_cte(p: BotPaths) -> str:
     )"""
 
 
+CHUNK_COLUMNS = ["chunk_id", "doc_id", "doc_version", "doc_name", "source_uri", "chunk_position", "page_ids",
+                 "section", "chunk_to_retrieve", "chunk_to_embed", "doc_type", "effective_date", "department",
+                 "flagged", "injection_flag", "updated_at"]
+
+
+def chunk_id_for(doc_id: str, doc_version: int, position: int, text: str) -> str:
+    """A section's id: where it sits plus a fingerprint of its text. The search index keys on this
+    id and never rewrites a row that is live, so text that changes (a re-read, typed text, a
+    corrected section) must arrive under a new id: it then enters the test version as a new row
+    while the live row stays exactly as approved. Same value as the SQL in chunk_sql."""
+    digest = hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:10]
+    return f"{doc_id}_v{int(doc_version)}_{int(position)}_{digest}"
+
+
+def chunk_archive_ddl(p: BotPaths) -> str:
+    """Sections that were replaced, kept so an earlier release can still be restored exactly
+    (REL-3). Created with the chatbot, and on first use for chatbots that predate it."""
+    return f"""CREATE TABLE IF NOT EXISTS {p.t('chunk_archive')} (
+        chunk_id STRING NOT NULL, doc_id STRING, doc_version INT, doc_name STRING, source_uri STRING,
+        chunk_position INT, page_ids ARRAY<INT>, section STRING, chunk_to_retrieve STRING,
+        chunk_to_embed STRING, doc_type STRING, effective_date STRING, department STRING,
+        flagged BOOLEAN, injection_flag BOOLEAN, updated_at TIMESTAMP)"""
+
+
+def archive_chunks_sql(p: BotPaths, where: str) -> str:
+    """Copy the sections matching `where` (alias c) into the archive, once each."""
+    cols = ", ".join(CHUNK_COLUMNS)
+    return (f"INSERT INTO {p.t('chunk_archive')} ({cols}) "
+            f"SELECT {', '.join('c.' + c for c in CHUNK_COLUMNS)} FROM {p.t('chunked')} c WHERE {where} "
+            f"AND NOT EXISTS (SELECT 1 FROM {p.t('chunk_archive')} a WHERE a.chunk_id = c.chunk_id)")
+
+
 def chunk_sql(p: BotPaths, settings: PlatformSettings, n_docs: int) -> list[str]:
-    """Replace chunks for the given docs (idempotent: delete then insert)."""
+    """Replace chunks for the given docs (idempotent): archive what is there, delete, insert.
+    Statements that mention :d0 take the doc id parameters; the first one takes none."""
     schema_json = json.dumps(settings.get("ingestion.metadata_schema")).replace("'", "\\'")
     opts = f"map('version', '2.0', 'schema', '{schema_json}')"
     # Only the current version is re-chunked; older versions stay for rollback (REL-3).
     current = (f"SELECT concat(doc_id, '_v', doc_version) FROM {p.t('manifest')} "
                f"WHERE doc_id IN ({_in_list(n_docs)}) AND status <> 'superseded'")
+    archive = archive_chunks_sql(p, f"concat(c.doc_id, '_v', c.doc_version) IN ({current})")
     delete = (f"DELETE FROM {p.t('chunked')} "
               f"WHERE concat(doc_id, '_v', doc_version) IN ({current})")
     insert = f"""
@@ -164,7 +199,8 @@ def chunk_sql(p: BotPaths, settings: PlatformSettings, n_docs: int) -> list[str]
       FROM docs
     )
     SELECT
-      concat(doc_id, '_v', doc_version, '_', c.value:chunk_position::INT) AS chunk_id,
+      concat(doc_id, '_v', doc_version, '_', c.value:chunk_position::INT, '_',
+             substr(sha2(coalesce(c.value:chunk_to_retrieve::STRING, ''), 256), 1, 10)) AS chunk_id,
       doc_id, doc_version, doc_name, file_path AS source_uri,
       c.value:chunk_position::INT AS chunk_position,
       transform(cast(c.value:pages AS ARRAY<VARIANT>), x -> x:page_id::INT) AS page_ids,
@@ -187,7 +223,7 @@ def chunk_sql(p: BotPaths, settings: PlatformSettings, n_docs: int) -> list[str]
     WHEN MATCHED THEN UPDATE SET chunk_count = c.n, parser_version = '{PARSER_VERSION}',
       updated_at = current_timestamp()
     """
-    return [delete, insert, count]
+    return [chunk_archive_ddl(p), archive, delete, insert, count]
 
 
 def qa_metrics_sql(p: BotPaths, n_docs: int) -> str:

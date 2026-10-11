@@ -520,11 +520,15 @@ with tab_chunks:
                 s1, s2 = st.columns(2)
                 if s1.button("Save this section", type="primary", key=f"save_{cid}",
                              disabled=not new_text.strip() or new_text.strip() == (c["chunk_to_retrieve"] or "").strip()):
-                    D.edit_chunk(cfg.bot_id, cid, new_text, user)
-                    republish()
-                    st.session_state.pop("editing_section", None)
-                    st.session_state.pop(f"proposal_{cid}", None)
-                    st.rerun()
+                    try:
+                        D.edit_chunk(cfg.bot_id, cid, new_text, user)
+                    except ValueError as e:  # empty, restricted data, or wording that reads like instructions
+                        st.error(str(e))
+                    else:
+                        republish()
+                        st.session_state.pop("editing_section", None)
+                        st.session_state.pop(f"proposal_{cid}", None)
+                        st.rerun()
                 if s2.button("Cancel", key=f"cancel_{cid}"):
                     st.session_state.pop("editing_section", None)
                     st.session_state.pop(f"proposal_{cid}", None)
