@@ -54,21 +54,25 @@ def setup_steps(settings, existing: set[str] | None = None, usage_policy: bool |
     checked). `usage_policy`: whether the factory's jobs carry a usage policy (None when that
     couldn't be read). `confirmed`: what people have ticked, {key: {"by": ..., "on": ...}}."""
     confirmed = confirmed or {}
+    # Name the catalog and schema outright: "this environment's catalog" leaves people asking which.
+    where = f"catalog `{settings.catalog}`, schema `{settings.platform_schema}`"
     steps = [
         _table_step(settings, "inference_table", "The answer service logs its calls", "Answer service inference table",
-                    "In Databricks, open **AI Gateway**, open the answer model service and turn on its inference table.",
+                    "In Databricks, open **AI Gateway**, open the answer model service and turn on its inference "
+                    f"table in {where}.",
                     "Without it the Guardrails charts and the cost comparison can't show what the gateway saw.",
                     "C2 and C5", existing, must_be_home=True),
         _table_step(settings, "evaluator_inference_table", "The guardrail evaluator logs its verdicts",
                     "Evaluator inference table",
                     "In Databricks, open **AI Gateway**, open the guardrail evaluator service and turn on its "
-                    "inference table.",
+                    f"inference table in {where}.",
                     "Without it the hallucination check's verdicts aren't recorded anywhere you can see.",
                     "C3 and C5", existing, must_be_home=True),
         _table_step(settings, "trace_table", "Unity Gateway traces are stored", "Unified trace table",
-                    "A metastore admin opens **AI Gateway** › **Govern** › **Traces** › **Set up tracing** and "
-                    "chooses this environment's catalog and platform schema.",
-                    "Without it MLOps and Security can't read the gateway's own traces.", "C4 and C5", existing,
+                    "In this workspace, a metastore admin opens **AI Gateway** › **Govern** › **Traces** › **Set up "
+                    f"tracing** and chooses {where}. If tracing is already set up there, use the table it shows.",
+                    "Without it MLOps and Security can't read the gateway's own traces. Nothing in the app depends "
+                    "on it, so it can wait.", "C4 and C5", existing,
                     must_be_home=False),
         SetupStep("genie", "The Genie space over the monitoring tables exists",
                   DONE if settings.get("observability.genie_space_id") else TODO,

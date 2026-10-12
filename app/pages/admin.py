@@ -395,6 +395,9 @@ if section == "Setup checklist":  # Setup checklist: Databricks steps with no AP
     st.caption("Part of the setup is finished in Databricks screens. The app checks what it can see for itself "
                "and says what is left to do. What it can't see is listed separately for you to tick, so an empty "
                "box here always means something is still to do. The clicks for every step are in docs/SETUP.md.")
+    st.markdown(f"This checklist is for the **{s.get('environment') or 'current'}** environment: this workspace and "
+                f"the catalog `{s.catalog}`. Each environment has its own app, its own settings and its own "
+                "checklist, so everything here is done once in QA and again in prod, each with its own catalog.")
     home = f"{s.catalog}.{s.platform_schema}"
     recorded = [str(s.get(f"unity_gateway.{k}") or "").strip().lower()
                 for k in ("inference_table", "evaluator_inference_table", "trace_table")]

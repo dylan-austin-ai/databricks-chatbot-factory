@@ -415,6 +415,12 @@ What this gives you:
 3. Copy the table name, for example `qa_chatbot_factory._platform.unity_gateway_otel_spans`. This is
    `<trace_table>`.
 
+Do this in each environment's own workspace with that environment's catalog (prod:
+`prod_chatbot_factory`), and record the name in that environment's app. If the prod workspace
+shows tracing as already set up when you get there, the setting is shared across workspaces on
+the same metastore: record the table it shows in prod's app as well instead of creating a second
+one. Nothing in the app reads this table; the step only gives `mlops` and `security` access to it.
+
 ### C5. Record the table names and finish observability [App] + [CLI]
 
 1. **Admin** › **Platform**. Set:
@@ -680,4 +686,7 @@ output and the first smoke test:
 - If a chatbot's email alerts couldn't be set up when it was created, Admin › Alerts shows
   "Email alerts not set up" with **Try setting them up again**, which runs the maintenance job;
   that job also retries them every night.
+- Whether **AI Gateway** › **Govern** › **Traces** is set per workspace or once per metastore
+  (C4). The guide assumes per workspace; if it turns out to be shared, QA and prod record the
+  same trace table.
 - README › "Verify against a live workspace first" has the full list.
