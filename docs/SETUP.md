@@ -415,6 +415,11 @@ What this gives you:
 3. Copy the table name, for example `qa_chatbot_factory._platform.unity_gateway_otel_spans`. This is
    `<trace_table>`.
 
+   Databricks creates the table only when the gateway handles its first call after tracing is
+   switched on. If no table is shown, nothing is wrong: finish the rest of the setup, ask a
+   chatbot a question (D3), then come back to this screen, or look in Catalog Explorer under
+   `qa_chatbot_factory` › `_platform` for the new table, and record its name then.
+
 Do this in each environment's own workspace with that environment's catalog (prod:
 `prod_chatbot_factory`), and record the name in that environment's app. If the prod workspace
 shows tracing as already set up when you get there, the setting is shared across workspaces on

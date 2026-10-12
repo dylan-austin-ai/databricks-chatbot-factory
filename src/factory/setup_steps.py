@@ -70,7 +70,10 @@ def setup_steps(settings, existing: set[str] | None = None, usage_policy: bool |
                     "C3 and C5", existing, must_be_home=True),
         _table_step(settings, "trace_table", "Unity Gateway traces are stored", "Unified trace table",
                     "In this workspace, a metastore admin opens **AI Gateway** › **Govern** › **Traces** › **Set up "
-                    f"tracing** and chooses {where}. If tracing is already set up there, use the table it shows.",
+                    f"tracing** and chooses {where}. If tracing is already set up there, use the table it shows. "
+                    "Databricks creates the table only when the gateway handles its first call after that, so if "
+                    "no table is shown yet, you have done your part: come back after a chatbot has answered a "
+                    "question, and the table will be listed there and in Catalog Explorer under that schema.",
                     "Without it MLOps and Security can't read the gateway's own traces. Nothing in the app depends "
                     "on it, so it can wait.", "C4 and C5", existing,
                     must_be_home=False),

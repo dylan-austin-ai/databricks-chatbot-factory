@@ -18,6 +18,7 @@ def test_a_fresh_platform_says_what_is_to_do_and_what_only_a_person_can_confirm(
     for key in ("inference_table", "evaluator_inference_table", "trace_table", "genie"):
         assert steps[key].state == TODO and not steps[key].by_hand
     assert "Answer service inference table" in steps["inference_table"].detail      # the field to fill in
+    assert "only when the gateway handles its first call" in steps["trace_table"].detail   # no table yet is normal
     for key in ("inference_table", "evaluator_inference_table", "trace_table"):     # which catalog, by name
         assert "catalog `chatbots_test`, schema `_platform`" in steps[key].detail, key
     assert "Save settings" in steps["inference_table"].detail and steps["inference_table"].guide == "C2 and C5"
