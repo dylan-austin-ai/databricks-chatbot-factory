@@ -537,6 +537,20 @@ def trace_experiment_id() -> str | None:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def _job_has_usage_policy(job_id: str) -> bool:
+    job = app_client().jobs.get(int(job_id)).settings
+    return bool(getattr(job, "usage_policy_id", None) or getattr(job, "budget_policy_id", None))
+
+
+def has_usage_policy() -> bool | None:
+    """Whether the factory's jobs carry a serverless usage policy; None when that can't be read."""
+    try:
+        return _job_has_usage_policy(JOB_IDS["ingest"]) if JOB_IDS.get("ingest") else None
+    except Exception:  # noqa: BLE001 - not allowed to read the job: a person has to say
+        return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def _drift_dashboard_id(table: str) -> str:
     return app_client().quality_monitors.get(table).dashboard_id
 

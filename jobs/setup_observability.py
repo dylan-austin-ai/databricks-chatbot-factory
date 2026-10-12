@@ -137,11 +137,16 @@ if not obs.get("genie_space_id"):
     except Exception as e:  # noqa: BLE001
         print(f"Genie agent not created: {e}")
 
+def recorded_table(key: str) -> str:
+    """A table name MLOps typed into the settings, checked and quoted before it goes into SQL."""
+    return ident(*str(s.get(f"unity_gateway.{key}")).strip().split("."))
+
+
 # Unified Unity Gateway trace table (GW-6): readable by MLOps and Security once an admin enables it
 if s.get("unity_gateway.trace_table"):
     for grp in (s.get("access.admin_group"), s.get("access.security_group")):
         try:
-            sql.execute(f"GRANT SELECT ON TABLE {s.get('unity_gateway.trace_table')} TO `{grp}`")
+            sql.execute(f"GRANT SELECT ON TABLE {recorded_table('trace_table')} TO `{grp}`")
         except Exception as e:  # noqa: BLE001
             print(f"Gateway trace table grant skipped: {e}")
 
@@ -155,7 +160,7 @@ if s.get("unity_gateway.inference_table"):
                request_tags['bot_id'] AS bot_id, request_tags['channel'] AS channel, event_time, invocation_id,
                status_code, latency_ms, destination_name,
                get_json_object(response, '$.databricks_service_policy.reason') AS blocked_reason, request, response
-        FROM {s.get('unity_gateway.inference_table')}"""
+        FROM {recorded_table('inference_table')}"""
 if s.get("unity_gateway.evaluator_inference_table") and views:
     verdict = "get_json_object(e.response, '$.choices[0].message.content')"
     views["v_guardrail_verdicts"] = f"""
@@ -163,7 +168,7 @@ if s.get("unity_gateway.evaluator_inference_table") and views:
                CAST(get_json_object({verdict}, '$.flagged') AS BOOLEAN) AS flagged,
                CAST(get_json_object({verdict}, '$.confidence') AS DOUBLE) AS confidence,
                get_json_object({verdict}, '$.reason') AS reason, e.request AS judge_prompt
-        FROM {s.get('unity_gateway.evaluator_inference_table')} e
+        FROM {recorded_table('evaluator_inference_table')} e
         LEFT JOIN (SELECT DISTINCT gateway_request_id, request_id, bot_id, channel
                    FROM {s.fq('v_gateway_calls')}) c ON c.gateway_request_id = e.request_id"""
 for name, body in views.items():

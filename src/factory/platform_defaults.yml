@@ -49,6 +49,8 @@ unity_gateway:                         # formerly AI Gateway (GW-1..6)
   inference_table: ""                  # full name of the answer service's inference table, set after enabling it (GW-7)
   evaluator_inference_table: ""        # full name of the evaluator's inference table: every policy verdict (GW-7)
 
+setup_confirmed: {}                    # setup steps done in Databricks that MLOps ticked on Admin › Setup checklist
+
 ai_search:
   endpoint: chatbot-shared-ai-search   # one shared AI Search endpoint (ARC-4)
   shared_index: shared_chunks_index    # shared index, filtered by bot_id

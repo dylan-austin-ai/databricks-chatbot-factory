@@ -633,6 +633,7 @@ Rows written earlier keep `dev`.
 | As needed | Optimize and promote the answer prompt | Admin › Answer prompt (every chatbot is re-checked afterwards) |
 | Before expiry | Rotate the agent service principal secret | A6 steps 3–4, then `deploy_agent` |
 | After a policy change | Keep the checklist in step | Admin › Setup checklist |
+| After any setup step in Parts A to C | See what is left | Admin › Setup checklist. **Done** and **To do** are what the app checked for itself; the steps it can't see (previews, dashboard embedding, the account budget, app scaling) are boxes you tick once done |
 | When someone reports an error | Ask for the text under **Show technical details** | It names the page, the error type and the time (UTC); the full trace is in the app's log at that time |
 
 What owners see in the app is written for people who are not engineers: **Home** shows each

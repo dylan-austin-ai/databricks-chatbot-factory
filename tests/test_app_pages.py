@@ -422,3 +422,55 @@ def test_stored_text_is_shown_as_plain_words(workspace):
     for defused in ("\\$950", "\\=\\=", "\\-\\-\\-", "\\#", "\\*bold\\*", "\\`code\\`"):
         assert defused in out
     assert ui.plain(None) == ""
+
+
+# --- the setup checklist: an empty box always means something is still to do ---------------------
+
+def test_setup_checklist_separates_what_the_app_checked_from_what_a_person_confirms(workspace):
+    common, wh, _ = workspace(admin=True)
+    at = run("admin", admin_section="Setup checklist")
+    text = page_text(at)
+    assert problems(at) == []
+    assert "Checked by the app" in text and "Only a person can confirm these" in text
+    assert "0 of 8 done" in text and "To do" in text and "What to do:" in text
+    assert "Answer service inference table" in text and "Save settings" in text          # exactly where to enter it
+    boxes = {c.key: c.value for c in at.checkbox}
+    assert boxes == {"setup_usage_policy": False, "setup_review_queues": False, "setup_embed_dashboards": False,
+                     "setup_account_budget": False, "setup_app_scaling": False}
+
+    at.checkbox(key="setup_review_queues").check().run()                # the tick is saved with who and when
+    saved = [p for s, p in wh.writes if "platform_settings" in s]
+    assert len(saved) == 1 and saved[0]["k"] == "setup_confirmed"      # written once, on the click
+    tick = json.loads(saved[0]["v"])["review_queues"]
+    assert tick["by"] == "ana@corp.com" and re.fullmatch(r"\d{4}-\d{2}-\d{2}", tick["on"])
+
+
+def test_setup_checklist_shows_done_for_what_is_recorded_and_there(workspace, monkeypatch):
+    common, wh, _ = workspace(admin=True)
+    home = f"{CATALOG}._platform"
+    saved = {"catalog": CATALOG, "unity_gateway.inference_table": f"{home}.gw_answer_payload",
+             "unity_gateway.evaluator_inference_table": f"{home}.gw_eval_payload",
+             "setup_confirmed": {"review_queues": {"by": "lead@corp.com", "on": "2026-10-01"}}}
+    overrides = lambda: saved  # noqa: E731
+    overrides.clear = lambda: None
+    monkeypatch.setattr(common, "_overrides", overrides)
+    monkeypatch.setattr(common, "has_usage_policy", lambda: True)
+    wh.on(r"information_schema\.tables", [{"name": "gw_answer_payload"}])
+    at = run("admin", admin_section="Setup checklist")
+    text = page_text(at)
+    assert problems(at) == [] and "3 of 8 done, 3 still to do, 2 for you to confirm" in text
+    assert "can't find a table called `chatbots_test._platform.gw_eval_payload`" in text
+    assert {c.key: c.value for c in at.checkbox}["setup_review_queues"] is True
+    assert "Confirmed by lead@corp.com on 2026-10-01" in text
+    assert "setup_usage_policy" not in {c.key for c in at.checkbox}        # the app could see that one for itself
+
+
+def test_a_table_name_that_is_not_a_plain_full_name_is_refused(workspace):
+    common, wh, _ = workspace(admin=True)
+    at = run("admin")
+    at.text_input(key="unity_gateway.inference_table").set_value("qa._platform.t; DROP TABLE x")
+    [b for b in at.button if b.label == "Save settings"][0].click().run()     # a form sends its fields on submit
+    assert problems(at) == []
+    assert any("catalog.schema.table" in e.value for e in at.error)
+    assert not [s for s, _ in wh.writes if "platform_settings" in s]
+

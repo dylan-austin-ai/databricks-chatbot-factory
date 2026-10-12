@@ -7,6 +7,7 @@ Chatbots (its options) and Lifecycle (archive, restore, delete).
 One section is open at a time, so only that section's data is loaded.
 """
 import io
+import re
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from html import escape as esc
@@ -16,14 +17,15 @@ import streamlit as st
 import yaml
 
 from common import (JOB_IDS, STATE_LABEL, all_bots, app_client, bot_config, cp, current_user, forget, fresh_sql,
-                    is_admin, open_alerts, run_job, settings, soft, sql, technical_details)
+                    has_usage_policy, is_admin, open_alerts, run_job, settings, soft, sql, technical_details)
 from factory.explain import help_text
 from factory.config import DEFAULT_JUDGES, DEFAULT_OBSERVABILITY
 from factory.gateway import ui_checklist
 from factory.lifecycle import State, TransitionError, retire_path
 from factory.problems import group_alerts
 from factory.provisioning import Provisioner
-from factory.sql import in_list, json_rows
+from factory.setup_steps import DONE, TODO, setup_steps, summary
+from factory.sql import ident, in_list, json_rows
 from ui import pill, plain
 
 if not is_admin():
@@ -42,7 +44,8 @@ SECTIONS = {"Platform": "Settings that apply to every chatbot.",
             "User access": "Load the table that says which users may see what.",
             "Alerts": "Open alerts for every chatbot and the platform.",
             "Audit log": "Who did what, and when."}
-section = st.segmented_control("Section", list(SECTIONS), default="Platform", key="admin_section") or "Platform"
+st.session_state.setdefault("admin_section", "Platform")   # Home's "Open them" button sets it to Alerts
+section = st.segmented_control("Section", list(SECTIONS), key="admin_section") or "Platform"
 st.caption(SECTIONS[section])
 JUDGE_LABEL = {"correctness": "Correct (vs expected answer)", "groundedness": "Sticks to sources",
                "retrieval_relevance": "Search results relevant", "retrieval_sufficiency": "Search found enough",
@@ -81,6 +84,13 @@ if section == "Platform":  # Platform ------------------------------------------
     def save(new: dict) -> None:
         if new["models"]["default_answer_model"] not in new["models"]["answer_services"]:
             raise ValueError("The answer model must be one of the Unity Gateway answer services.")
+        for key, label in (("inference_table", "Answer service inference table"),
+                           ("evaluator_inference_table", "Evaluator inference table"),
+                           ("trace_table", "Unified trace table")):   # these end up in SQL the jobs run
+            name = (new.get("unity_gateway") or {}).get(key) or ""
+            if name and not re.fullmatch(r"\w+\.\w+\.\w+", name, re.A):
+                raise ValueError(f"{label}: enter the table's full name as catalog.schema.table, using only letters, "
+                                 f"numbers and underscores, with no spaces or quotes. Got: {name!r}")
         changed = [k for k in new if new[k] != current.get(k)]
         for k in changed:
             control.set_setting(k, new[k], user)
@@ -382,29 +392,73 @@ if section == "Answer prompt":  # Answer prompt (PRM-1/2) ----------------------
         st.success("Promoted. Every chatbot is being re-checked.")
 
 if section == "Setup checklist":  # Setup checklist: Databricks steps with no API today ---------------------------
-    st.caption("These steps are done in Databricks screens. docs/SETUP.md has click-by-click steps.")
-    st.markdown("**Unity Gateway model service settings.** Set on each model service in AI Gateway "
-                "(rate limits, inference table, guardrail policies with phase and mode):")
-    st.dataframe(pd.DataFrame(ui_checklist(s)), hide_index=True, width="stretch")
-    obs = s.get("observability", {})
-    items = [
-        ("Put the evaluator's inference table name in unity_gateway.evaluator_inference_table (every "
-         "Log-mode policy verdict in v_guardrail_verdicts)",
-         bool(s.get("unity_gateway.evaluator_inference_table"))),
-        ("Turn on the MLflow Review Queues preview (workspace admin › Previews)", None),
-        ("Put the answer service's inference table name in unity_gateway.inference_table (every "
-         "gateway call in v_gateway_calls)", bool(s.get("unity_gateway.inference_table"))),
-        ("Enable the unified Unity Gateway trace table (AI Gateway › Govern › Traces) and put its name "
-         "in unity_gateway.trace_table", bool(s.get("unity_gateway.trace_table"))),
-        ("Allow dashboard embedding for *.databricksapps.com (workspace admin › Security › Embed dashboards)", None),
-        ("Create a serverless usage policy and pass its ID as the usage_policy_id bundle variable", None),
-        ("Account admin: create the platform budget (account console › Usage › Budgets, filter tag "
-         "component=chatbot-factory, alerts at 70/90/100%)", None),
-        ("Set the app's instance count (1-5) in Apps › chatbot-factory › Compute for horizontal scaling", None),
-        ("Genie agent over observability tables (created by setup_observability)", bool(obs.get("genie_space_id"))),
-    ]
-    for text, done in items:
-        st.markdown(f"{'✅' if done else '☐'} {text}")
+    st.caption("Part of the setup is finished in Databricks screens. The app checks what it can see for itself "
+               "and says what is left to do. What it can't see is listed separately for you to tick, so an empty "
+               "box here always means something is still to do. The clicks for every step are in docs/SETUP.md.")
+    home = f"{s.catalog}.{s.platform_schema}"
+    recorded = [str(s.get(f"unity_gateway.{k}") or "").strip().lower()
+                for k in ("inference_table", "evaluator_inference_table", "trace_table")]
+    here = [n.rsplit(".", 1)[-1] for n in recorded if n.startswith(home.lower() + ".")]
+    try:  # which of the recorded tables are really there
+        if here:
+            listed, params = in_list(here, "t")
+            existing = {f"{home}.{r['name']}".lower() for r in sql().query(
+                f"SELECT lower(table_name) AS name FROM {ident(s.catalog)}.information_schema.tables "
+                f"WHERE table_schema = :sch AND lower(table_name) IN {listed}", {**params, "sch": s.platform_schema})}
+        else:
+            existing = set()
+    except Exception as e:  # noqa: BLE001 - can't look: the steps are judged on what is recorded
+        existing = None
+        soft("The check that the recorded tables exist", e)
+    confirmed = dict(s.get("setup_confirmed") or {})
+    steps = setup_steps(s, existing, has_usage_policy(), confirmed)
+    left = [x for x in steps if x.state != DONE and not x.optional]
+    (st.info if left else st.success)(f"**Setup: {summary(steps)}**")
+
+    st.markdown("**Checked by the app**")
+    for step in [x for x in steps if not x.by_hand]:
+        if step.state == DONE:
+            st.markdown(f'{pill("Done", "green")} **{step.title}** <span class="cf-muted">· {step.detail}</span>',
+                        unsafe_allow_html=True)
+        else:
+            with st.container(border=True):
+                st.markdown(f'{pill("To do", "amber")} **{step.title}**\n\n**What to do:** {step.detail}\n\n'
+                            f'<span class="cf-muted">{step.why} Steps: SETUP {step.guide}.</span>',
+                            unsafe_allow_html=True)
+    if any(x.state == TODO and x.key.endswith("_table") for x in steps):
+        st.caption("After saving a table name, run the observability task once: **Jobs** › **[factory] deploy shared "
+                   "agent** › **Run now**, on the `observability` task. It builds the views the Guardrails charts "
+                   "read.")
+
+    st.markdown("**Only a person can confirm these**")
+    st.caption("They are set in Databricks where the app can't look. Tick each one once it has been done. The tick "
+               "is saved, with your name, for everyone in MLOps.")
+
+    def ticked(key: str) -> None:
+        """Runs once when a box is clicked: save the tick (or its removal) with who and when."""
+        latest = dict(settings().get("setup_confirmed") or {})
+        if st.session_state.get(f"setup_{key}"):
+            latest[key] = {"by": user, "on": datetime.now(timezone.utc).strftime("%Y-%m-%d")}
+        else:
+            latest.pop(key, None)
+        try:
+            control.set_setting("setup_confirmed", latest, user)
+        except Exception as e:  # noqa: BLE001 - shown below; the box goes back to what is saved
+            st.session_state["setup_tick_failed"] = e
+        forget(settings_too=True)
+
+    if st.session_state.get("setup_tick_failed"):
+        soft("Saving that tick", st.session_state.pop("setup_tick_failed"))
+    for step in [x for x in steps if x.by_hand]:
+        st.session_state[f"setup_{step.key}"] = bool(confirmed.get(step.key))   # always shows what is saved
+        st.checkbox(step.title + (" (optional)" if step.optional else ""), key=f"setup_{step.key}",
+                    on_change=ticked, args=(step.key,))
+        st.caption(f"{step.detail} {step.why} Steps: SETUP {step.guide}.")
+
+    with st.expander("The exact values to set on each Unity Gateway model service"):
+        st.caption("Set on each model service in AI Gateway: rate limits, inference table, and guardrail policies "
+                   "with their phase and mode.")
+        st.dataframe(pd.DataFrame(ui_checklist(s)), hide_index=True, width="stretch")
     st.markdown("**Check that the warehouse accepts batched writes**")
     st.caption("Uploads, audit entries and saved test questions send many rows in one statement. This reads two "
                "rows that way and writes nothing. Run it once after the first deploy, and again after a "

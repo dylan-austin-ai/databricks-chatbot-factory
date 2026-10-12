@@ -43,7 +43,7 @@ failure. `releases`, `release_chunks` and `index_history` reconstruct the index 
 | `jobs/` | setup_platform, setup_observability, provision, ingest (+ per-bot file-arrival triggers), compare_strategies, run_evals (`mlflow.genai.evaluate`), promote, monitor, prod_judging, drift, optimize_prompt, reindex, git_sync, maintenance |
 | `sql/` | Control-plane DDL, per-bot DDL, dashboard views, ABAC governance, metric views, system-table cost views |
 | `resources/`, `databricks.yml` | Declarative Automation Bundle (qa and prod targets, direct deployment engine) |
-| `tests/` | 259 unit tests for the pure logic, and 61 that run every page of the app against a pretend workspace (these need the `app` extra) |
+| `tests/` | 263 unit tests for the pure logic, and 64 that run every page of the app against a pretend workspace (these need the `app` extra) |
 
 ## Prerequisites
 
@@ -139,6 +139,11 @@ chatbot has since finished setup) no longer counts as open (`monitoring.alert_is
 monitor job and the Admin page close those. Alert messages are one plain line
 (`problems.brief`); owners see a sentence about what to do, and only for alerts they can act
 on. The rest is one quiet line for them and a list for MLOps under Admin, section Alerts.
+
+Admin, section Setup checklist tracks the setup that is finished in Databricks screens
+(`factory/setup_steps.py`). What the app can check for itself is marked done or to do, with
+what to do; what it can't see is a box for MLOps to tick, saved in the `setup_confirmed`
+setting with who ticked it. An empty box therefore always means something is still to do.
 
 Streamlit runs a page again on every click, so the app avoids asking twice:
 
