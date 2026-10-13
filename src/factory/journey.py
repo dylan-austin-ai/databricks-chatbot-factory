@@ -35,10 +35,10 @@ def _is(value) -> bool:
 
 
 def steps(state: str, docs: dict | None, questions: dict | None, needed: int, candidate: dict | None,
-          has_live: bool, reviewer: str = "", is_reviewer: bool = False) -> list[Step]:
+          has_live: bool, reviewer: str = "", is_reviewer: bool = False, checking: bool = False) -> list[Step]:
     """The path to launch, in order. `docs` counts documents: reading, waiting, flagged, approved.
     `questions` counts test questions: total, approved. `candidate` is the test version's release
-    row, or None. Only the first step that isn't done is live; later ones show as "later"."""
+    row, or None. `checking`: a quality check is waiting or running right now. Only the first step that isn't done is live; later ones show as "later"."""
     d = {k: int((docs or {}).get(k) or 0) for k in ("reading", "waiting", "flagged", "approved")}
     q = {k: int((questions or {}).get(k) or 0) for k in ("total", "approved")}
     out: list[Step] = []
@@ -97,6 +97,9 @@ def steps(state: str, docs: dict | None, questions: dict | None, needed: int, ca
                  "documents. It appears on **Launch** a few minutes later.", "launch")
     elif passed:
         check = Step("Pass the quality check", DONE, "The test version passed the quality check.")
+    elif checking:   # started and not finished yet: nothing to press
+        check = Step("Pass the quality check", WAITING, "The quality check is running. **Launch** shows how far "
+                     "along it is, and the results appear there when it finishes.", "launch")
     elif candidate.get("eval_run_id"):
         check = Step("Pass the quality check", PROBLEM, "The last quality check didn't pass. Open **Launch** to see "
                      "which results are below target and what to change, then run the check again.", "launch")

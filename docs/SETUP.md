@@ -694,4 +694,8 @@ output and the first smoke test:
 - Whether **AI Gateway** › **Govern** › **Traces** is set per workspace or once per metastore
   (C4). The guide assumes per workspace; if it turns out to be shared, QA and prod record the
   same trace table.
+- Press **Run the quality check** on Launch: within a few seconds the page should show a progress
+  bar with "waiting its turn" and then "running". That relies on the app's service principal
+  being able to read a run it started (`jobs.get_run`); if the page instead says it "can't read
+  how it is going", give the app's service principal **Can view** on the factory's jobs.
 - README › "Verify against a live workspace first" has the full list.

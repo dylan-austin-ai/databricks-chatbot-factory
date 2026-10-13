@@ -43,7 +43,7 @@ failure. `releases`, `release_chunks` and `index_history` reconstruct the index 
 | `jobs/` | setup_platform, setup_observability, provision, ingest (+ per-bot file-arrival triggers), compare_strategies, run_evals (`mlflow.genai.evaluate`), promote, monitor, prod_judging, drift, optimize_prompt, reindex, git_sync, maintenance |
 | `sql/` | Control-plane DDL, per-bot DDL, dashboard views, ABAC governance, metric views, system-table cost views |
 | `resources/`, `databricks.yml` | Declarative Automation Bundle (qa and prod targets, direct deployment engine) |
-| `tests/` | 263 unit tests for the pure logic, and 64 that run every page of the app against a pretend workspace (these need the `app` extra) |
+| `tests/` | 269 unit tests for the pure logic, and 71 that run every page of the app against a pretend workspace (these need the `app` extra) |
 
 ## Prerequisites
 
@@ -144,6 +144,13 @@ Admin, section Setup checklist tracks the setup that is finished in Databricks s
 (`factory/setup_steps.py`). What the app can check for itself is marked done or to do, with
 what to do; what it can't see is a box for MLOps to tick, saved in the `setup_confirmed`
 setting with who ticked it. An empty box therefore always means something is still to do.
+
+A page never says a background job is running because a button was pressed. Starting a job
+notes its run id in the audit log (`job_started`), and every page then asks Databricks where
+that run stands (`common.watch_job`, `factory/jobruns.py`): waiting, running with a progress
+bar measured against how long the job's recent runs took, or stopped with an error and what to
+do. The bar updates itself every 15 seconds, the page reloads once when the job ends, and the
+button that started it stays locked until then, for everyone and across a browser refresh.
 
 Streamlit runs a page again on every click, so the app avoids asking twice:
 

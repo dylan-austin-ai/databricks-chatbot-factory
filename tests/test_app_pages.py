@@ -100,6 +100,7 @@ def workspace(monkeypatch):
               lambda s, p: [b for b in bots if not p.get("b") or b["bot_id"] == p["b"]])
         st.cache_data.clear()
         st.cache_resource.clear()
+        common._FINISHED.clear()
         client = NS(files=NS(list_directory_contents=lambda f: [], upload=lambda *a, **k: None),
                     config=NS(host="https://example.cloud.databricks.com"),
                     experiments=NS(get_by_name=lambda n: NS(experiment=NS(experiment_id="42"))),
@@ -474,3 +475,127 @@ def test_a_table_name_that_is_not_a_plain_full_name_is_refused(workspace):
     assert any("catalog.schema.table" in e.value for e in at.error)
     assert not [s for s, _ in wh.writes if "platform_settings" in s]
 
+
+
+# --- background jobs: the page shows the run itself, not a note that a button was pressed --------
+
+def job_run(state, started_ago_s=360, ended_ago_s=0, result=None, message=None):
+    """A run the way the Jobs API returns it (newer shape)."""
+    import time
+
+    now = int(time.time() * 1000)
+    details = NS(code=NS(value=result), message=message) if result else None
+    return NS(status=NS(state=NS(value=state), termination_details=details), state=None,
+              start_time=now - started_ago_s * 1000, end_time=now - ended_ago_s * 1000 if ended_ago_s else 0,
+              run_page_url="https://example.cloud.databricks.com/jobs/1/runs/7")
+
+
+def started_job(common, wh, label, run, bot_id="hr_bot", minutes_ago=7):
+    """Pretend `label` was started from the app for `bot_id` and Databricks now reports `run`."""
+    import time
+
+    wh.on(r"action = 'job_started'", [{"target": label, "bot_id": bot_id, "actor": "ana@corp.com",
+                                         "detail_json": '{"run_id": 7}',
+                                         "asked_ms": str(int(time.time() * 1000) - minutes_ago * 60000)}])
+    common.app_client().jobs.get_run = lambda run_id: run
+
+
+CHECKABLE = bot_row(state="testing", candidate_release_id="hr_bot-r0001")
+
+
+def test_a_running_quality_check_shows_progress_and_locks_its_button(workspace):
+    common, wh, _ = workspace(bots=[CHECKABLE])
+    wh.on(r"_platform\.releases WHERE bot_id", [release("hr_bot-r0001", "candidate")])
+    started_job(common, wh, "evals", job_run("RUNNING"))
+    at = run("launch", bot_id="hr_bot")
+    assert problems(at) == []
+    bar = at.get("progress")[0].proto
+    assert bar.text == "The quality check is running: 6 minutes so far. It usually takes about 15 minutes."
+    assert 35 <= bar.value <= 45                                      # six of about fifteen minutes
+    assert ("Quality check running…", True) in [(b.label, b.disabled) for b in at.button]
+    assert "Run the quality check" not in [b.label for b in at.button]
+    text = page_text(at)
+    assert "You can leave the page" in text and "runs/7" in text      # and a link to the run for MLOps
+    assert "The quality check is running. **Launch** shows how far along it is" in text    # not "Your turn"
+
+
+def test_a_quality_check_waiting_to_start_says_so(workspace):
+    common, wh, _ = workspace(bots=[CHECKABLE])
+    wh.on(r"_platform\.releases WHERE bot_id", [release("hr_bot-r0001", "candidate")])
+    started_job(common, wh, "evals", job_run("QUEUED", started_ago_s=0), minutes_ago=2)
+    at = run("launch", bot_id="hr_bot")
+    bar = at.get("progress")[0].proto
+    assert problems(at) == [] and bar.value == 0 and "waiting its turn (2 minutes so far)" in bar.text
+    assert "started by ana@corp.com" in bar.text
+    assert ("Quality check running…", True) in [(b.label, b.disabled) for b in at.button]
+
+
+def test_a_quality_check_that_stopped_says_so_and_can_be_started_again(workspace):
+    common, wh, jobs = workspace(bots=[CHECKABLE])
+    wh.on(r"_platform\.releases WHERE bot_id", [release("hr_bot-r0001", "candidate")])
+    started_job(common, wh, "evals", job_run("TERMINATED", ended_ago_s=120, result="RUN_EXECUTION_ERROR",
+                                             message="Task evals failed:\nModuleNotFoundError: No module named 'x'"))
+    at = run("launch", bot_id="hr_bot")
+    assert problems(at) == [] and not at.get("progress")
+    assert any("The last quality check stopped with an error 2 minutes ago" in e.value for e in at.error)
+    assert any("What to do:" in m.value and "runs/7" in m.value for m in at.markdown)
+    assert any("ModuleNotFoundError" in c.value and "\n" not in c.value for c in at.code)   # one line, as typed
+    at.button(key="run_check").click().run()                           # and it can simply be started again
+    assert ("evals", {"bot_id": "hr_bot", "trigger": "manual", "channel": "candidate"}) in jobs
+
+
+def test_a_check_that_finished_without_a_result_is_explained(workspace):
+    common, wh, _ = workspace(bots=[CHECKABLE])
+    wh.on(r"_platform\.releases WHERE bot_id", [release("hr_bot-r0001", "candidate")])
+    started_job(common, wh, "evals", job_run("TERMINATED", ended_ago_s=300, result="SUCCESS"))
+    at = run("launch", bot_id="hr_bot")
+    assert problems(at) == []
+    assert any("finished earlier but left no result for this version" in w.value for w in at.warning)
+    assert ("Run the quality check", False) in [(b.label, b.disabled) for b in at.button]
+
+
+def test_test_questions_locks_the_check_and_the_question_writer_while_they_run(workspace):
+    common, wh, _ = workspace(bots=[CHECKABLE])
+    started_job(common, wh, "evals", job_run("RUNNING"))
+    at = run("test_questions", bot_id="hr_bot")
+    assert problems(at) == [] and ("Quality check running…", True) in [(b.label, b.disabled) for b in at.button]
+    assert "quality check is running" in at.get("progress")[0].proto.text
+
+    common, wh, _ = workspace(bots=[CHECKABLE])
+    started_job(common, wh, "ingest_questions", job_run("RUNNING", started_ago_s=60))
+    at = run("test_questions", bot_id="hr_bot")
+    assert problems(at) == [] and ("Writing questions…", True) in [(b.label, b.disabled) for b in at.button]
+    assert "writing of test questions is running: 1 minute so far" in at.get("progress")[0].proto.text
+
+
+def test_home_does_not_say_your_turn_while_a_check_is_running(workspace):
+    common, wh, _ = workspace(bots=[CHECKABLE])
+    wh.on(r"count_if\(status = 'pending_review'", [
+        {"bot_id": "hr_bot", "reading": "0", "waiting": "0", "flagged": "0", "approved": "5", "questions": "60",
+         "questions_ok": "55"}])
+    wh.on(r"JOIN \S+_platform\.bots b ON r\.release_id", [
+        {"bot_id": "hr_bot", "release_id": "hr_bot-r0001", "eval_run_id": None, "eval_passed": None,
+         "review_requested_at": None}])
+    started_job(common, wh, "evals", job_run("RUNNING"))
+    text = page_text(run("home"))
+    assert "Next: Pass the quality check" in text and "The quality check is running" in text
+    assert "Nothing to do yet" in text and "press **Run the quality check**" not in text
+
+
+def test_starting_a_job_notes_its_run_so_every_page_can_follow_it(workspace, monkeypatch):
+    common, wh, _ = workspace()
+    monkeypatch.undo()                       # the real run_job again
+    monkeypatch.syspath_prepend(str(ROOT / "app"))
+    started = []
+    client = NS(jobs=NS(list_runs=lambda **k: [], run_now=lambda **k: started.append(k) or NS(run_id=41)), files=NS())
+    for name, value in {"_sql": lambda: wh, "app_client": lambda: client, "current_user": lambda: "ana@corp.com",
+                        "JOB_IDS": {"ingest": "11", "promote": "12"}, "CATALOG": CATALOG,
+                        "settings": lambda: common.PlatformSettings.load({"catalog": CATALOG})}.items():
+        monkeypatch.setattr(common, name, value)
+    assert common.run_job("ingest", bot_id="hr_bot", publish_only="true") == 41
+    assert common.run_job("promote", bot_id="hr_bot", action="rollback", reason="x") == 41
+    noted = [p for s, p in wh.writes if "audit_log" in s and p["action"] == "job_started"]
+    assert [(p["bot"], p["target"], json.loads(p["detail"])["run_id"]) for p in noted] == [
+        ("hr_bot", "ingest_publish", 41), ("hr_bot", "rollback", 41)]
+    assert noted[0]["actor"] == "ana@corp.com"
+    assert common.run_job("ingest", bot_id="all") == 41 and len(noted) == 2      # platform-wide runs aren't noted

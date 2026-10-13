@@ -5,7 +5,7 @@ documents."""
 import pandas as pd
 import streamlit as st
 
-from common import cp, current_user, pick_bot, run_job, settings, sql
+from common import cp, current_user, pick_bot, run_job, settings, sql, watch_job
 from factory import golden
 from factory.explain import help_text
 from factory.ingestion import BotPaths
@@ -42,6 +42,7 @@ html(f'<b style="font-size:24px">{n_ok}</b> <span class="cf-muted">of {n_req} ap
         if n_ok < n_req else '<span class="cf-muted">Enough approved questions to go live.</span>'))
 if st.session_state.get("questions_saved"):
     st.success(st.session_state.pop("questions_saved"))
+watch_job("ingest_publish", cfg.bot_id)   # the test version being rebuilt after a save, if it is
 
 with st.container(border=True):
     st.markdown("**How to use this page**")
@@ -121,21 +122,21 @@ with c1.container(border=True):
     st.markdown("**Need more questions?**")
     st.caption("We read your approved documents and write questions with expected answers. They arrive unapproved, "
                "for you to check. Takes a few minutes.")
-    if st.button("Suggest questions from my approved documents"):
+    writing = watch_job("ingest_questions", cfg.bot_id)   # real progress, and the new questions when it ends
+    if st.button("Writing questions…" if writing.active else "Suggest questions from my approved documents",
+                 disabled=writing.active, key="suggest_questions"):
         run_job("ingest", bot_id=cfg.bot_id, golden_only="true")
-        st.session_state["questions_saved"] = ("Writing questions in the background. Come back in a few minutes "
-                                               "and press **Refresh** in the menu on the left.")
         st.rerun()
 with c2.container(border=True):
     st.markdown("**Ready to see how the chatbot does?**")
-    st.caption("Asks the chatbot every approved question and scores the answers. Takes about 15 minutes. "
-               "The results appear on the **Launch** page.")
+    st.caption("Asks the chatbot every approved question and scores the answers. The results appear on the "
+               "**Launch** page.")
     has_version = bool(bot.get("candidate_release_id"))
-    if st.button("Run the quality check", disabled=n_ok < n_req or not has_version,
-                 help=f"Available once {n_req} questions are approved." if n_ok < n_req else
-                 None if has_version else "There is no test version to check yet. One is built a few minutes "
-                                          "after you approve documents or save questions."):
+    checking = watch_job("evals", cfg.bot_id)   # real progress while it runs; what to do if it stopped
+    if st.button("Quality check running…" if checking.active else "Run the quality check", key="run_check",
+                 disabled=checking.active or n_ok < n_req or not has_version,
+                 help=None if checking.active else f"Available once {n_req} questions are approved." if n_ok < n_req
+                 else None if has_version else "There is no test version to check yet. One is built a few minutes "
+                                               "after you approve documents or save questions."):
         run_job("evals", bot_id=cfg.bot_id, trigger="manual", channel="candidate")
-        st.session_state["questions_saved"] = ("The quality check has started. It takes about 15 minutes; the "
-                                               "results appear on the **Launch** page.")
         st.rerun()

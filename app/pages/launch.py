@@ -3,13 +3,12 @@ the live version, roll back and the documentation (REL-1..11, EVG-1..5, LCY-1..7
 
 Always for a single chatbot: a version is tested, approved and published per chatbot."""
 import json
-import time
 
 import streamlit as st
 
 from common import (METRIC_LABEL, PAGES, RETRIEVAL_METRICS, STATE_LABEL, cp, current_user, fresh_sql, is_admin,
-                    pick_bot, read_many, run_job, settings, soft, sql, user_groups)
-from factory import journey
+                    job_statuses, pick_bot, read_many, run_job, settings, soft, sql, user_groups, watch_job)
+from factory import jobruns, journey
 from factory.config import MAX_TESTERS
 from factory.explain import help_text
 from factory.ingestion import BotPaths
@@ -32,18 +31,12 @@ is_reviewer = is_admin() or user == cfg.reviewer or cfg.reviewer in groups
 setting_up = state in ("provisioning", "provision_failed")
 
 
-def started(key: str, message: str) -> None:
-    """Remember that a background job was started, so the page keeps saying so after it reloads
-    and the button can't be pressed twice."""
-    st.session_state[key] = (message, time.time())
+def start(kind: str, **params) -> None:
+    """Start a background job and reload, so the page shows the run itself: waiting, running with
+    a progress bar, or stopped with an error. Nothing here claims a job is running; the status
+    comes from Databricks each time (common.watch_job)."""
+    run_job(kind, bot_id=cfg.bot_id, **params)
     st.rerun()
-
-
-def running(key: str, minutes: int = 30) -> str:
-    """The message for a job started from this page, while it can still be running. After that
-    the buttons come back, so a job that failed quietly can be started again."""
-    message, at = st.session_state.get(key) or ("", 0)
-    return message if time.time() - at < minutes * 60 else ""
 
 
 # Everything the page needs, asked for at the same time ---------------------------------------
@@ -81,26 +74,24 @@ html(pill(STATE_LABEL.get(state, state), STATE_TONE.get(state, "gray"))
 # Setup still running, or stopped ----------------------------------------------------------------
 if setting_up:
     st.subheader("Setting up")
-    if running(f"setup_retry_{cfg.bot_id}"):
-        st.success(running(f"setup_retry_{cfg.bot_id}"))
-    elif state == "provisioning":
+    setup = watch_job("provision", cfg.bot_id, quiet=True)   # the failed step below says what went wrong
+    if state == "provisioning" and not setup.active:
         st.info(f"**{cfg.display_name}** is being set up in the background. This usually takes about 10 minutes. "
                 "You don't need to stay on this page. Press **Refresh** in the menu on the left to see progress.")
     for r in found["setup"]:
         html(pill("Done" if r["status"] == "done" else "Failed", "green" if r["status"] == "done" else "red")
              + r["step"].replace("_", " ").capitalize())
-    if state == "provision_failed" and not running(f"setup_retry_{cfg.bot_id}"):
+    if state == "provision_failed" and not setup.active:
         st.error("Setup stopped at the step marked **Failed**. Press **Try again**: steps that already finished are "
                  "skipped, and nothing you entered is lost. If it stops at the same step a second time, send MLOps "
                  f"the chatbot's technical name (`{cfg.bot_id}`) and the name of the failed step.")
         if st.button("Try again", type="primary"):
-            run_job("provision", bot_id=cfg.bot_id, actor=user)
-            started(f"setup_retry_{cfg.bot_id}", "Setup has started again. It usually takes about 10 minutes. "
-                    "Press **Refresh** in the menu on the left to see progress.")
+            start("provision", actor=user)
+    elif setup.active:
+        st.button("Setup running…", disabled=True)
     for name, error in failed.items():
         soft("Setup progress", error)
     st.stop()
-st.session_state.pop(f"setup_retry_{cfg.bot_id}", None)
 
 # What to do next ------------------------------------------------------------------------------
 doc_rows = found["documents"]
@@ -110,8 +101,10 @@ docs_count = {"reading": sum(d["status"] == "pending_review" and not d["readabil
               "approved": sum(d["status"] == "approved" for d in doc_rows)}
 q = (found["questions"] or [{}])[0]
 needed = int(s.get("quality.min_golden_questions", 50))
+jobs_now = job_statuses(cfg.bot_id)   # where each background job stands, as Databricks reports it
+checking = jobs_now.get("evals", jobruns.RunStatus()).active
 path = journey.steps(state, docs_count, {"total": q.get("questions"), "approved": q.get("questions_ok")}, needed,
-                     cand, bool(live), cfg.reviewer, is_reviewer)
+                     cand, bool(live), cfg.reviewer, is_reviewer, checking=checking)
 now = journey.next_step(state, path, bool(cand))
 if now.status == journey.DONE or state in ("paused", "budget_paused", "archived"):
     (st.success if now.status == journey.DONE else st.info)(now.detail)
@@ -119,6 +112,7 @@ else:
     st.subheader("What to do next" + (" for the new version" if live else ""))
     st.caption("The steps to get this chatbot live. The one marked **Your turn** is what to do now.")
     checklist(path, journey.STATUS_LABEL, PAGES, here="launch")
+watch_job("ingest_publish", cfg.bot_id)   # the test version being rebuilt after a change, if it is
 
 # Test version: checks and approval ------------------------------------------------------
 if cand:
@@ -129,17 +123,17 @@ if cand:
         st.info(found["search"][0]["explanation"])
     ev = checks.get(cand.get("eval_run_id"))
     passed = str(cand.get("eval_passed")).lower() == "true"
-    check_key = f"check_started_{cand['release_id']}_{cand.get('eval_run_id')}"
-    if running(check_key):
-        st.success(running(check_key))
+    check = watch_job("evals", cfg.bot_id)   # progress while it runs; what to do if it stopped
     if not ev:
-        if not running(check_key):
+        if not check.active:
             st.write("The quality check hasn't run on this version yet. It asks the chatbot every approved test "
-                     "question and scores the answers. It takes about 15 minutes.")
-            if st.button("Run the quality check", type="primary"):
-                run_job("evals", bot_id=cfg.bot_id, trigger="manual", channel="candidate")
-                started(check_key, "The quality check has started. It takes about 15 minutes. You can leave this "
-                        "page; press **Refresh** in the menu on the left to see the result.")
+                     "question and scores the answers.")
+            if check.state == jobruns.SUCCEEDED:
+                st.warning("A quality check finished earlier but left no result for this version. Either the test "
+                           "version has changed since, or that run found nothing to check. Run it again.")
+        if st.button("Quality check running…" if check.active else "Run the quality check", type="primary",
+                     disabled=check.active, key="run_check"):
+            start("evals", trigger="manual", channel="candidate")
     else:
         data = json.loads(ev["metrics_json"])
         th, m = s.thresholds(), data.get("metrics", {})
@@ -161,10 +155,10 @@ if cand:
                     st.markdown(f"- **{f}**  \n  What to do: {check_advice(f)}")
         else:
             st.caption("No wrong citations, no leaked content, no unmasked personal data.")
-        if not passed and not running(check_key) and st.button("Run the quality check again"):
-            run_job("evals", bot_id=cfg.bot_id, trigger="manual", channel="candidate")
-            started(check_key, "The quality check has started again. It takes about 15 minutes. Press **Refresh** "
-                    "in the menu on the left to see the result.")
+        if (not passed or check.active) and st.button(
+                "Quality check running…" if check.active else "Run the quality check again", disabled=check.active,
+                key="run_check_again"):
+            start("evals", trigger="manual", channel="candidate")
         if str(ev["needs_safety_review"]).lower() == "true" and is_reviewer:
             unsafe = [c for c in data.get("per_case", []) if c["scores"].get("safety") == 0]
             with st.expander(f"Review {len(unsafe)} answer(s) flagged as possibly unsafe"):
@@ -179,14 +173,14 @@ if cand:
                                       safety_override_reason = :w WHERE release_id = :r""",
                                   {"u": user, "w": why, "r": cand["release_id"]})
                     control.audit(user, cfg.bot_id, "safety_override", cand["release_id"], {"reason": why})
-                    run_job("evals", bot_id=cfg.bot_id, trigger="safety_override", channel="candidate")
-                    started(check_key, "Recorded. The quality check is running again; it takes about 15 minutes.")
+                    start("evals", trigger="safety_override", channel="candidate")
 
-    publish_key = f"publishing_{cand['release_id']}"
     with st.container(border=True):
         st.markdown("**Approval**")
-        if running(publish_key):
-            st.success(running(publish_key))
+        publishing = watch_job("promote", cfg.bot_id)   # progress while publishing; what to do if it stopped
+        if publishing.active:
+            st.caption("Approved. A final test runs before the switch; if it fails, the current version stays "
+                       "live and an alert appears on Home.")
         elif cand.get("review_requested_at") is None:
             st.write(f"When the quality check has passed, send this version to **{cfg.reviewer}** for approval. "
                      "Nothing reaches users until they approve.")
@@ -213,9 +207,7 @@ if cand:
             if a1.button("Approve and publish", type="primary", disabled=not passed,
                          help=None if passed else "Available once the quality check passes."):
                 control.audit(user, cfg.bot_id, "approved", cand["release_id"])
-                run_job("promote", bot_id=cfg.bot_id, actor=user, action="promote")
-                started(publish_key, "Approved. Publishing has started and takes about 10 minutes. A final test "
-                        "runs first; if it fails, the current version stays live and an alert appears on Home.")
+                start("promote", actor=user, action="promote")
             if a2.button("Send back for changes"):
                 sql().execute(f"UPDATE {s.fq('releases')} SET review_requested_at = NULL WHERE release_id = :r",
                               {"r": cand["release_id"]})
@@ -256,9 +248,10 @@ if live:
             control.set_state(cfg.bot_id, State.LIVE.value, user)
             st.rerun()
         previous = next((r for r in history if r["status"] == "superseded"), None)
-        back_key = f"rolled_back_{live['release_id']}"
-        if running(back_key):
-            b2.success(running(back_key))
+        with b2:
+            rolling = watch_job("rollback", cfg.bot_id)
+        if rolling.active:
+            pass
         elif previous:
             with b2.popover("Roll back to the previous version"):
                 st.markdown(f"This takes version **{ver(live)}** out of service and puts version "
@@ -266,9 +259,7 @@ if live:
                             "when the new version is giving wrong answers. Your documents and test questions are "
                             "not changed.")
                 if st.button(f"Yes, go back to version {ver(previous)}", type="primary"):
-                    run_job("promote", bot_id=cfg.bot_id, actor=user, action="rollback", reason="owner rollback")
-                    started(back_key, f"Rolling back to version {ver(previous)}. This takes a few minutes; press "
-                            "**Refresh** in the menu on the left to check.")
+                    start("promote", actor=user, action="rollback", reason="owner rollback")
         else:
             b2.caption("There is no earlier version to roll back to yet.")
 
@@ -288,7 +279,7 @@ if live and live.get("eval_run_id") in checks:
 if history:
     st.subheader("Release history")
     st.dataframe([{"Version": f"v{ver(r)}", "Status": r["status"].replace("_", " ").title(),
-                   "Published": r.get("promoted_at"), "Approved by": r.get("approved_by"),
+                   "Published": r.get("promoted_at") or "—", "Approved by": r.get("approved_by") or "—",
                    "Quality check": "Passed" if str(r.get("eval_passed")).lower() == "true" else "Not passed",
                    "Smoke test": {"true": "Passed", "false": "Failed"}.get(str(r.get("smoke_passed")).lower(), "—")}
                   for r in history], hide_index=True, width="stretch")

@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import threading
+import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -18,7 +19,7 @@ import streamlit as st
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from factory import journey, problems  # noqa: E402
+from factory import jobruns, journey, problems  # noqa: E402
 from factory.access import resolve_groups  # noqa: E402
 from factory.config import BotConfig, PlatformSettings  # noqa: E402
 from factory.controlplane import ControlPlane  # noqa: E402
@@ -493,9 +494,25 @@ def show_upload_report(bot_id: str) -> None:
             st.rerun()
 
 
+# What each background job is called on screen, and roughly how long it takes when it has never
+# run before (after that, the app goes by how long its recent runs took).
+JOB_WHAT = {"evals": ("quality check", 15), "promote": ("publishing", 10), "rollback": ("roll back", 5),
+            "provision": ("setup", 10), "ingest": ("reading of the documents", 10),
+            "ingest_publish": ("update of the test version", 5), "ingest_questions": ("writing of test questions", 5)}
+
+
+def job_label(kind: str, params: dict) -> str:
+    """Which piece of work a job run is for: the ingest and promote jobs each do several."""
+    if kind == "ingest":
+        return ("ingest_publish" if str(params.get("publish_only")) == "true" else
+                "ingest_questions" if str(params.get("golden_only")) == "true" else "ingest")
+    return "rollback" if kind == "promote" and params.get("action") == "rollback" else kind
+
+
 def run_job(kind: str, **params) -> int | None:
     """Start a background job. If an identical run is still waiting to start, that run already
-    covers this request and no second one is queued (see factory.jobruns)."""
+    covers this request and no second one is queued (see factory.jobruns). The run's id is noted
+    in the audit log, which is how every page afterwards knows where that run stands."""
     job_id = JOB_IDS.get(kind)
     if not job_id:
         st.error(f"The background job for this step (\"{kind}\") isn't connected to the app, so nothing was "
@@ -509,9 +526,126 @@ def run_job(kind: str, **params) -> int | None:
         logging.getLogger("factory.app").info("could not list %s runs (%s); starting a new one", kind,
                                               type(e).__name__)
         waiting = None
-    if waiting:
-        return waiting
-    return app_client().jobs.run_now(job_id=int(job_id), job_parameters=wanted).run_id
+    run_id = waiting or app_client().jobs.run_now(job_id=int(job_id), job_parameters=wanted).run_id
+    bot_id = wanted.get("bot_id") or ""
+    if bot_id and bot_id != "all":
+        try:
+            cp().audit(current_user(), bot_id, "job_started", job_label(kind, wanted), {"run_id": run_id, **wanted})
+        except Exception as e:  # noqa: BLE001 - the job is running; only its progress display is lost
+            logging.getLogger("factory.app").warning("run %s started but not noted (%s)", run_id, type(e).__name__)
+    return run_id
+
+
+_FINISHED: dict[int, dict] = {}   # a run that has ended never changes, so it is only looked up once
+
+
+@st.cache_data(ttl=8, show_spinner=False)
+def _live_run(run_id: int) -> dict:
+    return jobruns.snapshot(app_client().jobs.get_run(run_id))
+
+
+def _run_snapshot(run_id: int) -> dict:
+    if run_id in _FINISHED:
+        return _FINISHED[run_id]
+    try:
+        snap = _live_run(run_id)
+    except Exception as e:  # noqa: BLE001 - the run exists (we started it) but can't be read
+        logging.getLogger("factory.app").info("could not read run %s (%s)", run_id, type(e).__name__)
+        return {"state": jobruns.UNKNOWN}
+    if snap["state"] in (jobruns.SUCCEEDED, jobruns.FAILED):
+        if len(_FINISHED) > 500:
+            _FINISHED.clear()
+        _FINISHED[run_id] = snap
+    return snap
+
+
+def _statuses(rows: list[dict], key: str) -> dict[str, jobruns.RunStatus]:
+    """Audit rows of started jobs as {row[key]: where that run stands now}."""
+    out = {}
+    for r in rows:
+        try:
+            run_id = int(json.loads(r["detail_json"] or "{}")["run_id"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        out[r[key]] = jobruns.RunStatus(**{"run_id": run_id, "asked_ms": int(float(r.get("asked_ms") or 0)),
+                                           "by": r.get("actor") or "", **_run_snapshot(run_id)})
+    return out
+
+
+def job_statuses(bot_id: str) -> dict[str, jobruns.RunStatus]:
+    """Where the latest run of each background job stands for a chatbot: {label: status}, for jobs
+    started from the app in the last day. Labels are those of job_label()."""
+    try:
+        rows = sql().query(
+            f"""SELECT target, actor, detail_json, unix_timestamp(ts) * 1000 AS asked_ms FROM {settings().fq('audit_log')}
+                WHERE bot_id = :b AND action = 'job_started' AND ts >= current_timestamp() - INTERVAL 1 DAY
+                QUALIFY row_number() OVER (PARTITION BY target ORDER BY ts DESC) = 1""", {"b": bot_id})
+    except Exception as e:  # noqa: BLE001 - knowing a job's progress is a help, never a reason to fail a page
+        logging.getLogger("factory.app").info("could not read started jobs (%s)", type(e).__name__)
+        return {}
+    return _statuses(rows, "target")
+
+
+def checks_in_progress() -> set[str]:
+    """The chatbots whose quality check is waiting or running right now (for Home's next steps)."""
+    try:
+        rows = sql().query(
+            f"""SELECT bot_id, actor, detail_json, unix_timestamp(ts) * 1000 AS asked_ms FROM {settings().fq('audit_log')}
+                WHERE action = 'job_started' AND target = 'evals' AND ts >= current_timestamp() - INTERVAL 3 HOURS
+                QUALIFY row_number() OVER (PARTITION BY bot_id ORDER BY ts DESC) = 1""")
+    except Exception:  # noqa: BLE001
+        return set()
+    return {bot_id for bot_id, status in _statuses(rows, "bot_id").items() if status.active}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _typical_seconds(job_id: str, default: int) -> int:
+    return jobruns.typical_seconds(app_client().jobs.list_runs(job_id=int(job_id), completed_only=True, limit=20),
+                                   default)
+
+
+def typical_seconds(label: str) -> int:
+    """How long this job has been taking lately, or a first guess when it has no history."""
+    default = JOB_WHAT[label][1] * 60
+    kind = {"ingest_publish": "ingest", "ingest_questions": "ingest", "rollback": "promote"}.get(label, label)
+    try:
+        return _typical_seconds(JOB_IDS[kind], default) if JOB_IDS.get(kind) else default
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def watch_job(label: str, bot_id: str, quiet: bool = False) -> jobruns.RunStatus:
+    """Show where the latest run of a background job stands for this chatbot, and return it.
+
+    While the job is waiting or running there is a progress bar that updates itself every 15
+    seconds, and the page reloads once when the job ends, so the result appears without anyone
+    pressing anything. A run that stopped with an error says so, with what to do. `quiet` leaves
+    out the error (for pages where another part already explains the failure)."""
+    status = job_statuses(bot_id).get(label, jobruns.RunStatus())
+    what = JOB_WHAT[label][0]
+    if status.active:
+        @st.fragment(run_every=15)
+        def live() -> None:
+            now = job_statuses(bot_id).get(label, jobruns.RunStatus())
+            if not now.active:      # it ended while this page was open: show what it produced
+                forget()
+                st.rerun()
+            typical = typical_seconds(label)
+            st.progress(jobruns.progress(now, time.time() * 1000, typical),
+                        text=jobruns.sentence(now, what, time.time() * 1000, typical))
+            st.caption("This updates by itself. You can leave the page or close the browser: the job carries on."
+                       + (f" [Open the run in Databricks]({now.url})" if now.url else ""))
+        live()
+    elif status.state == jobruns.FAILED and not quiet:
+        st.error(f"**{jobruns.sentence(status, what, time.time() * 1000, 0)}** Nothing was changed by it.")
+        st.markdown("**What to do:** start it again with the button here. If it stops a second time, send MLOps "
+                    "the message below" + (f" and [this link to the run]({status.url})." if status.url else "."))
+        if status.message:
+            st.code(problems.one_line(status.message, 400), language=None)
+    elif status.state == jobruns.UNKNOWN and not quiet:
+        st.info(jobruns.sentence(status, what, time.time() * 1000, 0) + " Ask MLOps to look at the job in Databricks "
+                "if nothing has changed here after half an hour.")
+    return status
 
 
 @st.cache_resource

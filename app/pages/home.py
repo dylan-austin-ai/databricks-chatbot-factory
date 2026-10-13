@@ -6,8 +6,8 @@ from html import escape as esc
 
 import streamlit as st
 
-from common import (PAGES, STATE_LABEL, bot_progress, current_user, is_admin, my_bots, read_many, settings, soft,
-                    user_groups)
+from common import (PAGES, STATE_LABEL, bot_progress, checks_in_progress, current_user, is_admin, my_bots, read_many,
+                    settings, soft, user_groups)
 from factory import journey
 from factory.monitoring import split_alerts, unresolved_alerts_sql
 from factory.problems import group_alerts
@@ -52,6 +52,7 @@ week = {r["bot_id"]: r for r in found["usage"]}
 candidates = {r["bot_id"]: r for r in found["versions"]}
 spend = {r["bot_id"]: r for r in found.get("spending", [])}
 progress = bot_progress(bots)
+checking = checks_in_progress()   # chatbots whose quality check is waiting or running right now
 needed = int(s.get("quality.min_golden_questions", 50))
 
 
@@ -63,7 +64,8 @@ def next_for(b: dict) -> journey.Step:
     """The one thing to do next for this chatbot."""
     cand = candidates.get(b["bot_id"]) if b.get("candidate_release_id") else None
     path = journey.steps(b["state"], *journey.counts(progress.get(b["bot_id"])), needed, cand,
-                         bool(b.get("live_release_id")), b.get("reviewer") or "", reviews(b))
+                         bool(b.get("live_release_id")), b.get("reviewer") or "", reviews(b),
+                         checking=b["bot_id"] in checking)
     return journey.next_step(b["state"], path, bool(b.get("candidate_release_id")))
 
 
