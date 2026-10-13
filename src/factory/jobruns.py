@@ -65,6 +65,7 @@ class RunStatus:
     step: int = 0            # for a job made of several tasks: the one it is on, or stopped at (1-based)
     steps: int = 0           # how many tasks the job has
     task: str = ""           # that task's key
+    task_run_id: int = 0     # for a run that stopped: the task run whose output holds the real error
 
     @property
     def active(self) -> bool:
@@ -102,6 +103,11 @@ def snapshot(run) -> dict:
     newer `status` and the older `state`)."""
     snap = _one(run)
     snap["step"], snap["steps"], snap["task"] = _stage(run, snap["state"])
+    snap["task_run_id"] = 0
+    if snap["state"] == FAILED:   # the run only says "see run output"; the task that failed has the reason
+        tasks = list(getattr(run, "tasks", None) or [])
+        failed = [t for t in tasks if _one(t)["state"] == FAILED] or tasks[:1]
+        snap["task_run_id"] = int(getattr(failed[0], "run_id", 0) or 0) if failed else 0
     return snap
 
 

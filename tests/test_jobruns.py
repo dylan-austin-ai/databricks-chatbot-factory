@@ -29,7 +29,7 @@ def test_a_run_is_read_the_same_from_either_shape_the_api_returns():
         assert jobruns.snapshot(run)["state"] == state, run
     failed = jobruns.snapshot(new("TERMINATED", "RUN_EXECUTION_ERROR", "Task failed: x", start=5, end=9))
     assert failed == {"state": FAILED, "started_ms": 5, "ended_ms": 9, "message": "Task failed: x",
-                      "url": "https://host/run/1", "step": 0, "steps": 0, "task": ""}
+                      "url": "https://host/run/1", "step": 0, "steps": 0, "task": "", "task_run_id": 0}
     assert "another run of the same job" in jobruns.snapshot(old("SKIPPED"))["message"]
     assert len(jobruns.snapshot(old("TERMINATED", "FAILED", "x" * 5000))["message"]) == 500
 
@@ -114,3 +114,74 @@ def test_a_job_made_of_several_tasks_says_which_one_it_is_on():
     single.tasks = [task("evals", "RUNNING")]
     assert jobruns.snapshot(single)["step"] == 0                       # one task: no "step 1 of 1"
     assert jobruns.span(3 * 86400 + 5) == "3 days" and jobruns.span(30 * 3600) == "30 hours"
+
+
+# --- when a job stops: the real reason, and whether trying again can help -------------------------
+
+WAREHOUSE_ERROR = ("MlflowException: SQL warehouse ID is required for accessing traces in UC tables. Please set the "
+                   "MLFLOW_TRACING_SQL_WAREHOUSE_ID environment variable.")
+
+
+def test_a_stopped_run_points_at_the_task_whose_output_has_the_reason():
+    stopped = new("TERMINATED", "RUN_EXECUTION_ERROR", "Task evals failed with message: Workload failed, see run output")
+    stopped.tasks = [NS(task_key="ingest", run_id=11, state=None, status=NS(state=NS(value="TERMINATED"),
+                                                                             termination_details=NS(code=NS(value="SUCCESS")))),
+                     NS(task_key="evals", run_id=13, state=None, status=NS(
+                         state=NS(value="TERMINATED"), termination_details=NS(code=NS(value="RUN_EXECUTION_ERROR"))))]
+    assert jobruns.snapshot(stopped)["task_run_id"] == 13
+    alone = new("TERMINATED", "RUN_EXECUTION_ERROR", "x")
+    alone.tasks = [NS(task_key="evals", run_id=21, state=None, status=NS(state=NS(value="TERMINATED"),
+                                                                          termination_details=NS(code=NS(value="RUN_EXECUTION_ERROR"))))]
+    assert jobruns.snapshot(alone)["task_run_id"] == 21               # a one-task job: that task
+    assert jobruns.snapshot(new("TERMINATED", "RUN_EXECUTION_ERROR", "x"))["task_run_id"] == 0
+    assert jobruns.snapshot(new("RUNNING"))["task_run_id"] == 0
+
+
+def test_a_fault_in_the_jobs_setup_is_told_apart_from_something_worth_retrying():
+    from factory import problems
+
+    kind, advice = problems.job_stopped(WAREHOUSE_ERROR)
+    assert kind == problems.SETUP and "won't help" in advice and "MLOps" in advice
+    for message in ("ModuleNotFoundError: No module named 'x'", "PERMISSION_DENIED: User does not have CAN_USE",
+                    "TypeError: evaluate() got an unexpected keyword argument 'model_id'"):
+        assert problems.job_stopped(message)[0] == problems.SETUP, message
+    for message in ("TimeoutError: SQL statement timed out", "503 TEMPORARILY_UNAVAILABLE",
+                    "Databricks skipped this run because another run of the same job was still going."):
+        kind, advice = problems.job_stopped(message)
+        assert kind == problems.TEMPORARY and "Start it again" in advice, message
+    kind, advice = problems.job_stopped("Workload failed, see run output for details")
+    assert kind == problems.UNCLEAR and "second time" in advice
+    assert problems.job_stopped(None)[0] == problems.UNCLEAR
+
+
+def test_every_job_task_is_given_the_warehouse_and_the_bootstrap_hands_it_to_mlflow(monkeypatch):
+    import importlib.util
+    import pathlib
+
+    import yaml
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    jobs = yaml.safe_load((root / "resources" / "jobs.yml").read_text())["resources"]["jobs"]
+    tasks = [(name, t["task_key"], t["spark_python_task"]["parameters"]) for name, job in jobs.items() for t in job["tasks"]]
+    assert len(tasks) >= 20
+    for name, key, params in tasks:   # a job is its own process: it knows the warehouse only if it is told
+        assert params.count("--warehouse_id=${var.warehouse_id}") == 1, (name, key)
+
+    for var in ("FACTORY_WAREHOUSE_ID", "MLFLOW_TRACING_SQL_WAREHOUSE_ID"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr("sys.argv", ["run_evals.py", "--catalog=qa", "--warehouse_id=abc123", "--bot_id=hr"])
+    spec = importlib.util.spec_from_file_location("_bootstrap_under_test", root / "jobs" / "_bootstrap.py")
+    boot = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(boot)
+    import os
+
+    assert os.environ["FACTORY_WAREHOUSE_ID"] == "abc123"             # read from the task's own parameters
+    assert boot.warehouse_for_traces() == "abc123" and os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] == "abc123"
+
+    for var in ("FACTORY_WAREHOUSE_ID", "MLFLOW_TRACING_SQL_WAREHOUSE_ID"):
+        monkeypatch.delenv(var, raising=False)
+    assert boot.warehouse_for_traces("saved99") == "saved99"          # a job copy made before the parameter existed
+    assert os.environ["MLFLOW_TRACING_SQL_WAREHOUSE_ID"] == "saved99"
+    for var in ("FACTORY_WAREHOUSE_ID", "MLFLOW_TRACING_SQL_WAREHOUSE_ID"):
+        monkeypatch.delenv(var, raising=False)
+    assert boot.warehouse_for_traces("") == "" and "MLFLOW_TRACING_SQL_WAREHOUSE_ID" not in os.environ

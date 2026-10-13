@@ -79,6 +79,12 @@ These names are the defaults in `access:` in `platform_defaults.yml`. Keep them 
 **10 minutes**. Open it and copy the **ID** from the **Overview** tab, or from the end of the
 URL. This is `<warehouse_id>`.
 
+On the warehouse's **Permissions**, give **Can use** to `<jobs_run_as>` as well as to the app's
+service principal (after B2). The jobs need it too: the traces are stored in Unity Catalog, and
+MLflow reads them through this warehouse when the quality check collects its scores. The bundle
+passes the ID to every job task as `--warehouse_id`, so after changing the warehouse, deploy the
+bundle again.
+
 ### A5. Create the catalog and its owner [UI] (metastore admin)
 
 1. **Catalog** › **+** › **Create a catalog**. Name `qa_chatbot_factory`, type **Standard**, pick the
@@ -698,4 +704,10 @@ output and the first smoke test:
   bar with "waiting its turn" and then "running". That relies on the app's service principal
   being able to read a run it started (`jobs.get_run`); if the page instead says it "can't read
   how it is going", give the app's service principal **Can view** on the factory's jobs.
+- The quality check reading its scores back: `mlflow.search_traces(run_id=...)` in a job needs
+  `MLFLOW_TRACING_SQL_WAREHOUSE_ID`, which every job now sets from its `--warehouse_id`
+  parameter. The per-chatbot `[factory] auto-ingest <chatbot>` jobs are copies made when each
+  chatbot was created, so they don't have that parameter; they use the ID saved in the settings,
+  which the first run of any other job saves. If one of them still stops with "SQL warehouse ID
+  is required", archive and restore that chatbot under Admin › Lifecycle to remake its copy.
 - README › "Verify against a live workspace first" has the full list.

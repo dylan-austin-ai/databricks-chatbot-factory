@@ -635,3 +635,40 @@ def test_an_update_of_the_test_version_shows_its_stage_and_locks_the_manual_chec
     at = run("test_questions", bot_id="hr_bot")                       # the same lock on the questions page
     assert problems(at) == [] and ("Runs when the update finishes", True) in [(b.label, b.disabled) for b in at.button]
     assert jobs == []
+
+
+def test_a_check_stopped_by_the_jobs_setup_shows_the_real_reason_and_does_not_claim_nothing_changed(workspace):
+    common, wh, _ = workspace(bots=[CHECKABLE])
+    wh.on(r"_platform\.releases WHERE bot_id", [release("hr_bot-r0001", "candidate")])
+    stopped = job_run("TERMINATED", ended_ago_s=30, result="RUN_EXECUTION_ERROR",
+                      message="Task evals failed with message: Workload failed, see run output for details.")
+    stopped.tasks = [NS(task_key="evals", run_id=99, state=None, status=stopped.status)]
+    started_job(common, wh, "evals", stopped)
+    asked = []
+    common.app_client().jobs.get_run_output = lambda run_id: asked.append(run_id) or NS(
+        error="MlflowException: SQL warehouse ID is required for accessing traces in UC tables. Please set the "
+              "MLFLOW_TRACING_SQL_WAREHOUSE_ID environment variable.", error_trace="Traceback ...")
+    at = run("launch", bot_id="hr_bot")
+    assert problems(at) == [] and asked == [99]                      # the failed task's own output
+    error = at.error[0].value
+    assert "The last quality check stopped with an error" in error and "Nothing was changed" not in error
+    assert "No quality result was recorded" in error and "says nothing about how good your chatbot's answers" in error
+    assert any("SQL warehouse ID is required" in c.value for c in at.code)          # not "see run output"
+    advice = [m.value for m in at.markdown if m.value.startswith("**What to do:**")][0]
+    assert "fault in how the job is set up" in advice and "won't help" in advice and "runs/7" in advice
+
+
+def test_an_update_that_stopped_at_its_quality_check_says_the_update_itself_finished(workspace):
+    common, wh, _ = workspace(bots=[CHECKABLE])
+    wh.on(r"_platform\.releases WHERE bot_id", [release("hr_bot-r0001", "candidate")])
+    ok = NS(state=NS(value="TERMINATED"), termination_details=NS(code=NS(value="SUCCESS"), message=None))
+    bad = NS(state=NS(value="TERMINATED"), termination_details=NS(code=NS(value="RUN_EXECUTION_ERROR"), message=None))
+    stopped = job_run("TERMINATED", ended_ago_s=60, result="RUN_EXECUTION_ERROR", message="Task evals failed")
+    stopped.tasks = [NS(task_key="ingest", run_id=1, state=None, status=ok),
+                     NS(task_key="compare_strategies", run_id=2, state=None, status=ok),
+                     NS(task_key="evals", run_id=3, state=None, status=bad)]
+    started_job(common, wh, "ingest_publish", stopped)
+    at = run("launch", bot_id="hr_bot")
+    error = [e.value for e in at.error if "update of the test version" in e.value][0]
+    assert problems(at) == [] and "at step 3 of 3 (the quality check)" in error
+    assert "The update itself finished. No quality result was recorded" in error

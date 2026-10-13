@@ -30,6 +30,7 @@ resources:
           - --agent_principal=${var.agent_principal}
           - --usage_policy_id=${var.usage_policy_id}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
     provision_bot:
       tags:
         chatbot_name: shared-platform
@@ -68,6 +69,7 @@ resources:
           - --ingest_job_id=${resources.jobs.ingest_bot.id}
           - --agent_principal=${var.agent_principal}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
       - task_key: compare_strategies
         environment_key: default
         spark_python_task:
@@ -77,6 +79,7 @@ resources:
           - --environment=${bundle.target}
           - --bot_id={{job.parameters.bot_id}}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
         depends_on:
         - task_key: provision
       - task_key: first_eval
@@ -89,6 +92,7 @@ resources:
           - --trigger=provisioned
           - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
         depends_on:
         - task_key: compare_strategies
     ingest_bot:
@@ -144,6 +148,7 @@ resources:
           - --golden_only={{job.parameters.golden_only}}
           - --generate_golden={{job.parameters.generate_golden}}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
       - task_key: compare_strategies
         environment_key: default
         spark_python_task:
@@ -153,6 +158,7 @@ resources:
           - --environment=${bundle.target}
           - --bot_id={{job.parameters.bot_id}}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
         depends_on:
         - task_key: ingest
       - task_key: evals
@@ -165,6 +171,7 @@ resources:
           - --trigger=docs_changed
           - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
         depends_on:
         - task_key: compare_strategies
     run_evals:
@@ -205,6 +212,7 @@ resources:
           - --channel={{job.parameters.channel}}
           - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
     reindex:
       tags:
         chatbot_name: shared-platform
@@ -240,6 +248,7 @@ resources:
           - --parser={{job.parameters.parser}}
           - --extensions={{job.parameters.extensions}}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
       - task_key: evals
         depends_on:
         - task_key: reindex
@@ -252,6 +261,7 @@ resources:
           - --trigger=reindex
           - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
     prod_judging:
       tags:
         chatbot_name: shared-platform
@@ -281,6 +291,7 @@ resources:
           - --catalog=${var.catalog}
           - --git_commit=${bundle.git.commit}
           - --environment=${bundle.target}
+          - --warehouse_id=${var.warehouse_id}
     maintenance:
       tags:
         chatbot_name: shared-platform
@@ -319,6 +330,7 @@ resources:
           - --purge_bot_id={{job.parameters.purge_bot_id}}
           - --actor={{job.parameters.actor}}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
     drift:
       tags:
         chatbot_name: shared-platform
@@ -345,6 +357,7 @@ resources:
           - --catalog=${var.catalog}
           - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
     git_sync:
       tags:
         chatbot_name: shared-platform
@@ -375,6 +388,7 @@ resources:
           - --catalog=${var.catalog}
           - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
     deploy_agent:
       tags:
         chatbot_name: shared-platform
@@ -459,6 +473,7 @@ resources:
           - --actor={{job.parameters.actor}}
           - --environment=${bundle.target}
           - --evals_job_id=${resources.jobs.run_evals.id}
+          - --warehouse_id=${var.warehouse_id}
     promote_release:
       tags:
         chatbot_name: shared-platform
@@ -501,6 +516,7 @@ resources:
           - --reason={{job.parameters.reason}}
           - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
     monitor_business_hours:
       tags:
         chatbot_name: shared-platform
@@ -532,6 +548,7 @@ resources:
           - --catalog=${var.catalog}
           - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
     monitor_after_hours:
       tags:
         chatbot_name: shared-platform
@@ -563,6 +580,7 @@ resources:
           - --catalog=${var.catalog}
           - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}
     monitor_weekend:
       tags:
         chatbot_name: shared-platform
@@ -594,3 +612,4 @@ resources:
           - --catalog=${var.catalog}
           - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
+          - --warehouse_id=${var.warehouse_id}

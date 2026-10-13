@@ -552,11 +552,45 @@ def _run_snapshot(run_id: int) -> dict:
     except Exception as e:  # noqa: BLE001 - the run exists (we started it) but can't be read
         logging.getLogger("factory.app").info("could not read run %s (%s)", run_id, type(e).__name__)
         return {"state": jobruns.UNKNOWN}
+    if snap["state"] == jobruns.FAILED and snap.get("task_run_id"):
+        # The run itself only says "workload failed, see run output"; the output has the reason.
+        try:
+            error = getattr(app_client().jobs.get_run_output(snap["task_run_id"]), "error", None)
+        except Exception as e:  # noqa: BLE001 - keep Databricks' own short message
+            logging.getLogger("factory.app").info("could not read the output of run %s (%s)", run_id, type(e).__name__)
+            error = None
+        if error:
+            snap = {**snap, "message": str(error)[:1000]}
     if snap["state"] in (jobruns.SUCCEEDED, jobruns.FAILED):
         if len(_FINISHED) > 500:
             _FINISHED.clear()
         _FINISHED[run_id] = snap
     return snap
+
+
+# What it means when a job stops part-way. A job that stops has usually done some of its work,
+# so none of these say "nothing was changed".
+NO_RESULT = ("No quality result was recorded, so this says nothing about how good your chatbot's answers are. "
+             "Answers it had already asked for may show up in MLflow; they are not counted.")
+STOPPED = {
+    "evals": NO_RESULT,
+    "promote": "Publishing did not complete. The versions shown on this page are what is live now.",
+    "rollback": "The roll back did not complete. The versions shown on this page are what is live now.",
+    "provision": "Setup did not complete. The steps that finished are kept.",
+    "ingest": "Documents it had already read are kept; the others have not been read yet.",
+    "ingest_publish": "The test version may be only partly updated. The next update finishes the job.",
+    "ingest_questions": "Questions it had already written are in the table; the rest were not written.",
+}
+
+
+def what_a_stop_means(label: str, status: jobruns.RunStatus) -> str:
+    """What a stopped run left behind, going by which of its tasks stopped."""
+    if label != "evals" and status.task in ("evals", "first_eval"):
+        return "The update itself finished. " + NO_RESULT
+    if status.task == "compare_strategies":
+        return ("The update itself finished. The search method was not chosen again, and the quality check that "
+                "follows did not run.")
+    return STOPPED[label]
 
 
 def _statuses(rows: list[dict], key: str) -> dict[str, jobruns.RunStatus]:
@@ -654,11 +688,11 @@ def watch_job(label: str, bot_id: str, quiet: bool = False) -> jobruns.RunStatus
                        + (f" [Open the run in Databricks]({now.url})" if now.url else ""))
         live()
     elif status.state == jobruns.FAILED and not quiet:
-        st.error(f"**{jobruns.sentence(status, what, time.time() * 1000, 0)}** Nothing was changed by it.")
-        st.markdown("**What to do:** start it again with the button here. If it stops a second time, send MLOps "
-                    "the message below" + (f" and [this link to the run]({status.url})." if status.url else "."))
+        _, advice = problems.job_stopped(status.message)
+        st.error(f"**{jobruns.sentence(status, what, time.time() * 1000, 0)}** {what_a_stop_means(label, status)}")
+        st.markdown(f"**What to do:** {advice}" + (f" [Open the run in Databricks]({status.url})" if status.url else ""))
         if status.message:
-            st.code(problems.one_line(status.message, 400), language=None)
+            st.code(problems.one_line(status.message, 600), language=None)
     elif status.state == jobruns.UNKNOWN and not quiet:
         st.info(jobruns.sentence(status, what, time.time() * 1000, 0) + " Ask MLOps to look at the job in Databricks "
                 "if nothing has changed here after half an hour.")
