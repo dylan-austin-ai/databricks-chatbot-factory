@@ -742,4 +742,8 @@ output and the first smoke test:
   the reason only to callers named in `access.jobs_run_as`, `access.synthetic_callers` or
   `access.trusted_callers` (C1), so the jobs' identity must be recorded there, and the agent
   must have been redeployed (`deploy_agent`) since this change.
+- Redeploying the agent after a new commit. The endpoint carries a `git_commit` tag, and
+  `agents.deploy` refuses to change a tag's value in one request ("Duplicate key(s) detected in
+  tags to add and tags to delete"). The deploy therefore hands over existing tags unchanged and
+  sets their new values once the endpoint is serving; the run prints "Endpoint tags updated".
 - README › "Verify against a live workspace first" has the full list.

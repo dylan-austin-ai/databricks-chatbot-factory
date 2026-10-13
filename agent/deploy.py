@@ -78,7 +78,8 @@ from factory.gateway import (ensure_model_service, grant_execute, labels, loggin
                              ui_checklist)
 from factory.preflight import deploy_problems, gate_problems  # noqa: E402
 from factory.provisioning import ensure_shared_index, grant_agent_access  # noqa: E402
-from factory.serving import remove_old_versions, wait_until_serving  # noqa: E402
+from factory.serving import (endpoint_tags, remove_old_versions, retag, split_tags,  # noqa: E402
+                             wait_until_serving)
 
 STEPS = 12
 
@@ -231,10 +232,14 @@ deploy_kwargs = dict(
         "DATABRICKS_CLIENT_ID": f"{{{{secrets/{a.agent_sp_scope}/agent-sp-client-id}}}}",
         "DATABRICKS_CLIENT_SECRET": f"{{{{secrets/{a.agent_sp_scope}/agent-sp-client-secret}}}}",
     },
-    tags={s.get("tags.chatbot_name"): s.get("tags.shared_value"), "component": "chatbot-factory",
-          "environment": a.environment, "platform_version": PLATFORM_VERSION,
-          **({"git_commit": a.git_commit} if a.git_commit else {})},
 )
+# Tags are handed over with the values the endpoint has now and changed after the deploy: a tag
+# whose value changes (git_commit, at every deploy) makes agents.deploy send an update the
+# endpoint refuses. See factory.serving.
+wanted_tags = {s.get("tags.chatbot_name"): s.get("tags.shared_value"), "component": "chatbot-factory",
+               "environment": a.environment, "platform_version": PLATFORM_VERSION,
+               **({"git_commit": a.git_commit} if a.git_commit else {})}
+deploy_kwargs["tags"], changed_tags = split_tags(wanted_tags, endpoint_tags(w, a.endpoint))
 if a.usage_policy_id:  # serverless usage policy tags on the endpoint's billing (CST-11)
     # usage_policy_id replaced budget_policy_id. agents.deploy ignores unknown keywords instead
     # of rejecting them, so pick the name this version actually has.
@@ -247,6 +252,13 @@ MlflowClient().set_registered_model_alias(model_name, "champion", version)
 # Don't record or clean up anything for a deployment that didn't take.
 step(10, "Waiting for the endpoint to serve the new version")
 wait_until_serving(w, a.endpoint, model_name, version)
+try:   # the new version is serving; a tag that couldn't be changed is not a reason to call it failed
+    updated = retag(w, a.endpoint, changed_tags)
+    print("Endpoint tags updated:", ", ".join(updated) if updated else "none needed")
+except Exception as e:  # noqa: BLE001
+    print(f"WARNING: endpoint tags not updated ({type(e).__name__}: {str(e)[:200]}). Wanted: {changed_tags}. "
+          "Set them on the endpoint's page in Serving; they are used for cost reports and to show which commit "
+          "is deployed.")
 
 # Trace tables (OBS-9): explicit grants (ALL PRIVILEGES isn't enough for trace writes).
 # Writers: the agent (spans) and the app (user feedback). Readers: MLOps and Security only,

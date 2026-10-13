@@ -277,3 +277,56 @@ def test_ai_search_endpoint_gets_the_usage_policy(settings):
     ensure_shared_index(vsc, settings, usage_policy_id="pol-qa")
     assert created == {"name": settings.get("ai_search.endpoint"), "endpoint_type": "STANDARD",
                        "usage_policy_id": "pol-qa"}
+
+
+# --- endpoint tags whose value changes between deploys ------------------------------------------
+
+def test_tags_that_already_exist_are_handed_over_unchanged_and_changed_afterwards():
+    from factory.serving import split_tags
+
+    existing = {"chatbot_name": "shared-platform", "component": "chatbot-factory", "environment": "qa",
+                "platform_version": "1.0.0", "git_commit": "52069aa", "added_by_someone": "x"}
+    wanted = {"chatbot_name": "shared-platform", "component": "chatbot-factory", "environment": "qa",
+              "platform_version": "1.0.0", "git_commit": "fd4c73a", "new_key": "v"}
+    for_deploy, changed = split_tags(wanted, existing)
+    assert changed == {"git_commit": "fd4c73a"}
+    assert for_deploy["git_commit"] == "52069aa" and for_deploy["new_key"] == "v"      # old value, new key
+    # what databricks-agents would now send: no key is both added and removed
+    add = set(for_deploy.items()) - set(existing.items())
+    remove = {k for k, _ in set(existing.items()) - set(for_deploy.items())}
+    assert {k for k, _ in add} == {"new_key"} and remove == {"added_by_someone"} and not ({k for k, _ in add} & remove)
+    assert split_tags(wanted, {}) == (wanted, {})                                      # a new endpoint: all at once
+    assert split_tags({"a": ""}, {"a": None}) == ({"a": None}, {})                     # empty is not a change
+
+
+def test_changed_tags_are_removed_and_added_in_two_requests():
+    from types import SimpleNamespace as NS
+
+    from databricks.sdk.errors import NotFound
+
+    from factory.serving import endpoint_tags, retag
+
+    sent = []
+    w = NS(serving_endpoints=NS(patch=lambda name, **kw: sent.append((name, kw)),
+                                get=lambda name: NS(tags=[NS(key="git_commit", value="52069aa"), NS(key="k", value=None)])))
+    assert endpoint_tags(w, "chatbot-agent") == {"git_commit": "52069aa", "k": None}
+    assert retag(w, "chatbot-agent", {"git_commit": "fd4c73a", "platform_version": "1.0.1"}) == ["git_commit", "platform_version"]
+    assert [list(kw) for _, kw in sent] == [["delete_tags"], ["add_tags"]]             # never both in one request
+    assert sent[0][1]["delete_tags"] == ["git_commit", "platform_version"]
+    assert [(t.key, t.value) for t in sent[1][1]["add_tags"]] == [("git_commit", "fd4c73a"), ("platform_version", "1.0.1")]
+    sent.clear()
+    assert retag(w, "chatbot-agent", {}) == [] and sent == []
+
+    def missing(name):
+        raise NotFound("endpoint does not exist")
+
+    assert endpoint_tags(NS(serving_endpoints=NS(get=missing)), "new-endpoint") == {}
+
+
+def test_the_deploy_keeps_tag_changes_out_of_agents_deploy():
+    import pathlib
+
+    source = (pathlib.Path(__file__).resolve().parents[1] / "agent" / "deploy.py").read_text()
+    assert 'deploy_kwargs["tags"], changed_tags = split_tags(wanted_tags, endpoint_tags(w, a.endpoint))' in source
+    assert source.index("split_tags(wanted_tags") < source.index("agents.deploy(model_name, version, **deploy_kwargs)") \
+        < source.index("wait_until_serving(w, a.endpoint, model_name, version)") < source.index("retag(w, a.endpoint, changed_tags)")
