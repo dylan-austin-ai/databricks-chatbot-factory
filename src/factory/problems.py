@@ -244,19 +244,21 @@ def group_alerts(alerts: list[dict]) -> list[dict]:
     return list(groups.values())
 
 
-SETUP, TEMPORARY, UNCLEAR = "setup", "temporary", "unclear"
-_JOB_SETUP = (r"environment variable|is required|not set\b|not configured|No module named|ModuleNotFoundError|"
+SETUP, TEMPORARY, UNCLEAR, STOPPED_BY_HAND = "setup", "temporary", "unclear", "stopped"
+_JOB_SETUP = (r"did not answer|environment variable|is required|not set\b|not configured|No module named|ModuleNotFoundError|"
               r"ImportError|PERMISSION_DENIED|does not have .*(privilege|permission)|not authorized|Forbidden|"
               r"RESOURCE_DOES_NOT_EXIST|NOT_FOUND|does not exist|cannot be found|AttributeError|TypeError|NameError|"
               r"KeyError|unexpected keyword|SyntaxError|INVALID_PARAMETER_VALUE")
 _JOB_TEMPORARY = (r"timed out|TimeoutError|TIMEDOUT|TEMPORARILY_UNAVAILABLE|RESOURCE_EXHAUSTED|\b429\b|\b503\b|"
-                  r"CLOUD_FAILURE|Concurrent|skipped this run|CANCELED")
+                  r"CLOUD_FAILURE|Concurrent|skipped this run")
 
 
 def job_stopped(message: str | None) -> tuple[str, str]:
     """Why a background job stopped, as far as its error tells, and what to do: a fault in how
     the job is set up (starting it again changes nothing), something temporary, or unclear."""
     text = message or ""
+    if re.search(r"CANCEL", text, re.I):
+        return STOPPED_BY_HAND, "Someone stopped it. Start it again with the button here when you are ready."
     if re.search(_JOB_SETUP, text, re.I):
         return SETUP, ("This is a fault in how the job is set up, not something you did, and starting it again "
                        "won't help. Send MLOps the message below.")

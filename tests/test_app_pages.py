@@ -672,3 +672,15 @@ def test_an_update_that_stopped_at_its_quality_check_says_the_update_itself_fini
     error = [e.value for e in at.error if "update of the test version" in e.value][0]
     assert problems(at) == [] and "at step 3 of 3 (the quality check)" in error
     assert "The update itself finished. No quality result was recorded" in error
+
+
+def test_a_run_can_be_stopped_from_the_page(workspace):
+    common, wh, _ = workspace(bots=[CHECKABLE])
+    wh.on(r"_platform\.releases WHERE bot_id", [release("hr_bot-r0001", "candidate")])
+    started_job(common, wh, "evals", job_run("RUNNING", started_ago_s=3600))
+    stopped = []
+    common.app_client().jobs.cancel_run = lambda run_id: stopped.append(run_id)
+    at = run("launch", bot_id="hr_bot")
+    assert problems(at) == [] and "This one is taking longer than usual" in at.get("progress")[0].proto.text
+    at.button(key="stop_evals_7").click().run()
+    assert stopped == [7]

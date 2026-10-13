@@ -192,3 +192,34 @@ def dataset_record(case: dict) -> dict:
     if case["kind"] == "out_of_scope":
         exp["guidelines"] = ["The response declines to answer and points the user to the chatbot owner."]
     return {"inputs": {"question": case["question"]}, "expectations": exp}
+
+
+# Running the check without flooding the judge model -------------------------------------------
+def check_limits(settings) -> dict[str, str]:
+    """The MLflow settings that bound how hard a quality check leans on the judge model.
+
+    Left alone, MLflow scores up to 10 questions at once with up to 10 judges each and waits 300
+    seconds for every judge call. A pay-per-token model endpoint answers that by throttling, each
+    call then runs into the 300 seconds, and a 50-question check takes hours to report that
+    nothing was scored. These keep it to a few calls at a time and give up on a call after a
+    minute. Values come from the `quality.check` settings."""
+    c = settings.get("quality.check", {}) or {}
+    timeout = str(int(c.get("judge_timeout_seconds", 60)))
+    return {"MLFLOW_GENAI_EVAL_MAX_WORKERS": str(int(c.get("questions_at_once", 4))),
+            "MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS": str(int(c.get("judges_at_once", 2))),
+            "MLFLOW_GENAI_EVAL_SCORER_RATE_LIMIT": str(c.get("judge_calls_per_second", 2)),
+            "MLFLOW_GENAI_EVAL_LLM_TIMEOUT": timeout, "MLFLOW_GATEWAY_ROUTE_TIMEOUT_SECONDS": timeout}
+
+
+def judge_problem(client, endpoint: str, timeout: int = 60) -> str:
+    """Ask the judge model one trivial question before a check starts. Returns "" when it
+    answers, otherwise one line saying why not (wrong name, no permission, no answer in time),
+    so a check that can't be scored stops at once with the reason instead of after every
+    question has been asked."""
+    try:
+        client.chat.completions.create(model=endpoint, max_tokens=5, timeout=timeout,
+                                       messages=[{"role": "user", "content": "Reply with the word OK."}])
+    except Exception as e:  # noqa: BLE001 - whatever it is, the check can't be scored
+        first = next((line.strip() for line in str(e).splitlines() if line.strip()), "")
+        return f"{type(e).__name__}: {first}"[:300]
+    return ""

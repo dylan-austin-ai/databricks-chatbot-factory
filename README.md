@@ -43,7 +43,7 @@ failure. `releases`, `release_chunks` and `index_history` reconstruct the index 
 | `jobs/` | setup_platform, setup_observability, provision, ingest (+ per-bot file-arrival triggers), compare_strategies, run_evals (`mlflow.genai.evaluate`), promote, monitor, prod_judging, drift, optimize_prompt, reindex, git_sync, maintenance |
 | `sql/` | Control-plane DDL, per-bot DDL, dashboard views, ABAC governance, metric views, system-table cost views |
 | `resources/`, `databricks.yml` | Declarative Automation Bundle (qa and prod targets, direct deployment engine) |
-| `tests/` | 273 unit tests for the pure logic, and 75 that run every page of the app against a pretend workspace (these need the `app` extra) |
+| `tests/` | 278 unit tests for the pure logic, and 76 that run every page of the app against a pretend workspace (these need the `app` extra) |
 
 ## Prerequisites
 
@@ -156,6 +156,11 @@ shown as such, and the manual quality check is locked while one is going because
 already on its way. A run that stops shows the failed task's own error (not "see run output"),
 says what it left behind (never "nothing was changed"), and says whether starting it again can
 help or the job's setup needs MLOps.
+
+A running job can be stopped from the page that shows it. The "usually takes" time ignores runs
+that found nothing to do. The quality check paces its judge calls (`quality.check` settings),
+tests the judge model with one question before it starts, and records each question as one
+MLflow trace.
 
 Jobs are separate processes and don't share the app's or the agent's environment. Each task is
 passed the git commit, the environment and the SQL warehouse ID as parameters, and

@@ -42,6 +42,13 @@ rules = list(settings.get("guardrails.platform_rules", {}).values())
 git_commit = os.environ.get("FACTORY_GIT_COMMIT", "")
 mlflow.set_tracking_uri("databricks")
 mlflow.set_experiment(f"/Shared/chatbot-factory/{a.environment or 'qa'}/traces")
+for _var, _value in evals.check_limits(settings).items():   # a few judge calls at a time, not a hundred
+    os.environ.setdefault(_var, _value)                      # an explicit environment variable wins
+_judge_problem = evals.judge_problem(client, settings.get("models.judge_endpoint"))
+if _judge_problem:
+    raise SystemExit(f"The judge model '{settings.get('models.judge_endpoint')}' did not answer a one-line test, so "
+                     f"nothing was checked: {_judge_problem}. Check the endpoint name under Admin, Platform, Judge "
+                     "model endpoint, and that the jobs' identity may query it.")
 
 BUILTINS = {"correctness": (Correctness, {}), "groundedness": (RetrievalGroundedness, {}),
             "retrieval_relevance": (RetrievalRelevance, {}), "retrieval_sufficiency": (RetrievalSufficiency, {}),
@@ -80,6 +87,10 @@ def build_scorers(cfg, allowed: set[str], chunks: dict[str, str]) -> list:
 
 
 def make_predict(cfg, channel: str, p: BotPaths, chunks: dict[str, str]):
+    # One trace per question, holding everything below. Without this decorator each span here
+    # became a trace of its own and the tags had no trace to land on ("No active trace found"),
+    # so the judges and the checks were handed a trace with only part of what they need.
+    @mlflow.trace(name="quality_check_question")
     def predict(question: str) -> str:
         try:
             response, custom = evals.call_agent(client, agent_ep, cfg.bot_id, question, channel)

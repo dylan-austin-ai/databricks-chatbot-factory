@@ -185,3 +185,64 @@ def test_every_job_task_is_given_the_warehouse_and_the_bootstrap_hands_it_to_mlf
     for var in ("FACTORY_WAREHOUSE_ID", "MLFLOW_TRACING_SQL_WAREHOUSE_ID"):
         monkeypatch.delenv(var, raising=False)
     assert boot.warehouse_for_traces("") == "" and "MLFLOW_TRACING_SQL_WAREHOUSE_ID" not in os.environ
+
+
+# --- a quality check that can actually finish ---------------------------------------------------------
+
+def test_runs_that_did_nothing_do_not_set_the_usual_time():
+    t0 = 1_760_000_000_000
+    quick = [new("TERMINATED", "SUCCESS", start=t0, end=t0 + 40_000) for _ in range(6)]      # nothing to check
+    real = [new("TERMINATED", "SUCCESS", start=t0, end=t0 + 22 * MIN)]
+    assert jobruns.typical_seconds(quick, default=900) == 900            # not "about 1 minute"
+    assert jobruns.typical_seconds(quick + real, default=900) == 22 * 60
+
+
+def test_the_check_is_throttled_and_gives_up_on_a_silent_judge(settings):
+    from factory import evals
+
+    limits = evals.check_limits(settings)
+    assert limits == {"MLFLOW_GENAI_EVAL_MAX_WORKERS": "4", "MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS": "2",
+                      "MLFLOW_GENAI_EVAL_SCORER_RATE_LIMIT": "2", "MLFLOW_GENAI_EVAL_LLM_TIMEOUT": "60",
+                      "MLFLOW_GATEWAY_ROUTE_TIMEOUT_SECONDS": "60"}
+    settings._data["quality"]["check"] = {"questions_at_once": 8, "judge_calls_per_second": 0.5}
+    tuned = evals.check_limits(settings)
+    assert tuned["MLFLOW_GENAI_EVAL_MAX_WORKERS"] == "8" and tuned["MLFLOW_GENAI_EVAL_SCORER_RATE_LIMIT"] == "0.5"
+    assert tuned["MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS"] == "2"          # unset values keep their default
+
+
+def test_the_judge_model_is_asked_one_question_before_a_check_starts():
+    from factory import evals
+
+    asked = []
+    ok = NS(chat=NS(completions=NS(create=lambda **k: asked.append(k) or NS())))
+    assert evals.judge_problem(ok, "databricks-claude-haiku-4-5") == ""
+    assert asked[0]["model"] == "databricks-claude-haiku-4-5" and asked[0]["timeout"] == 60 and asked[0]["max_tokens"] == 5
+
+    def refuse(**k):
+        raise PermissionError("PERMISSION_DENIED: principal lacks CAN_QUERY on endpoint\nrequest id 123\nstack...")
+
+    reason = evals.judge_problem(NS(chat=NS(completions=NS(create=refuse))), "x")
+    assert reason == "PermissionError: PERMISSION_DENIED: principal lacks CAN_QUERY on endpoint"
+
+
+def test_a_run_someone_stopped_is_not_called_an_error():
+    from factory import problems
+
+    now = 100 * MIN
+    stopped = RunStatus(FAILED, 1, ended_ms=now - MIN, message="USER_CANCELED")
+    assert jobruns.sentence(stopped, "quality check", now, 0) == "The last quality check was stopped by someone 1 minute ago."
+    kind, advice = problems.job_stopped("Run cancelled by user (USER_CANCELED)")
+    assert kind == problems.STOPPED_BY_HAND and "Start it again" in advice
+    kind, _ = problems.job_stopped("The judge model 'x' did not answer a one-line test, so nothing was checked")
+    assert kind == problems.SETUP
+
+
+def test_each_question_of_the_check_is_one_trace_and_the_limits_come_first():
+    import pathlib
+
+    source = (pathlib.Path(__file__).resolve().parents[1] / "jobs" / "run_evals.py").read_text()
+    predict = source[source.index("def make_predict("):source.index("def read_scores(")]
+    assert '@mlflow.trace(name="quality_check_question")\n    def predict(question: str)' in predict
+    assert predict.index("@mlflow.trace") < predict.index("mlflow.start_span") < predict.index("update_current_trace")
+    assert source.index("evals.check_limits(settings)") < source.index("evals.judge_problem(") \
+        < source.index("mlflow.genai.evaluate(")

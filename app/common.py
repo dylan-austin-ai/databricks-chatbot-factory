@@ -686,6 +686,18 @@ def watch_job(label: str, bot_id: str, quiet: bool = False) -> jobruns.RunStatus
                         text=jobruns.sentence(now, what, time.time() * 1000, typical))
             st.caption("This updates by itself. You can leave the page or close the browser: the job carries on."
                        + (f" [Open the run in Databricks]({now.url})" if now.url else ""))
+            with st.popover("Stop this run"):
+                st.write(f"This stops the {what} in Databricks. What it has already done is kept, and you can "
+                         "start it again afterwards. Use it when a run is taking far longer than usual.")
+                if st.button("Yes, stop it", key=f"stop_{label}_{now.run_id}", type="primary"):
+                    try:
+                        app_client().jobs.cancel_run(now.run_id)
+                    except Exception as e:  # noqa: BLE001
+                        soft("Stopping the run", e)
+                    else:
+                        _live_run.clear()
+                        forget()
+                        st.rerun()
         live()
     elif status.state == jobruns.FAILED and not quiet:
         _, advice = problems.job_stopped(status.message)

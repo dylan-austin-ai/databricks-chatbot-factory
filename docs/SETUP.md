@@ -710,4 +710,11 @@ output and the first smoke test:
   chatbot was created, so they don't have that parameter; they use the ID saved in the settings,
   which the first run of any other job saves. If one of them still stops with "SQL warehouse ID
   is required", archive and restore that chatbot under Admin › Lifecycle to remake its copy.
+- The quality check's pace. It asks 4 questions at a time, runs 2 judges per question and makes
+  at most 2 judge calls a second (`quality.check` in Admin › Platform, YAML). With MLflow's own
+  defaults (10 × 10, no limit) every judge call timed out after 300 seconds against the
+  pay-per-token judge endpoint. If the check now finishes comfortably, raise the numbers a step
+  at a time; if judges still time out, lower `judge_calls_per_second` or give the judge model a
+  provisioned-throughput endpoint. Before it starts, the check asks the judge model one trivial
+  question and stops with the reason if that fails.
 - README › "Verify against a live workspace first" has the full list.

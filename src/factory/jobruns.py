@@ -136,12 +136,15 @@ def _one(run) -> dict:
 
 def typical_seconds(runs, default: int) -> int:
     """How long this job usually takes: the middle duration of its recent successful runs, or
-    `default` when there is no history yet."""
+    `default` when there is no history yet. Runs that ended in a fraction of the default are left
+    out: they found nothing to do (no test version, too few approved questions), and counting
+    them makes a 15-minute job look like a 1-minute one."""
     took = []
     for run in runs:
         snap = snapshot(run)
-        if snap["state"] == SUCCEEDED and snap["ended_ms"] > snap["started_ms"] > 0:
-            took.append((snap["ended_ms"] - snap["started_ms"]) / 1000)
+        seconds = (snap["ended_ms"] - snap["started_ms"]) / 1000
+        if snap["state"] == SUCCEEDED and snap["started_ms"] > 0 and seconds >= max(60, default * 0.2):
+            took.append(seconds)
     return int(median(took)) if took else default
 
 
@@ -183,7 +186,8 @@ def sentence(status: RunStatus, what: str, now_ms: float, typical_s: int) -> str
                 f"about {span(typical_s)}.{slow}")
     when = span(max(0, now_ms - (status.ended_ms or status.asked_ms)) / 1000) + " ago"
     if status.state == FAILED:
-        return f"The last {what} stopped with an error {when}{', at ' + stage if stage else ''}."
+        how = "was stopped by someone" if "CANCEL" in status.message.upper() else "stopped with an error"
+        return f"The last {what} {how} {when}{', at ' + stage if stage else ''}."
     if status.state == SUCCEEDED:
         return f"The last {what} finished {when}."
     if status.state == UNKNOWN:

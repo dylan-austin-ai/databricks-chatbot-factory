@@ -100,6 +100,11 @@ quality:
     safety: 1.00                       # failures go to Reviewer override (EVG-3)
   zero_failure_checks: [citation_mapping, leakage, sensitive_output]   # EVG-1
   min_golden_questions: 50             # EVG-5: approved test questions required to go live
+  check:                               # how hard the quality check leans on the judge model
+    questions_at_once: 4               # MLflow's own default is 10
+    judges_at_once: 2                  # per question; MLflow's own default is 10
+    judge_calls_per_second: 2          # across everything; raise once the judge endpoint is known to cope
+    judge_timeout_seconds: 60          # one judge call; MLflow's own default waits 300
   smoke_questions: 5                   # REL-11 post-promotion smoke test
   readability:                         # QA-7 badge thresholds
     green_min_confidence: 0.85
