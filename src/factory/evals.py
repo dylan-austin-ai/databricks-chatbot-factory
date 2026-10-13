@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from . import guardrails as g
 from . import sensitive
+from .identity import NO_CALLER
 
 REFUSAL_OUTCOMES = {"refused", "no_source"}
 RETRIEVAL_KS = (1, 3, 5)
@@ -303,6 +304,16 @@ def timed(label: str, work, limit_s: int = 60) -> tuple[bool, object]:
 
 
 CANT_BE_SCORED = ("error", "denied", "unavailable")   # the chatbot gave no answer whose quality could be judged
+# The agent identifies whoever queries it from a token Model Serving passes along. Without it the
+# agent answers nobody, whoever asks and however the jobs are set up.
+NO_CALLER_CHECKS = (
+    "Nothing about the jobs or their identity needs changing. What to check, in this order: (1) a workspace admin "
+    "opens Previews in this workspace and confirms 'Agent Framework: On-Behalf-Of-User Authorization' is on; (2) "
+    "the deploy_agent job has run since it was turned on (it declares the user authorisation the agent needs; run "
+    "it again if unsure); (3) if both are true, Model Serving is not passing the asking user's token to the agent: "
+    "send this message, the endpoint's name and the time of this run to Databricks support. The word in brackets "
+    "is the kind of failure: ValueError means no token arrived; anything else means one arrived but Databricks "
+    "would not say whose it is")
 
 
 def chatbot_fault(custom: dict | None, runs_as: str = "", recognised: bool = False) -> str:
@@ -312,9 +323,10 @@ def chatbot_fault(custom: dict | None, runs_as: str = "", recognised: bool = Fal
     custom = custom or {}
     outcome = custom.get("outcome")
     if outcome == "error":
-        return ("it answered with its error message instead of an answer: " + str(
-            custom.get("error") or "no reason was given (the agent shares the reason only with the platform's own "
-            "callers, and only once it has been redeployed)"))
+        reason = str(custom.get("error") or "no reason was given (the agent shares the reason only with the "
+                     "platform's own callers, and only once it has been redeployed)")
+        return ("it answered with its error message instead of an answer: " + reason
+                + (". " + NO_CALLER_CHECKS if NO_CALLER in reason else ""))
     if outcome == "denied":
         who = runs_as or "an identity that could not be read"
         return ("it refused the check's own question, the way it refuses a person who is not on the chatbot's access "
@@ -424,6 +436,23 @@ def recording_scorer(name: str, work, results: dict, status: dict, normalise, ne
         return result
 
     return keep
+
+
+def search_report(traces: int, decoded: dict[str, tuple[dict, dict]], questions: list[str]) -> str:
+    """What searching trace storage for a check's run found, counting each thing separately: the
+    traces themselves, the ones whose request could be read as a question, this check's questions
+    among them, and the ones with scores. "0 questions" must never be said of traces that are
+    there but could not be decoded. `decoded`: {question: (scores, rationales)}."""
+    matched = [q for q in questions if q in decoded]
+    scored = sum(1 for q in matched if decoded[q][0])
+    text = (f"{traces} trace(s) found for the run. A question could be read from {len(decoded)} of them; "
+            f"{len(matched)} of this check's {len(questions)} question(s) are among those, {scored} with scores "
+            "attached.")
+    if traces and not decoded:
+        text += " THE TRACES ARE THERE BUT THEIR REQUESTS COULD NOT BE READ AS QUESTIONS: a decoding problem, not missing traces."
+    elif traces < len(questions):
+        text += " Fewer traces than questions: some of this run's traces are not found by the search."
+    return text
 
 
 def wait_for(read, tries: int = 9, pause_s: float = 10, sleep=None):

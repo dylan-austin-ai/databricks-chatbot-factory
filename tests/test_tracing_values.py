@@ -2,7 +2,7 @@
 import pathlib
 
 from factory import evals, problems
-from factory.tracing import TRACE_TABLES, as_dict, trace_grants, trace_tags
+from factory.tracing import DECODE_PASSES, TRACE_TABLES, as_dict, question_of, trace_grants, trace_tags
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
@@ -19,7 +19,64 @@ def test_the_check_reads_the_chatbots_output_through_that():
     source = (ROOT / "jobs" / "run_evals.py").read_text()
     body = source[source.index("def agent_outputs("):source.index("def runs_as(")]
     assert "as_dict(spans[0].outputs)" in body and "if trace is not None" in body
-    assert 'as_dict(t.data.request).get("question")' in source
+    assert "question = question_of(t.data.request)" in source
+
+
+def encoded(value, times: int):
+    import json
+
+    for _ in range(times):
+        value = json.dumps(value)
+    return value
+
+
+def test_a_value_encoded_more_than_once_is_decoded_until_it_is_a_dictionary():
+    request = {"question": "How do I file a claim?"}
+    assert as_dict(encoded(request, 1)) == request
+    twice = encoded(request, 2)                                # what trace storage returned for a trace's request
+    assert twice.startswith('"{') and as_dict(twice) == request
+    assert as_dict(encoded(request, 3)) == request
+    assert as_dict(encoded(request, 2).encode()) == request    # bytes at the outside
+
+
+def test_the_decoding_is_bounded_and_never_returns_something_get_fails_on():
+    request = {"question": "q"}
+    assert DECODE_PASSES == 4
+    assert as_dict(encoded(request, DECODE_PASSES)) == request         # the deepest it unwraps
+    assert as_dict(encoded(request, DECODE_PASSES + 1)) == {}          # one layer too many: given up on, not looped on
+    assert as_dict(encoded(request, 12)) == {}    # (each layer doubles the escaping, so the text grows fast)
+    assert as_dict(encoded(request, 2), passes=1) == {} and as_dict(encoded(request, 2), passes=2) == request
+    assert as_dict(request, passes=0) == request and as_dict(encoded(request, 1), passes=0) == {}
+    for odd in (encoded("just text", 2), encoded([1, 2], 2), encoded(7, 3), '"{not json}"', encoded(None, 2)):
+        assert as_dict(odd) == {}, odd
+
+
+def test_the_question_is_read_from_a_request_however_many_times_it_was_encoded():
+    for times in (0, 1, 2, 3):
+        assert question_of(encoded({"question": "How do I file a claim?"}, times)) == "How do I file a claim?", times
+    for unreadable in (None, "", "not json", encoded({"query": "x"}, 2), encoded({"question": ""}, 1),
+                       encoded({"question": {"nested": 1}}, 1), encoded({"question": "q"}, 9)):
+        assert question_of(unreadable) is None, unreadable
+
+
+def test_traces_that_are_there_are_never_reported_as_no_questions():
+    asked = ["q1", "q2", "q3"]
+    scores = ({"correctness": 1.0}, {"correctness": "fine"})
+    undecoded = evals.search_report(3, {}, asked)              # what the single-pass decoding reported as "0 of 3"
+    assert undecoded.startswith("3 trace(s) found for the run. A question could be read from 0 of them; "
+                                "0 of this check's 3 question(s) are among those, 0 with scores attached.")
+    assert "THE TRACES ARE THERE BUT THEIR REQUESTS COULD NOT BE READ AS QUESTIONS" in undecoded
+    assert "not missing traces" in undecoded
+    # four traces (MLflow asks the first question once more to test the function), three of them this check's
+    fine = evals.search_report(4, {"q1": scores, "q2": scores, "q3": ({}, {}), "another run's": scores}, asked)
+    assert fine == ("4 trace(s) found for the run. A question could be read from 4 of them; 3 of this check's 3 "
+                    "question(s) are among those, 2 with scores attached.")
+    missing = evals.search_report(1, {"q1": scores}, asked)
+    assert "1 of this check's 3 question(s)" in missing and "Fewer traces than questions" in missing
+    assert "COULD NOT BE READ" not in missing and "Fewer traces" not in fine
+    job = (ROOT / "jobs" / "run_evals.py").read_text()
+    assert "return len(traces), out" in job                    # the raw count travels with the decoded ones
+    assert 'evals.search_report(searched[0], searched[1], [c["question"] for c in cases])' in job
 
 
 def test_trace_writers_get_the_catalog_and_schema_as_well_as_the_tables():
@@ -71,7 +128,8 @@ def test_a_chatbot_error_fails_the_check_as_a_fault_not_as_a_bad_answer(settings
 
 def test_the_agent_gives_its_reason_only_to_the_platforms_own_test_callers():
     source = (ROOT / "agent" / "agent.py").read_text()
-    assert '"error": log["error"] if log["outcome"] == "error" and self._may_see_error(ci, s, log) else None' in source
+    assert ('"error": shared or (\n                    log["error"] if log["outcome"] == "error" and '
+            'self._may_see_error(ci, s, log) else None),') in source
     rule = source[source.index("def _may_see_error("):source.index("def _save_turn(")]
     assert 'if not ci.get("synthetic"):\n            return False' in rule          # a person asking never is
     assert "return idn.is_platform_caller(caller, s)" in rule                      # the same rule as for access

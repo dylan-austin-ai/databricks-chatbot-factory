@@ -77,6 +77,8 @@ MSG = {
     "unverified": ("I found relevant documents but couldn't produce an answer I could verify word "
                    "for word. Here are the most relevant sources:"),
     "error": "Sorry, something went wrong. Please try again.",
+    "no_caller": ("Sorry, I can't confirm who is asking, so I can't answer. This is a problem with how the chatbot "
+                  "is set up, not something you did, and asking again won't help. Please tell the chatbot's owner."),
 }
 
 
@@ -146,16 +148,16 @@ class ChatbotAgent(ResponsesAgent):
 
     # Identity and access (IDN-1, GOV-3/4) -----------------------------------------
     def caller(self):
-        """Returns (caller name, OBO workspace client)."""
-        from databricks.sdk import WorkspaceClient
-        try:
+        """Returns (caller name, a workspace client acting as the caller), or raises
+        idn.CallerUnknown. There is deliberately no fallback to the agent's own identity: with one,
+        a missing user token made every request look like it came from the agent's service
+        principal. Outside Model Serving (local testing) the credentials strategy itself uses the
+        developer's own sign-in."""
+        def as_caller():
+            from databricks.sdk import WorkspaceClient
             from databricks_ai_bridge import ModelServingUserCredentials
-            obo = WorkspaceClient(credentials_strategy=ModelServingUserCredentials())
-        except Exception:  # local testing
-            obo = WorkspaceClient()
-        me = obo.current_user.me()
-        name = me.user_name or (me.emails[0].value if me.emails else "") or me.display_name or ""
-        return name, obo
+            return WorkspaceClient(credentials_strategy=ModelServingUserCredentials())
+        return idn.obo_caller(as_caller, os.environ.get("DATABRICKS_CLIENT_ID", ""))
 
     def _probe(self, obo, s: PlatformSettings, bot_id: str, table: str, who: str) -> bool:
         def run():
@@ -382,8 +384,12 @@ class ChatbotAgent(ResponsesAgent):
         msgs = _messages(request)
         log["question"] = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
         result: dict = {"text": MSG["error"], "citations": [], "conflicts": [], "retrieval": []}
+        shared = None   # a reason for the failure that anyone may be told
         try:
             result = self._answer(msgs, ci, s, log)
+        except idn.CallerUnknown as e:  # nobody is identified, so nobody is answered
+            log["outcome"], log["error"], log["error_type"] = "error", str(e)[:1000], type(e).__name__
+            result, shared = {**result, "text": MSG["no_caller"]}, e.public
         except Exception as e:  # noqa: BLE001
             log["outcome"], log["error"], log["error_type"] = "error", repr(e)[:1000], type(e).__name__
         log["answer"] = result["text"]
@@ -397,7 +403,9 @@ class ChatbotAgent(ResponsesAgent):
             custom_outputs={
                 "request_id": request_id, "trace_id": log["trace_id"], "outcome": log["outcome"],
                 # Why it failed, for the quality check and the monitor only; people asking get MSG["error"].
-                "error": log["error"] if log["outcome"] == "error" and self._may_see_error(ci, s, log) else None,
+                # The one reason anyone gets is that the agent could not tell who they are.
+                "error": shared or (
+                    log["error"] if log["outcome"] == "error" and self._may_see_error(ci, s, log) else None),
                 "answer": result.get("answer", result["text"]), "citations": result["citations"],
                 "conflicts": result["conflicts"], "retrieval": result["retrieval"],
                 "retrieved_chunk_ids": [r["chunk_id"] for r in result["retrieval"]],

@@ -25,20 +25,33 @@ import json
 from .sensitive import redact
 
 
-def as_dict(value) -> dict:
-    """A span's inputs or outputs as a dictionary. Read back from storage they arrive as the JSON
-    text they were saved as, not as the dictionary that was set, so code that does `.get(...)` on
-    them fails with "'str' object has no attribute 'get'". Anything that isn't a dictionary, or
-    JSON for one, is an empty dictionary."""
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, (str, bytes)):
+DECODE_PASSES = 4   # how many layers of JSON-inside-JSON text are unwrapped before giving up
+
+
+def as_dict(value, passes: int = DECODE_PASSES) -> dict:
+    """A span's inputs or outputs, or a trace's request, as a dictionary. Read back from storage
+    they arrive as the JSON text they were saved as, not as the dictionary that was set, so code
+    that does `.get(...)` on them fails with "'str' object has no attribute 'get'". The text can
+    itself be JSON text (a trace's request came back encoded twice), so it is decoded again while
+    it is still text, `passes` times at most. Anything that isn't a dictionary by then, or isn't
+    JSON, is an empty dictionary."""
+    for _ in range(max(passes, 0)):
+        if isinstance(value, dict):
+            return value
+        if not isinstance(value, (str, bytes)):
+            return {}
         try:
-            parsed = json.loads(value)
+            value = json.loads(value)
         except ValueError:
             return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
+    return value if isinstance(value, dict) else {}
+
+
+def question_of(request) -> str | None:
+    """The question a quality-check trace was asked, from the trace's request as storage returns
+    it; None when it can't be read."""
+    question = as_dict(request).get("question")
+    return question if isinstance(question, str) and question else None
 
 
 TRACE_TABLES = ("spans", "annotations", "logs", "metrics")

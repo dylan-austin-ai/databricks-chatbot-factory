@@ -51,6 +51,7 @@ previews**). Search for each of these and switch it **On**:
 
 | Preview | Used for |
 |---|---|
+| **Agent Framework: On-Behalf-Of-User Authorization** (required) | How the agent learns who is asking: Model Serving hands it the asking user's credentials for each question. Without it the chatbot answers nobody |
 | **MLflow Review Queues** | Failed production answers go to a review queue for each chatbot |
 | `ai_parse_document` / AI Functions document parsing (v2) | Document parsing during ingestion |
 | `ai_prep_search` | Chunking and metadata extraction |
@@ -59,7 +60,9 @@ previews**). Search for each of these and switch it **On**:
 | **Agent Bricks: managed sessions** (optional) | Conversation memory. If you don't turn this on, set `history.store: none` in Admin › Platform later; otherwise memory just falls back to the client's history |
 
 If a preview isn't listed, ask your Databricks account team to enable it. The related setup step
-prints "not available" and carries on. Nothing else breaks.
+prints "not available" and carries on. Nothing else breaks, with one exception: the chatbot does
+not answer anyone until **Agent Framework: On-Behalf-Of-User Authorization** is on and the agent
+has been deployed (B3) after that.
 
 ### A3. Create groups [UI] (workspace admin)
 
@@ -736,7 +739,7 @@ output and the first smoke test:
   | 7 | The judge model answers one question. |
   | 8 | The check itself. |
   | 9 | For every question: the chatbot's outcome, how each scorer went (`done`, `failed`, `skipped`, `running`), every score, and `NO SCORE from <scorer>: <reason>` for each one that gave none. Then what trace storage holds for that question, read back by id, and whether the chatbot's own trace for it is stored. |
-  | 10 | Whether searching trace storage for the run finds the questions and their scores (what MLflow's evaluation page relies on). |
+  | 10 | What searching trace storage for the run finds (what MLflow's evaluation page relies on), each counted on its own: traces found, traces whose request could be read as a question, this check's questions among those, and how many have scores. Traces that are there but can't be decoded are reported as that, never as "0 questions". |
 
   Every 90 seconds it is still going it also prints what every thread is doing (`Thread 0x...`
   blocks in the run's output), which shows the exact call a stalled scorer is waiting on. It
@@ -750,6 +753,30 @@ output and the first smoke test:
   `expectations_guidelines` only runs on "should refuse" questions, the only ones that carry
   guidelines of their own; on every other question MLflow's judge raised "Guidelines must be
   specified", which is what "'expectations_guidelines': N/N failed" was.
+- How the agent learns who is asking, and what happens when it can't. Model Serving passes the
+  agent the credentials of whoever queried the endpoint (on-behalf-of-user authorisation), and
+  the agent asks Databricks who that is. This needs the preview in A2 switched on, and the agent
+  deployed by `deploy_agent` after that (the deploy declares the user authorisation; nothing in
+  the jobs or their identity is involved). If the credentials aren't there, the agent does **not**
+  fall back to its own service principal, which is what it used to do: every request then looked
+  as if the agent itself had asked, and access was decided for the wrong identity. It now answers
+  nobody: people see "I can't confirm who is asking", the request is logged as an error of type
+  `CallerUnknown`, and a quality check or the diagnostic (line 1b) stops with the reason and the
+  three things to check. The reason ends with the kind of failure in brackets: `ValueError` means
+  no user token arrived at all; anything else means a token arrived but Databricks would not say
+  whose it is (for example the token's scopes don't allow the lookup). It also refuses
+  credentials that turn out to be the agent's own. If the
+  preview is on and the agent was redeployed and line 1b still says the agent could not get the
+  asking user's credentials, open a Databricks support case with: the workspace, the endpoint
+  name, the time of the request, the `request_id` from the run's output, the model version the
+  endpoint serves, that the model was logged with a `UserAuthPolicy` (`sql.statement-execution`,
+  `sql.warehouses`) and creates its client inside `predict` with
+  `ModelServingUserCredentials`, and the `databricks-ai-bridge` warning from the endpoint's logs
+  ("Unable to get auth from Databricks Model Serving Environment").
+- Trace requests read back from storage. A trace's request can come back as JSON text of JSON
+  text (encoded twice). Everything that reads span or trace values goes through one decoder
+  (`tracing.as_dict`), which decodes again while the value is still text, four layers at most,
+  and returns an empty dictionary for anything else.
 - Who gets past a chatbot's access list. A request does only when it says it is a test question
   (`synthetic`) **and** its caller is one of the platform's own: the identity in
   `access.jobs_run_as`, or one listed in `access.synthetic_callers` or `access.trusted_callers`.

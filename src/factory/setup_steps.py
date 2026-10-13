@@ -105,6 +105,11 @@ def setup_steps(settings, existing: set[str] | None = None, usage_policy: bool |
                                "`variable-overrides.json` as `usage_policy_id` (SETUP A11) and deploy the bundle again.",
                                policy_why, "A9 and A11"))
     steps += [
+        SetupStep("user_authorisation", "The agent is given the asking user's credentials", CONFIRM,
+                  "Your user name › **Settings** › **Previews** › **Agent Framework: On-Behalf-Of-User "
+                  "Authorization**, switched on by a workspace admin. Then run the `deploy_agent` job once more.",
+                  "Without it the chatbot can't tell who is asking and answers nobody: people see \"I can't confirm "
+                  "who is asking\" and quality checks stop with \"nothing to score\".", "A2", by_hand=True),
         SetupStep("review_queues", "The MLflow Review Queues preview is on", CONFIRM,
                   "Your user name › **Settings** › **Previews**, by a workspace admin.",
                   "Without it failed and thumbs-down answers aren't queued for a person to review.", "A2", by_hand=True),

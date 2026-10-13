@@ -112,6 +112,9 @@ is reported with its reason. The agent answers the check's questions without con
 chatbot's access list only when the request is marked `synthetic` and its caller is one of the
 platform's own (`identity.is_platform_caller`: `access.jobs_run_as`, `access.synthetic_callers`,
 `access.trusted_callers`); a refused or failed first question stops the check before scoring.
+The caller is always worked out from the on-behalf-of-user credentials Model Serving passes in
+(`identity.obo_caller`); when they are missing, or are the agent's own, the agent answers nobody
+(`CallerUnknown`) rather than deciding access for another identity.
 Judges are switchable per bot (custom `make_judge`, simulated conversations and multi-turn
 judges off by default). Production judges run natively on 20% of live traces (100% for
 critical bots), gated per bot by trace tags. Failed or thumbs-down answers go to a Review Queue

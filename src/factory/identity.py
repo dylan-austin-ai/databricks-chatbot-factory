@@ -15,6 +15,8 @@ import hmac
 import re
 from dataclasses import dataclass
 
+from .problems import safe_text
+
 
 _PRINCIPAL = re.compile(r"^[A-Za-z0-9._%+@-]{1,320}$")  # emails, user names, application IDs
 
@@ -28,6 +30,43 @@ class Identity:
 
 class IdentityError(PermissionError):
     pass
+
+
+# What anyone may be told when the agent can't tell who is asking. It names nobody and nothing.
+NO_CALLER = ("the agent could not get the asking user's credentials from Model Serving (on-behalf-of-user "
+             "authorisation), so it cannot tell who is asking and answers nobody")
+
+
+class CallerUnknown(PermissionError):
+    """The agent could not establish who queried the endpoint. `public` is the reason anyone may
+    be told: the fixed sentence and the kind of failure, never its message."""
+
+    def __init__(self, detail: str, kind: str = ""):
+        super().__init__(f"{NO_CALLER}: {detail}")
+        self.public = f"{NO_CALLER} ({kind})" if kind else NO_CALLER
+
+
+def obo_caller(as_caller, own_id: str = "") -> tuple[str, object]:
+    """(who queried the endpoint, a workspace client acting as them).
+
+    `as_caller` builds the client from the on-behalf-of-user token Model Serving hands the agent
+    for each request. If that client can't be built, can't say who it is, or turns out to be the
+    agent itself (`own_id`: the agent's own application ID), this raises CallerUnknown. It never
+    falls back to another identity: access would then be decided for the wrong principal, which
+    lets people in as easily as it keeps them out."""
+    try:
+        client = as_caller()
+        me = client.current_user.me()
+    except Exception as e:  # noqa: BLE001 - whatever stopped it, nobody is identified
+        first = next((line.strip() for line in str(e).splitlines() if line.strip()), "")
+        raise CallerUnknown(f"{type(e).__name__}: {safe_text(first, 400)}", type(e).__name__) from e
+    name = (me.user_name or (me.emails[0].value if me.emails else "") or me.display_name or "").strip()
+    if not name:
+        raise CallerUnknown("the credentials it was given carry no user name", "no name")
+    if own_id and name.lower() == own_id.strip().lower():
+        raise CallerUnknown("the credentials it was given are the agent's own, not the asking user's",
+                            "agent's own identity")
+    return name, client
 
 
 def resolve(caller: str, custom_inputs: dict, trusted_callers: list[str]) -> Identity:

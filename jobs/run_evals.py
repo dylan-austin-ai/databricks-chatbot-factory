@@ -34,7 +34,7 @@ from factory.identity import is_platform_caller
 from factory.ingestion import BotPaths
 from factory.problems import safe_text
 from factory.releases import index_table
-from factory.tracing import as_dict, assessment_value, documents
+from factory.tracing import as_dict, assessment_value, documents, question_of
 
 a = args("catalog", "bot_id", "trigger", "channel", "limit", "environment", "diagnose")
 DIAGNOSE = a.diagnose in ("true", "paced")   # "true": one at a time. "paced": at the check's normal pace
@@ -170,12 +170,15 @@ def make_predict(cfg, channel: str, p: BotPaths, chunks: dict[str, str]):
     return predict
 
 
-def read_scores(run_id: str) -> dict[str, tuple[dict, dict]]:
-    """question -> (scores, rationales) from the assessments on the run's traces, found by searching
-    trace storage for the run. Only the diagnostic uses it now, to say whether that search works."""
+def read_scores(run_id: str) -> tuple[int, dict[str, tuple[dict, dict]]]:
+    """(how many traces a search of trace storage finds for the run, {question: (scores,
+    rationales)} for the ones whose request can be read as a question). Only the diagnostic uses
+    it now, to say whether that search works; the two are counted apart because a trace that is
+    there but can't be decoded is a different fault from a trace that is missing."""
     out = {}
-    for t in mlflow.search_traces(run_id=run_id, return_type="list", max_results=5000):
-        question = as_dict(t.data.request).get("question")
+    traces = mlflow.search_traces(run_id=run_id, return_type="list", max_results=5000)
+    for t in traces:
+        question = question_of(t.data.request)   # storage returns the request as JSON text, sometimes twice over
         if not question:
             continue
         scores, why = {}, {}
@@ -187,7 +190,7 @@ def read_scores(run_id: str) -> dict[str, tuple[dict, dict]]:
             if v is not None:
                 scores[x.name], why[x.name] = v, x.rationale or ""
         out[question] = (scores, why)
-    return out
+    return len(traces), out
 
 
 def stored_trace(trace_id: str):
@@ -316,7 +319,8 @@ for bot in bots:
                                    lambda: evals.call_agent(client, agent_ep, cfg.bot_id, question, channel), 120)
         if ok:
             said = answered[1] or {}
-            print(f"DIAG: 1b. what it did with that question: {said.get('outcome')}"
+            print(f"DIAG: 1b. what it did with that question: {said.get('outcome')} "
+                  f"(request {said.get('request_id') or 'not given'})"
                   + (f". THE CHATBOT GAVE NO ANSWER: {chatbot_fault(said)}" if chatbot_fault(said) else ""),
                   flush=True)
             # The traces in steps 2 to 6 are written by this job. This one was written by the serving
@@ -408,9 +412,7 @@ for bot in bots:
             ok, searched = evals.timed("10. this run's traces are found by searching for the run (what MLflow's "
                                        "evaluation page does)", lambda: read_scores(run.info.run_id), 180)
             if ok:
-                print(f"DIAG: 10. the search found {sum(1 for c in cases if c['question'] in searched)} of "
-                      f"{len(cases)} question(s), "
-                      f"{sum(1 for c in cases if searched.get(c['question'], ({}, {}))[0])} with scores attached",
+                print("DIAG: 10. " + evals.search_report(searched[0], searched[1], [c["question"] for c in cases]),
                       flush=True)
         metrics, zero = evals.aggregate(rows), evals.zero_failures(rows)
         rel = sql.query(f"SELECT safety_override_by FROM {settings.fq('releases')} WHERE release_id = :r",
