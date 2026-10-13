@@ -47,10 +47,11 @@ TRACE_TABLES = ("spans", "annotations", "logs", "metrics")
 def trace_grants(catalog: str, schema: str, writers: list[str], readers: list[str],
                  tables: list[str]) -> list[str]:
     """The grants that let traces be written and read. `tables` are the full names of the trace
-    tables that exist. Writers get the catalog and the schema as well as the tables: the identity
-    a serving endpoint writes traces with is not the catalog's owner and holds nothing by default,
-    and a trace write is refused without USE CATALOG and USE SCHEMA, whatever the table grant.
-    Readers are MLOps and Security only, because traces hold raw questions and answers (PRV-1)."""
+    tables that exist. The writers are the dedicated agent service principal (the endpoint signs
+    in as it, see serving.agent_identity_env) and the app. They get the catalog and the schema as
+    well as the tables: a trace write is refused without USE CATALOG and USE SCHEMA, whatever the
+    table grant. Readers are MLOps and Security only, because traces hold raw questions and
+    answers (PRV-1)."""
     from .sql import ident
 
     who = [w for w in dict.fromkeys(writers) if w]
@@ -61,6 +62,33 @@ def trace_grants(catalog: str, schema: str, writers: list[str], readers: list[st
         out += [f"GRANT MODIFY, SELECT ON TABLE {name} TO `{w}`" for w in who]
         out += [f"GRANT SELECT ON TABLE {name} TO `{r}`" for r in dict.fromkeys(readers) if r]
     return out
+
+
+def apply_grants(execute, statements: list[str]) -> tuple[list[str], list[tuple[str, str]]]:
+    """Run each grant on its own and return (the statements that worked, [(statement, why it
+    didn't)] for the rest). One refused grant doesn't stop the others, and none is reported as
+    done unless it was."""
+    from .problems import safe_reason
+
+    done, failed = [], []
+    for statement in statements:
+        try:
+            execute(statement)
+        except Exception as e:  # noqa: BLE001 - collected and reported by the caller
+            failed.append((statement, safe_reason(e)))
+        else:
+            done.append(statement)
+    return done, failed
+
+
+def grant_report(done: list[str], failed: list[tuple[str, str]], what: str = "Trace table grants") -> str:
+    """What to print after apply_grants: a count of each, and every statement that failed with
+    its reason. Never says "applied" for grants that weren't."""
+    if not done and not failed:
+        return f"{what}: nothing to grant."
+    lines = [f"{what}: {len(done)} succeeded, {len(failed)} FAILED." if failed else f"{what}: all {len(done)} succeeded."]
+    lines += [f"  FAILED: {statement}\n    because: {reason}" for statement, reason in failed]
+    return "\n".join(lines)
 
 
 def llm_cost(input_tokens: int, output_tokens: int, pricing: dict) -> float:

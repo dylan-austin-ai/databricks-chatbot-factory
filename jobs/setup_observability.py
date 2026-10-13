@@ -11,7 +11,7 @@ from _bootstrap import args, context
 
 from factory.tracing import judge_filters, start_production_scorer
 
-a = args("catalog", "environment", "warehouse_id")
+a = args("catalog", "environment", "warehouse_id", "agent_principal")
 spark, sql, settings, cp, w = context(a.catalog)
 s = settings
 mlflow.set_tracking_uri("databricks")
@@ -137,21 +137,24 @@ if not obs.get("genie_space_id"):
     except Exception as e:  # noqa: BLE001
         print(f"Genie agent not created: {e}")
 
-# Trace tables: the same grants the deploy makes, repeated here so that recording the serving
-# endpoint's identity in the settings takes effect without deploying the agent again.
-from factory.tracing import TRACE_TABLES, trace_grants  # noqa: E402
+# Trace tables: the same grants the deploy makes, repeated here so they can be put right without
+# deploying the agent again. The writer is the dedicated agent service principal, which the
+# endpoint signs in as; the saved serving identity is that same principal.
+from factory.tracing import TRACE_TABLES, apply_grants, grant_report, trace_grants  # noqa: E402
 
+_writers = [a.agent_principal, s.get("access.serving_identity"), s.get("access.app_service_principal")]
 _trace_tables = [f"{s.catalog}.{s.platform_schema}.traces_otel_{t}" for t in TRACE_TABLES]
-_trace_tables = [t for t in _trace_tables if spark.catalog.tableExists(t)]
-for statement in trace_grants(s.catalog, s.platform_schema,
-                              [s.get("access.serving_identity"), s.get("access.app_service_principal")],
-                              [s.get("access.admin_group"), s.get("access.security_group")], _trace_tables):
-    try:
-        sql.execute(statement)
-    except Exception as e:  # noqa: BLE001 - said, not fatal: the rest of the setup still runs
-        print(f"Trace table grant skipped ({statement.split(' TO ')[-1]}): {type(e).__name__}")
-print(f"Trace table grants applied to {len(_trace_tables)} table(s); serving identity: "
-      f"{s.get('access.serving_identity') or 'not recorded'}")
+_missing = [t for t in _trace_tables if not spark.catalog.tableExists(t)]
+_trace_tables = [t for t in _trace_tables if t not in _missing]
+if not (a.agent_principal or s.get("access.serving_identity")):
+    print("WARNING: no agent service principal was passed (--agent_principal) and none is saved, so nothing "
+          "was granted for the agent's traces. Set agent_principal for this target and deploy the bundle again.")
+if _missing:
+    print("Trace tables that don't exist yet, so nothing was granted on them: " + ", ".join(_missing))
+_granted, _refused = apply_grants(sql.execute, trace_grants(
+    s.catalog, s.platform_schema, _writers, [s.get("access.admin_group"), s.get("access.security_group")],
+    _trace_tables))
+print(grant_report(_granted, _refused))   # counts what worked and what didn't; never "applied" for a grant that failed
 
 
 def recorded_table(key: str) -> str:

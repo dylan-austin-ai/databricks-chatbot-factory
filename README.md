@@ -43,7 +43,7 @@ failure. `releases`, `release_chunks` and `index_history` reconstruct the index 
 | `jobs/` | setup_platform, setup_observability, provision, ingest (+ per-bot file-arrival triggers), compare_strategies, run_evals (`mlflow.genai.evaluate`), promote, monitor, prod_judging, drift, optimize_prompt, reindex, git_sync, maintenance |
 | `sql/` | Control-plane DDL, per-bot DDL, dashboard views, ABAC governance, metric views, system-table cost views |
 | `resources/`, `databricks.yml` | Declarative Automation Bundle (qa and prod targets, direct deployment engine) |
-| `tests/` | 290 unit tests for the pure logic, and 79 that run every page of the app against a pretend workspace (these need the `app` extra) |
+| `tests/` | 295 unit tests for the pure logic, and 79 that run every page of the app against a pretend workspace (these need the `app` extra) |
 
 ## Prerequisites
 
@@ -168,6 +168,12 @@ dumps what every thread is doing when something stalls; `--diagnose paced` does 
 check's normal pace, to test the load. A question the chatbot answers with its error message is
 a fault, not an answer: the check asks one question before it starts and stops with the reason,
 and any such question fails the check outright.
+
+The agent's endpoint signs in as the dedicated agent service principal, explicitly: the deploy
+passes the workspace's own host and `DATABRICKS_AUTH_TYPE=oauth-m2m` alongside references to the
+credentials in the secret scope (`serving.agent_identity_env`). Without the host the SDK falls
+back to Model Serving's implicit identity, which holds no grants. That principal is the trace
+writer; grants are applied one by one and reported as they actually went (`tracing.apply_grants`).
 
 Jobs are separate processes and don't share the app's or the agent's environment. Each task is
 passed the git commit, the environment and the SQL warehouse ID as parameters, and

@@ -166,6 +166,15 @@ def brief(error: BaseException, limit: int = 200) -> str:
     return text if len(text) <= limit else text[: limit - 1].rstrip() + "…"
 
 
+_SECRETS = re.compile(r"(dapi[0-9a-f]{8,}|(?i:bearer)\s+\S+|(?i:(?:client_)?secret|token|password)\s*[=:]\s*\S+)")
+
+
+def safe_reason(error: BaseException, limit: int = 300) -> str:
+    """brief(), with anything that looks like a credential blanked: for reasons that are printed
+    where more people can read them than may know the credential."""
+    return _SECRETS.sub("[hidden]", brief(error, limit))
+
+
 def one_line(text: str | None, limit: int = 240) -> str:
     """Stored text squeezed onto one line and cut to a readable length."""
     flat = " ".join((text or "").split())

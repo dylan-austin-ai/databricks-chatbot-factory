@@ -439,6 +439,7 @@ resources:
         spark_python_task:
           python_file: ../jobs/setup_observability.py
           parameters:
+          - --agent_principal=${var.agent_principal}
           - --catalog=${var.catalog}
           - --environment=${bundle.target}
           - --warehouse_id=${var.warehouse_id}

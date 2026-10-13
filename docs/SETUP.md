@@ -730,13 +730,15 @@ output and the first smoke test:
   its time, `FAILED` and the reason, or `STILL WAITING`. Every 90 seconds it is still going it also
   prints what every thread is doing (`Thread 0x...` blocks in the run's output), which shows the
   exact call a stalled scorer is waiting on. It records no quality result.
-- Who writes the traces. The agent's serving endpoint writes them (and their tags, in
-  `traces_otel_annotations`) as an identity of its own, not as the agent service principal from
-  A6, and that identity starts with no access: the write is refused for missing `USE CATALOG`,
-  `USE SCHEMA` or `SELECT`/`MODIFY`. Copy the application ID the refusal names into Admin ›
-  Platform › **Serving endpoint identity** and run the observability task (C5, step 3); it grants
-  that identity the catalog, the schema and the four `traces_otel_*` tables. Admin › Setup
-  checklist shows this as a step.
+- Who the agent's endpoint signs in as. The deploy gives the endpoint the agent service
+  principal's credentials (A6) as references to the secret scope, together with this workspace's
+  own host and `DATABRICKS_AUTH_TYPE=oauth-m2m`. The host matters: without it the SDK skips
+  that sign-in and uses the one built into Model Serving, an implicit identity nobody chose and
+  nothing was granted to, and the chatbot then can't read its settings or store its traces. The
+  agent service principal is therefore the trace writer: the deploy and the observability task
+  grant it the catalog, the schema and the four `traces_otel_*` tables, print how many grants
+  succeeded and list any that failed with the reason. Nothing has to be looked up or pasted;
+  Admin shows the identity under Platform.
 - A chatbot that answers with "Sorry, something went wrong". The quality check now asks one
   question first and stops with the reason, instead of scoring error messages. The agent gives
   the reason only to callers named in `access.jobs_run_as`, `access.synthetic_callers` or

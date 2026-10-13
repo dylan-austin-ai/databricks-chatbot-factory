@@ -78,8 +78,8 @@ from factory.gateway import (ensure_model_service, grant_execute, labels, loggin
                              ui_checklist)
 from factory.preflight import deploy_problems, gate_problems  # noqa: E402
 from factory.provisioning import ensure_shared_index, grant_agent_access  # noqa: E402
-from factory.serving import (endpoint_tags, remove_old_versions, retag, split_tags,  # noqa: E402
-                             wait_until_serving)
+from factory.serving import (agent_identity_env, endpoint_tags, remove_old_versions, retag,  # noqa: E402
+                             split_tags, wait_until_serving)
 
 STEPS = 12
 
@@ -228,9 +228,9 @@ deploy_kwargs = dict(
         # IDN-2: pseudonym and break-glass keys from a Security-only secret scope
         "FACTORY_IDENTITY_HASH_KEY": f"{{{{secrets/{sec}/{s.get('access.identity_hash_key')}}}}}",
         "FACTORY_IDENTITY_ENCRYPTION_KEY": f"{{{{secrets/{sec}/{s.get('access.identity_encryption_key')}}}}}",
-        # Dedicated agent service principal: reads the runtime volume, writes the logs volume
-        "DATABRICKS_CLIENT_ID": f"{{{{secrets/{a.agent_sp_scope}/agent-sp-client-id}}}}",
-        "DATABRICKS_CLIENT_SECRET": f"{{{{secrets/{a.agent_sp_scope}/agent-sp-client-secret}}}}",
+        # Dedicated agent service principal: reads the runtime volume, writes the logs volume and
+        # the traces. Signed in explicitly, with this workspace's own host; see agent_identity_env.
+        **agent_identity_env(w.config.host, a.agent_sp_scope),
     },
 )
 # Tags are handed over with the values the endpoint has now and changed after the deploy: a tag
@@ -264,11 +264,13 @@ except Exception as e:  # noqa: BLE001
 # Writers: the agent (spans) and the app (user feedback). Readers: MLOps and Security only,
 # because traces hold raw questions and answers (PRV-1). Support uses redacted views.
 step(11, "Trace table grants and the platform release record")
-# The endpoint writes traces as an identity of its own (access.serving_identity), not as the agent
-# service principal, so that identity is a writer too once MLOps has recorded it.
-from factory.tracing import TRACE_TABLES, trace_grants  # noqa: E402
+# The endpoint signs in as the dedicated agent service principal, so that principal is the trace
+# writer, and it is recorded as the identity the endpoint serves with.
+from factory.tracing import TRACE_TABLES, apply_grants, grant_report, trace_grants  # noqa: E402
 
-writers = [a.agent_principal, s.get("access.app_service_principal"), s.get("access.serving_identity")]
+if a.agent_principal and s.get("access.serving_identity") != a.agent_principal:
+    cp.set_setting("access", {**(s.get("access") or {}), "serving_identity": a.agent_principal}, "system:deploy")
+writers = [a.agent_principal, s.get("access.app_service_principal")]
 readers = [s.get("access.admin_group"), s.get("access.security_group")]
 existing = []
 for t in TRACE_TABLES:
@@ -278,12 +280,11 @@ for t in TRACE_TABLES:
     else:
         print(f"WARNING: {table} doesn't exist yet, so its grants were skipped. "
               "Rerun this job once the experiment has created it.")
-for statement in trace_grants(a.catalog, s.platform_schema, writers, readers, existing):
-    spark.sql(statement)
-if not s.get("access.serving_identity"):
-    print("NOTE: access.serving_identity is not set. If the endpoint's traces or their tags are refused "
-          "(missing USE CATALOG, USE SCHEMA, or MODIFY on traces_otel_annotations), record the application ID "
-          "the error names under Admin, Platform, Serving endpoint identity and rerun the observability task.")
+granted, refused = apply_grants(spark.sql, trace_grants(a.catalog, s.platform_schema, writers, readers, existing))
+print(grant_report(granted, refused))
+if refused:   # without these the agent's traces are refused; say so now rather than at the first question
+    raise SystemExit(f"{len(refused)} trace table grant(s) failed (listed above). The endpoint is serving version "
+                     f"{version}, but its traces won't be stored until they are granted.")
 
 # Platform release record (REL-7, REL-8): who deployed what source with which configuration
 cp.record_platform_release(

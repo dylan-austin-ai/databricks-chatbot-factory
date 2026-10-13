@@ -17,8 +17,8 @@ def test_a_fresh_platform_says_what_is_to_do_and_what_only_a_person_can_confirm(
     steps = _by_key(setup_steps(_settings(), existing=set(), usage_policy=None))
     for key in ("inference_table", "evaluator_inference_table", "trace_table", "genie", "serving_identity"):
         assert steps[key].state == TODO and not steps[key].by_hand
-    assert "traces_otel_annotations" in steps["serving_identity"].detail          # what the refusal names
-    assert "Serving endpoint identity" in steps["serving_identity"].detail        # where to record it
+    assert "deploy_agent" in steps["serving_identity"].detail                     # the deploy does it
+    assert "Nothing has to be looked up or pasted" in steps["serving_identity"].detail
     assert "Answer service inference table" in steps["inference_table"].detail      # the field to fill in
     assert "only when the gateway handles its first call" in steps["trace_table"].detail   # no table yet is normal
     for key in ("inference_table", "evaluator_inference_table", "trace_table"):     # which catalog, by name

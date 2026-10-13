@@ -85,16 +85,13 @@ def setup_steps(settings, existing: set[str] | None = None, usage_policy: bool |
     ]
     serving = (settings.get("access.serving_identity") or "").strip()
     steps.append(SetupStep(
-        "serving_identity", "The serving endpoint may write its traces", DONE if serving else TODO,
-        f"Recorded as `{serving}`. The observability task grants it the trace tables each time it runs." if serving
-        else "The agent's endpoint writes traces as an identity of its own, not as the agent service principal, "
-             "and that identity starts with no access. Find its application ID: it is named in the endpoint's "
-             "error when a trace write is refused (missing USE CATALOG, USE SCHEMA, or SELECT and MODIFY on "
-             f"`{settings.catalog}.{settings.platform_schema}.traces_otel_annotations`). Paste it in the "
-             "**Platform** section here under **Serving endpoint identity**, press **Save settings**, then run the "
-             "observability task once (SETUP C5, step 3).",
-        "Without it the chatbot's traces and their tags are refused, so Traces, the judges and the quality check "
-        "have nothing complete to read.", "B3 and C5"))
+        "serving_identity", "The agent's endpoint signs in as the agent service principal", DONE if serving else TODO,
+        f"Signs in as `{serving}`, recorded by the deploy, which also grants it the trace tables." if serving
+        else "Run the `deploy_agent` job. It makes the endpoint sign in as the dedicated agent service principal "
+             "(the one created in SETUP A6), records that here and grants it the trace tables. Nothing has to be "
+             "looked up or pasted.",
+        "Without it the endpoint runs as an identity nobody chose and nothing was granted to, so the chatbot "
+        "can't read its settings or store its traces.", "A6 and B3"))
     policy_why = "Without it the factory's cost can't be told apart from other spending, or QA from prod."
     if usage_policy is None:   # couldn't read the job: a person has to say
         steps.append(SetupStep("usage_policy", "The jobs carry a serverless usage policy", CONFIRM,

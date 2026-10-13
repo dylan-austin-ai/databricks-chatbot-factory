@@ -136,7 +136,7 @@ if section == "Platform":  # Platform ------------------------------------------
         ("Access and retention", "access.synthetic_callers", "Synthetic test callers", "list"),
         ("Access and retention", "access.app_service_principal", "App service principal (application ID)", "text"),
         ("Access and retention", "access.jobs_run_as", "Jobs run-as (email or application ID)", "text"),
-        ("Access and retention", "access.serving_identity", "Serving endpoint identity (application ID)", "text"),
+        ("Access and retention", "access.serving_identity", "Agent identity the endpoint signs in as (set by the deploy)", "text"),
         ("Access and retention", "retention_years", "Keep logs for, years", "int"),
         ("Access and retention", "idle_days_before_flag", "Flag idle chatbots after, days", "int"),
         ("Access and retention", "soft_delete_retention_days", "Purge deleted chatbots after, days", "int"),

@@ -77,3 +77,27 @@ def retag(w, endpoint: str, changed: dict[str, str]) -> list[str]:
     w.serving_endpoints.patch(endpoint, delete_tags=sorted(changed))
     w.serving_endpoints.patch(endpoint, add_tags=[EndpointTag(key=k, value=v) for k, v in sorted(changed.items())])
     return sorted(changed)
+
+
+# The identity the endpoint runs as -------------------------------------------------------------
+def agent_identity_env(host: str, secret_scope: str) -> dict[str, str]:
+    """Environment variables that make the serving endpoint sign in as the dedicated agent service
+    principal.
+
+    The client id and secret alone are not enough. The SDK's OAuth (machine-to-machine) sign-in
+    needs the workspace host as well; without it the SDK passes that method over and falls back
+    to the one built into Model Serving, which knows the host and signs in as the endpoint's own
+    implicit identity: one nobody chose and nothing was granted to. With the host and the method
+    stated, every call the agent makes (the runtime files, the logs, the traces) is made as the
+    agent service principal that the grants are for.
+
+    `host` is the deploying workspace's own address, so QA and prod each get their own. The
+    credentials stay in the secret scope; only references to them are put in the environment."""
+    host = (host or "").strip().rstrip("/")
+    if not host.startswith("https://"):
+        raise ValueError(f"The workspace host is needed to sign the endpoint in, and must start with https://; got {host!r}")
+    if not secret_scope:
+        raise ValueError("The secret scope holding the agent service principal's credentials is needed.")
+    return {"DATABRICKS_HOST": host, "DATABRICKS_AUTH_TYPE": "oauth-m2m",
+            "DATABRICKS_CLIENT_ID": f"{{{{secrets/{secret_scope}/agent-sp-client-id}}}}",
+            "DATABRICKS_CLIENT_SECRET": f"{{{{secrets/{secret_scope}/agent-sp-client-secret}}}}"}
