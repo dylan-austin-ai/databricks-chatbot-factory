@@ -252,18 +252,26 @@ wait_until_serving(w, a.endpoint, model_name, version)
 # Writers: the agent (spans) and the app (user feedback). Readers: MLOps and Security only,
 # because traces hold raw questions and answers (PRV-1). Support uses redacted views.
 step(11, "Trace table grants and the platform release record")
-writers = [x for x in (a.agent_principal, s.get("access.app_service_principal")) if x]
+# The endpoint writes traces as an identity of its own (access.serving_identity), not as the agent
+# service principal, so that identity is a writer too once MLOps has recorded it.
+from factory.tracing import TRACE_TABLES, trace_grants  # noqa: E402
+
+writers = [a.agent_principal, s.get("access.app_service_principal"), s.get("access.serving_identity")]
 readers = [s.get("access.admin_group"), s.get("access.security_group")]
-for t in ("spans", "annotations", "logs", "metrics"):
-    table = f"`{a.catalog}`.`{s.platform_schema}`.`traces_otel_{t}`"
-    if not spark.catalog.tableExists(f"{a.catalog}.{s.platform_schema}.traces_otel_{t}"):
+existing = []
+for t in TRACE_TABLES:
+    table = f"{a.catalog}.{s.platform_schema}.traces_otel_{t}"
+    if spark.catalog.tableExists(table):
+        existing.append(table)
+    else:
         print(f"WARNING: {table} doesn't exist yet, so its grants were skipped. "
               "Rerun this job once the experiment has created it.")
-        continue
-    for who in writers:
-        spark.sql(f"GRANT MODIFY, SELECT ON TABLE {table} TO `{who}`")
-    for who in readers:
-        spark.sql(f"GRANT SELECT ON TABLE {table} TO `{who}`")
+for statement in trace_grants(a.catalog, s.platform_schema, writers, readers, existing):
+    spark.sql(statement)
+if not s.get("access.serving_identity"):
+    print("NOTE: access.serving_identity is not set. If the endpoint's traces or their tags are refused "
+          "(missing USE CATALOG, USE SCHEMA, or MODIFY on traces_otel_annotations), record the application ID "
+          "the error names under Admin, Platform, Serving endpoint identity and rerun the observability task.")
 
 # Platform release record (REL-7, REL-8): who deployed what source with which configuration
 cp.record_platform_release(

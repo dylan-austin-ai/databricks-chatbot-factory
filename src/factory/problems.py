@@ -121,6 +121,9 @@ _FIND = ("The chatbot isn't finding the right part of your documents often enoug
          "document that was read badly (check it on **Documents**). Then run the check again.")
 # (pattern over one failure line from the quality check, what to do about it). First match wins.
 _CHECK_ADVICE: list[tuple[str, str]] = [
+    (r"with an error instead of an answer", "This is a fault in the chatbot itself, not in your documents or "
+     "questions, and the scores from this check mean nothing until it is fixed. Send it to MLOps; Admin, "
+     "**Setup checklist**, **Diagnose the quality check** shows the reason."),
     (r"^Only \d+ approved test question", "Open **Test questions**, approve more questions, then run the check "
      "again."),
     (r"wasn't scored|weren't scored", "This is usually a temporary hiccup, not a problem with your chatbot. Press "

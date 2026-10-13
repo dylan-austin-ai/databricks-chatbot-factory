@@ -385,7 +385,7 @@ class ChatbotAgent(ResponsesAgent):
         try:
             result = self._answer(msgs, ci, s, log)
         except Exception as e:  # noqa: BLE001
-            log["outcome"], log["error"] = "error", repr(e)[:1000]
+            log["outcome"], log["error"], log["error_type"] = "error", repr(e)[:1000], type(e).__name__
         log["answer"] = result["text"]
         log["latency_ms"] = int((time.time() - started) * 1000)
         log["cost_usd"] = tr.llm_cost(log["tokens"][0], log["tokens"][1], s.get("pricing", {}))
@@ -396,6 +396,8 @@ class ChatbotAgent(ResponsesAgent):
             output=[self.create_text_output_item(text=result["text"], id=request_id)],
             custom_outputs={
                 "request_id": request_id, "trace_id": log["trace_id"], "outcome": log["outcome"],
+                # Why it failed, for the quality check and the monitor only; people asking get MSG["error"].
+                "error": log["error"] if log["outcome"] == "error" and self._may_see_error(ci, s, log) else None,
                 "answer": result.get("answer", result["text"]), "citations": result["citations"],
                 "conflicts": result["conflicts"], "retrieval": result["retrieval"],
                 "retrieved_chunk_ids": [r["chunk_id"] for r in result["retrieval"]],
@@ -409,6 +411,21 @@ class ChatbotAgent(ResponsesAgent):
                           "cost_usd": log["cost_usd"], "ttft_ms": log["ttft_ms"],
                           "latency_ms": log["latency_ms"]},
             })
+
+    def _may_see_error(self, ci: dict, s, log: dict) -> bool:
+        """Whether the caller may be told why an answer failed: only the platform's own test callers
+        (the quality check, the monitor), which say so with synthetic=true and are named in the
+        settings. A person asking a question never is."""
+        if log.get("synthetic"):
+            return True
+        if not ci.get("synthetic"):
+            return False
+        try:  # the failure may have come before the caller was worked out
+            caller, _ = self.caller()
+            return bool(caller) and caller in {*s.get("access.trusted_callers", []), *s.get("access.synthetic_callers", []),
+                                               s.get("access.jobs_run_as")}
+        except Exception:  # noqa: BLE001 - when in doubt, no
+            return False
 
     def _save_turn(self, s, log: dict) -> None:
         """Append this turn to the managed session (async, best effort; CNV-2)."""

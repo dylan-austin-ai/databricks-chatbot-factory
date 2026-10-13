@@ -173,6 +173,8 @@ access:
   support_group: support               # redacted views only (PRV-1)
   app_service_principal: ""            # filled at deploy time
   jobs_run_as: ""                      # job run-as principal; sees unmasked text like the app (GOV-10)
+  serving_identity: ""                 # application ID the agent's serving endpoint writes traces as (not the
+                                       # dedicated agent service principal); granted the trace tables
   trusted_callers: []                  # IDN-1: service principals allowed to assert end users
   synthetic_callers: []                # service principals whose synthetic=true traffic is excluded from stats
   identity_secret_scope: chatbot-factory-identity   # Security-only scope

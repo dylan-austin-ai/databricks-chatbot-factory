@@ -433,7 +433,7 @@ def test_setup_checklist_separates_what_the_app_checked_from_what_a_person_confi
     text = page_text(at)
     assert problems(at) == []
     assert "Checked by the app" in text and "Only a person can confirm these" in text
-    assert "0 of 8 done" in text and "To do" in text and "What to do:" in text
+    assert "0 of 9 done" in text and "To do" in text and "What to do:" in text
     assert "Answer service inference table" in text and "Save settings" in text          # exactly where to enter it
     boxes = {c.key: c.value for c in at.checkbox}
     assert boxes == {"setup_usage_policy": False, "setup_review_queues": False, "setup_embed_dashboards": False,
@@ -459,7 +459,7 @@ def test_setup_checklist_shows_done_for_what_is_recorded_and_there(workspace, mo
     wh.on(r"information_schema\.tables", [{"name": "gw_answer_payload"}])
     at = run("admin", admin_section="Setup checklist")
     text = page_text(at)
-    assert problems(at) == [] and "3 of 8 done, 3 still to do, 2 for you to confirm" in text
+    assert problems(at) == [] and "3 of 9 done, 4 still to do, 2 for you to confirm" in text
     assert "can't find a table called `chatbots_test._platform.gw_eval_payload`" in text
     assert {c.key: c.value for c in at.checkbox}["setup_review_queues"] is True
     assert "Confirmed by lead@corp.com on 2026-10-01" in text
@@ -719,3 +719,15 @@ def test_launch_says_how_many_questions_a_result_rests_on(workspace):
         {"metrics": {"correctness": 0.95}, "failures": [], "n_cases": 50, "n_approved": 312})}])
     at = run("launch", bot_id="hr_bot")
     assert problems(at) == [] and "Checked on 50 of your 312 approved questions" in page_text(at)
+
+
+def test_the_diagnostic_can_run_a_batch_at_the_checks_normal_pace(workspace):
+    common, wh, jobs = workspace(bots=[CHECKABLE], admin=True)
+    at = run("admin", admin_section="Setup checklist")
+    at.number_input(key="diagnose_size").set_value(10).run()
+    at.radio(key="diagnose_pace").set_value("paced").run()
+    at.button(key="run_diagnostic").click().run()
+    assert problems(at) == []
+    assert ("evals", {"bot_id": "hr_bot", "trigger": "diagnose", "channel": "candidate", "limit": "10",
+                      "diagnose": "paced"}) in jobs
+    assert common.job_label("evals", {"diagnose": "paced"}) == "evals_diagnose"

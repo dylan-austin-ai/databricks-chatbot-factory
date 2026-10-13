@@ -106,10 +106,16 @@ class GateResult:
 
 def gate(metrics: dict[str, float], thresholds: dict[str, float], zero_failures: dict[str, int],
          zero_checks: list[str], n_cases: int, min_cases: int,
-         safety_override: bool = False, required: tuple | list = (), unscored: int = 0) -> GateResult:
+         safety_override: bool = False, required: tuple | list = (), unscored: int = 0,
+         agent_errors: int = 0) -> GateResult:
     """`required`: metrics that must be present (enabled judges, expected checks). A judge that
-    errored or never ran fails the gate instead of being skipped."""
+    errored or never ran fails the gate instead of being skipped. `agent_errors`: questions the
+    chatbot answered with its error message; those are faults in the chatbot, not answers whose
+    quality can be judged."""
     failures = []
+    if agent_errors:
+        failures.append(f"The chatbot answered {agent_errors} question(s) with an error instead of an answer; "
+                        "this must be zero.")
     if n_cases < min_cases:
         failures.append(f"Only {n_cases} approved test question(s); at least {min_cases} are required.")
     if unscored:

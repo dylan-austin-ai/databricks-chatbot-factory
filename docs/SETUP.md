@@ -730,4 +730,16 @@ output and the first smoke test:
   its time, `FAILED` and the reason, or `STILL WAITING`. Every 90 seconds it is still going it also
   prints what every thread is doing (`Thread 0x...` blocks in the run's output), which shows the
   exact call a stalled scorer is waiting on. It records no quality result.
+- Who writes the traces. The agent's serving endpoint writes them (and their tags, in
+  `traces_otel_annotations`) as an identity of its own, not as the agent service principal from
+  A6, and that identity starts with no access: the write is refused for missing `USE CATALOG`,
+  `USE SCHEMA` or `SELECT`/`MODIFY`. Copy the application ID the refusal names into Admin ›
+  Platform › **Serving endpoint identity** and run the observability task (C5, step 3); it grants
+  that identity the catalog, the schema and the four `traces_otel_*` tables. Admin › Setup
+  checklist shows this as a step.
+- A chatbot that answers with "Sorry, something went wrong". The quality check now asks one
+  question first and stops with the reason, instead of scoring error messages. The agent gives
+  the reason only to callers named in `access.jobs_run_as`, `access.synthetic_callers` or
+  `access.trusted_callers` (C1), so the jobs' identity must be recorded there, and the agent
+  must have been redeployed (`deploy_agent`) since this change.
 - README › "Verify against a live workspace first" has the full list.

@@ -137,6 +137,23 @@ if not obs.get("genie_space_id"):
     except Exception as e:  # noqa: BLE001
         print(f"Genie agent not created: {e}")
 
+# Trace tables: the same grants the deploy makes, repeated here so that recording the serving
+# endpoint's identity in the settings takes effect without deploying the agent again.
+from factory.tracing import TRACE_TABLES, trace_grants  # noqa: E402
+
+_trace_tables = [f"{s.catalog}.{s.platform_schema}.traces_otel_{t}" for t in TRACE_TABLES]
+_trace_tables = [t for t in _trace_tables if spark.catalog.tableExists(t)]
+for statement in trace_grants(s.catalog, s.platform_schema,
+                              [s.get("access.serving_identity"), s.get("access.app_service_principal")],
+                              [s.get("access.admin_group"), s.get("access.security_group")], _trace_tables):
+    try:
+        sql.execute(statement)
+    except Exception as e:  # noqa: BLE001 - said, not fatal: the rest of the setup still runs
+        print(f"Trace table grant skipped ({statement.split(' TO ')[-1]}): {type(e).__name__}")
+print(f"Trace table grants applied to {len(_trace_tables)} table(s); serving identity: "
+      f"{s.get('access.serving_identity') or 'not recorded'}")
+
+
 def recorded_table(key: str) -> str:
     """A table name MLOps typed into the settings, checked and quoted before it goes into SQL."""
     return ident(*str(s.get(f"unity_gateway.{key}")).strip().split("."))

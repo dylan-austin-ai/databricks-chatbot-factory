@@ -31,10 +31,10 @@ from _bootstrap import args, context
 from factory import PLATFORM_VERSION, evals, llm
 from factory.ingestion import BotPaths
 from factory.releases import index_table
-from factory.tracing import assessment_value, documents
+from factory.tracing import as_dict, assessment_value, documents
 
 a = args("catalog", "bot_id", "trigger", "channel", "limit", "environment", "diagnose")
-DIAGNOSE = a.diagnose == "true"
+DIAGNOSE = a.diagnose in ("true", "paced")   # "true": one at a time. "paced": at the check's normal pace
 if DIAGNOSE:
     a.limit = a.limit or "3"
 spark, sql, settings, cp, w = context(a.catalog)
@@ -54,10 +54,13 @@ if DIAGNOSE:
     import faulthandler
     import sys
 
-    os.environ["MLFLOW_GENAI_EVAL_MAX_WORKERS"] = os.environ["MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS"] = "1"
-    print(f"DIAG: diagnostic run with mlflow {mlflow.__version__}: {a.limit} question(s), one question and one "
-          "scorer at a time. Every 90 seconds that it is still going, what each thread is doing is printed "
-          "(look for 'Thread 0x' below).", flush=True)
+    if a.diagnose == "true":
+        os.environ["MLFLOW_GENAI_EVAL_MAX_WORKERS"] = os.environ["MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS"] = "1"
+    print(f"DIAG: diagnostic run with mlflow {mlflow.__version__}: {a.limit} question(s), "
+          f"{os.environ['MLFLOW_GENAI_EVAL_MAX_WORKERS']} question(s) and "
+          f"{os.environ['MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS']} scorer(s) at a time, at most "
+          f"{os.environ['MLFLOW_GENAI_EVAL_SCORER_RATE_LIMIT']} scorer call(s) a second. Every 90 seconds that it is "
+          "still going, what each thread is doing is printed (look for 'Thread 0x' below).", flush=True)
     faulthandler.dump_traceback_later(90, repeat=True, file=sys.stderr)
 _judge_problem = evals.judge_problem(client, settings.get("models.judge_endpoint"))
 if _judge_problem:
@@ -80,8 +83,24 @@ def judge(cls, name: str, **kw):
 
 
 def agent_outputs(trace) -> dict:
-    spans = trace.search_spans(name="agent.response")
-    return (spans[0].outputs or {}) if spans else {}
+    """What the chatbot returned, from the trace. A span's outputs come back as the JSON text they
+    were stored as, so they are turned back into a dictionary here."""
+    spans = trace.search_spans(name="agent.response") if trace is not None else []
+    return as_dict(spans[0].outputs) if spans else {}
+
+
+def chatbot_error(custom: dict) -> str:
+    """Why the chatbot answered with its error message, or "" when it gave a real answer. The
+    reason is only returned to the platform's own test callers; without it, say where to look."""
+    if (custom or {}).get("outcome") != "error":
+        return ""
+    return str(custom.get("error") or "the chatbot gave no reason (it shares one only with the platform's own "
+               "test callers: check access.jobs_run_as under Admin, Platform, and that the agent has been "
+               "redeployed)")
+
+
+# What the chatbot did with each question of this run, so an error isn't judged as if it were an answer.
+OUTCOMES: dict[str, str] = {}
 
 
 def build_scorers(cfg, allowed: set[str], chunks: dict[str, str]) -> list:
@@ -111,6 +130,7 @@ def make_predict(cfg, channel: str, p: BotPaths, chunks: dict[str, str]):
             response, custom = evals.call_agent(client, agent_ep, cfg.bot_id, question, channel)
         except Exception as e:  # noqa: BLE001
             response, custom = f"ERROR: {e}", {"outcome": "error"}
+        OUTCOMES[question] = custom.get("outcome") or ""
         hits = custom.get("retrieval") or []
         need = [h["chunk_id"] for h in hits if h.get("chunk_id") and h["chunk_id"] not in chunks]
         if need:
@@ -133,9 +153,8 @@ def read_scores(run_id: str) -> dict[str, tuple[dict, dict]]:
     """question -> (scores, rationales) from the assessments on the run's traces."""
     out = {}
     for t in mlflow.search_traces(run_id=run_id, return_type="list", max_results=5000):
-        try:
-            question = json.loads(t.data.request).get("question")
-        except Exception:  # noqa: BLE001
+        question = as_dict(t.data.request).get("question")
+        if not question:
             continue
         scores, why = {}, {}
         for x in getattr(t.info, "assessments", None) or []:
@@ -230,10 +249,30 @@ for bot in bots:
             print(f"{cfg.bot_id}: version link skipped: {e}")
 
     chunks: dict[str, str] = {}
+    OUTCOMES.clear()
+    if cases and not DIAGNOSE:
+        # One question first. If the chatbot itself is failing there is nothing to score, and every
+        # judge would be marking its error message as a bad answer.
+        try:
+            _, first = evals.call_agent(client, agent_ep, cfg.bot_id, cases[0]["question"], channel)
+        except Exception as e:  # noqa: BLE001
+            first = {"outcome": "error", "error": f"{type(e).__name__}: {str(e).splitlines()[0][:300] if str(e) else ''}"}
+        if chatbot_error(first):
+            message = (f"The chatbot answered a test question with an error instead of an answer, so there is "
+                       f"nothing to score for {cfg.bot_id}: {chatbot_error(first)}")
+            if len(bots) == 1:
+                raise SystemExit(message)
+            print(message)
+            continue
     if DIAGNOSE and cases:   # each thing the check depends on, on its own, timed
         question = cases[0]["question"]
-        evals.timed("1. the chatbot answers one question",
-                    lambda: evals.call_agent(client, agent_ep, cfg.bot_id, question, channel), 120)
+        ok, answered = evals.timed("1. the chatbot answers one question",
+                                   lambda: evals.call_agent(client, agent_ep, cfg.bot_id, question, channel), 120)
+        if ok:
+            outcome = (answered[1] or {}).get("outcome")
+            print(f"DIAG: 1b. what it did with that question: {outcome}"
+                  + (f". THE CHATBOT IS FAILING: {chatbot_error(answered[1])}" if outcome == "error" else ""),
+                  flush=True)
 
         @mlflow.trace(name="diagnostic_trace")
         def _one_trace() -> str:
@@ -274,7 +313,9 @@ for bot in bots:
         rows = [scored.get(c["question"], ({}, {}))[0] for c in cases]
         if DIAGNOSE:
             print(f"DIAG: 9. scores read back in {time.time() - started_at:.1f}s from the start; "
-                  f"{sum(1 for r in rows if r)} of {len(rows)} question(s) have scores", flush=True)
+                  f"{sum(1 for r in rows if r)} of {len(rows)} question(s) have scores; the chatbot answered "
+                  f"{sum(1 for c in cases if OUTCOMES.get(c['question']) == 'error')} of them with an error",
+                  flush=True)
         metrics, zero = evals.aggregate(rows), evals.zero_failures(rows)
         rel = sql.query(f"SELECT safety_override_by FROM {settings.fq('releases')} WHERE release_id = :r",
                         {"r": release_id})
@@ -289,7 +330,8 @@ for bot in bots:
         # "Enough questions" is about how many are approved, not how many of them this check sampled.
         gate = evals.gate(metrics, thresholds, zero, zero_checks, n_in_scope if a.limit else approved_in_scope,
                           1 if a.limit else min_cases, override,
-                          required=[r for r in required if r in thresholds], unscored=sum(1 for r in rows if not r))
+                          required=[r for r in required if r in thresholds], unscored=sum(1 for r in rows if not r),
+                          agent_errors=sum(1 for c in cases if OUTCOMES.get(c["question"]) == "error"))
         mlflow.set_tags({"passed": str(gate.passed)})
         mlflow.log_metrics({f"gate_{k}": v for k, v in metrics.items()})
     if not a.limit and (cfg.obs_on("simulate_conversations") or cfg.judge_on("multi_turn")):

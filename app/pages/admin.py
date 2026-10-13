@@ -136,6 +136,7 @@ if section == "Platform":  # Platform ------------------------------------------
         ("Access and retention", "access.synthetic_callers", "Synthetic test callers", "list"),
         ("Access and retention", "access.app_service_principal", "App service principal (application ID)", "text"),
         ("Access and retention", "access.jobs_run_as", "Jobs run-as (email or application ID)", "text"),
+        ("Access and retention", "access.serving_identity", "Serving endpoint identity (application ID)", "text"),
         ("Access and retention", "retention_years", "Keep logs for, years", "int"),
         ("Access and retention", "idle_days_before_flag", "Flag idle chatbots after, days", "int"),
         ("Access and retention", "soft_delete_retention_days", "Purge deleted chatbots after, days", "int"),
@@ -472,11 +473,16 @@ if section == "Setup checklist":  # Setup checklist: Databricks steps with no AP
     if not testable:
         st.caption("No chatbot has a test version to run it on yet.")
     else:
-        chosen = st.selectbox("Chatbot to run it on", list(testable), format_func=testable.get, key="diagnose_bot")
+        d1, d2, d3 = st.columns([3, 1, 3])
+        chosen = d1.selectbox("Chatbot to run it on", list(testable), format_func=testable.get, key="diagnose_bot")
+        size = d2.number_input("Questions", 1, 50, 3, key="diagnose_size")
+        PACE = {"true": "One at a time (clearest)", "paced": "At the check's normal pace (tests the load)"}
+        pace = d3.radio("How", list(PACE), format_func=PACE.get, key="diagnose_pace", horizontal=True)
         diagnostic = watch_job("evals_diagnose", chosen)
         if st.button("Diagnostic running…" if diagnostic.active else "Run the diagnostic", disabled=diagnostic.active,
                      key="run_diagnostic"):
-            run_job("evals", bot_id=chosen, trigger="diagnose", channel="candidate", limit="3", diagnose="true")
+            run_job("evals", bot_id=chosen, trigger="diagnose", channel="candidate", limit=str(int(size)),
+                    diagnose=pace)
             st.rerun()
         if diagnostic.state in ("succeeded", "failed"):
             log = run_log(diagnostic)

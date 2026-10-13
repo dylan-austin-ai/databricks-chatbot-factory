@@ -507,7 +507,7 @@ def job_label(kind: str, params: dict) -> str:
     if kind == "ingest":
         return ("ingest_publish" if str(params.get("publish_only")) == "true" else
                 "ingest_questions" if str(params.get("golden_only")) == "true" else "ingest")
-    if kind == "evals" and str(params.get("diagnose")) == "true":
+    if kind == "evals" and str(params.get("diagnose")) in ("true", "paced"):
         return "evals_diagnose"
     return "rollback" if kind == "promote" and params.get("action") == "rollback" else kind
 

@@ -15,8 +15,10 @@ def _by_key(steps):
 
 def test_a_fresh_platform_says_what_is_to_do_and_what_only_a_person_can_confirm():
     steps = _by_key(setup_steps(_settings(), existing=set(), usage_policy=None))
-    for key in ("inference_table", "evaluator_inference_table", "trace_table", "genie"):
+    for key in ("inference_table", "evaluator_inference_table", "trace_table", "genie", "serving_identity"):
         assert steps[key].state == TODO and not steps[key].by_hand
+    assert "traces_otel_annotations" in steps["serving_identity"].detail          # what the refusal names
+    assert "Serving endpoint identity" in steps["serving_identity"].detail        # where to record it
     assert "Answer service inference table" in steps["inference_table"].detail      # the field to fill in
     assert "only when the gateway handles its first call" in steps["trace_table"].detail   # no table yet is normal
     for key in ("inference_table", "evaluator_inference_table", "trace_table"):     # which catalog, by name
@@ -26,7 +28,7 @@ def test_a_fresh_platform_says_what_is_to_do_and_what_only_a_person_can_confirm(
         assert steps[key].state == CONFIRM and steps[key].by_hand, key
     assert steps["app_scaling"].optional and not steps["review_queues"].optional
     assert all(s.why and s.guide and s.detail for s in steps.values())
-    assert summary(list(steps.values())) == "0 of 8 done, 4 still to do, 4 for you to confirm."    # optional left out
+    assert summary(list(steps.values())) == "0 of 9 done, 5 still to do, 4 for you to confirm."    # optional left out
 
 
 def test_a_recorded_table_is_done_only_if_it_is_in_this_environment_and_exists():
@@ -60,5 +62,7 @@ def test_a_tick_records_who_confirmed_and_only_counts_for_steps_done_by_hand():
     everything = {k: {"by": "a", "on": "d"} for k in ("review_queues", "embed_dashboards", "account_budget")}
     s = _settings(inference_table=f"{HOME}.a", evaluator_inference_table=f"{HOME}.b", trace_table=f"{HOME}.c")
     s._data["observability"]["genie_space_id"] = "g1"
+    s._data["access"]["serving_identity"] = "1234-abcd"
     done = setup_steps(s, existing={f"{HOME}.a", f"{HOME}.b", f"{HOME}.c"}, usage_policy=True, confirmed=everything)
-    assert summary(done) == "8 of 8 done." and _by_key(done)["app_scaling"].state == CONFIRM     # optional stays open
+    assert summary(done) == "9 of 9 done." and _by_key(done)["app_scaling"].state == CONFIRM     # optional stays open
+    assert "1234-abcd" in _by_key(done)["serving_identity"].detail

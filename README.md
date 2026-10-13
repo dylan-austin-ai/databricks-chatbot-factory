@@ -43,7 +43,7 @@ failure. `releases`, `release_chunks` and `index_history` reconstruct the index 
 | `jobs/` | setup_platform, setup_observability, provision, ingest (+ per-bot file-arrival triggers), compare_strategies, run_evals (`mlflow.genai.evaluate`), promote, monitor, prod_judging, drift, optimize_prompt, reindex, git_sync, maintenance |
 | `sql/` | Control-plane DDL, per-bot DDL, dashboard views, ABAC governance, metric views, system-table cost views |
 | `resources/`, `databricks.yml` | Declarative Automation Bundle (qa and prod targets, direct deployment engine) |
-| `tests/` | 281 unit tests for the pure logic, and 78 that run every page of the app against a pretend workspace (these need the `app` extra) |
+| `tests/` | 287 unit tests for the pure logic, and 79 that run every page of the app against a pretend workspace (these need the `app` extra) |
 
 ## Prerequisites
 
@@ -164,7 +164,10 @@ MLflow trace. When more questions are approved than `quality.check.max_questions
 checks a fixed sample of them, spread over the documents and kinds of question
 (`evals.sample_cases`); "at least 50 approved" still counts every approved question. A
 diagnostic run (`--diagnose true`, started from Admin) times each dependency separately and
-dumps what every thread is doing when something stalls.
+dumps what every thread is doing when something stalls; `--diagnose paced` does the same at the
+check's normal pace, to test the load. A question the chatbot answers with its error message is
+a fault, not an answer: the check asks one question before it starts and stops with the reason,
+and any such question fails the check outright.
 
 Jobs are separate processes and don't share the app's or the agent's environment. Each task is
 passed the git commit, the environment and the SQL warehouse ID as parameters, and

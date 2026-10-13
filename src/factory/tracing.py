@@ -25,6 +25,44 @@ import json
 from .sensitive import redact
 
 
+def as_dict(value) -> dict:
+    """A span's inputs or outputs as a dictionary. Read back from storage they arrive as the JSON
+    text they were saved as, not as the dictionary that was set, so code that does `.get(...)` on
+    them fails with "'str' object has no attribute 'get'". Anything that isn't a dictionary, or
+    JSON for one, is an empty dictionary."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, (str, bytes)):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+TRACE_TABLES = ("spans", "annotations", "logs", "metrics")
+
+
+def trace_grants(catalog: str, schema: str, writers: list[str], readers: list[str],
+                 tables: list[str]) -> list[str]:
+    """The grants that let traces be written and read. `tables` are the full names of the trace
+    tables that exist. Writers get the catalog and the schema as well as the tables: the identity
+    a serving endpoint writes traces with is not the catalog's owner and holds nothing by default,
+    and a trace write is refused without USE CATALOG and USE SCHEMA, whatever the table grant.
+    Readers are MLOps and Security only, because traces hold raw questions and answers (PRV-1)."""
+    from .sql import ident
+
+    who = [w for w in dict.fromkeys(writers) if w]
+    out = [f"GRANT USE CATALOG ON CATALOG {ident(catalog)} TO `{w}`" for w in who]
+    out += [f"GRANT USE SCHEMA ON SCHEMA {ident(catalog, schema)} TO `{w}`" for w in who]
+    for table in tables:
+        name = ident(*table.split("."))
+        out += [f"GRANT MODIFY, SELECT ON TABLE {name} TO `{w}`" for w in who]
+        out += [f"GRANT SELECT ON TABLE {name} TO `{r}`" for r in dict.fromkeys(readers) if r]
+    return out
+
+
 def llm_cost(input_tokens: int, output_tokens: int, pricing: dict) -> float:
     return round(input_tokens / 1e6 * float(pricing.get("answer_input_per_mtok", 0))
                  + output_tokens / 1e6 * float(pricing.get("answer_output_per_mtok", 0)), 6)
@@ -59,7 +97,7 @@ def rerank_movement(hits: list[dict]) -> dict:
 
 def trace_tags(log: dict) -> dict[str, str]:
     """Searchable trace tags (MLflow tag values are strings)."""
-    keys = ["bot_id", "channel", "release_id", "config_version", "outcome", "model", "platform_version",
+    keys = ["bot_id", "channel", "release_id", "config_version", "outcome", "error_type", "model", "platform_version",
             "environment", "identity_mode", "synthetic", "critical", "latency_ms", "ttft_ms", "cost_usd",
             "llm_calls", "retakes", "top_score", "prompt_uri"]
     tags = {k: (str(log[k]).lower() if isinstance(log[k], bool) else str(log[k]))
