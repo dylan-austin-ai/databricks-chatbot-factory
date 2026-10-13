@@ -17,7 +17,7 @@ def test_span_values_stored_as_text_are_read_as_dictionaries():
 
 def test_the_check_reads_the_chatbots_output_through_that():
     source = (ROOT / "jobs" / "run_evals.py").read_text()
-    body = source[source.index("def agent_outputs("):source.index("def chatbot_error(")]
+    body = source[source.index("def agent_outputs("):source.index("def runs_as(")]
     assert "as_dict(spans[0].outputs)" in body and "if trace is not None" in body
     assert 'as_dict(t.data.request).get("question")' in source
 
@@ -59,13 +59,14 @@ def test_a_chatbot_error_fails_the_check_as_a_fault_not_as_a_bad_answer(settings
     assert passed.passed
     failed = evals.gate(good, thresholds, {}, [], 60, 50, agent_errors=3)
     assert not failed.passed and failed.failures == [
-        "The chatbot answered 3 question(s) with an error instead of an answer; this must be zero."]
+        "The chatbot gave 3 question(s) no answer at all (an error, or access refused); this must be zero."]
     advice = problems.check_advice(failed.failures[0])
     assert "fault in the chatbot itself" in advice and "MLOps" in advice and "Diagnose the quality check" in advice
 
     source = (ROOT / "jobs" / "run_evals.py").read_text()
     assert "nothing to score for" in source and source.index("nothing to score for") < source.index("mlflow.genai.evaluate(data=records")
-    assert 'agent_errors=sum(1 for c in cases if OUTCOMES.get(c["question"]) == "error")' in source
+    assert 'faults = sum(1 for c in cases if OUTCOMES.get(c["question"]) in evals.CANT_BE_SCORED)' in source
+    assert "agent_errors=faults" in source and evals.CANT_BE_SCORED == ("error", "denied", "unavailable")
 
 
 def test_the_agent_gives_its_reason_only_to_the_platforms_own_test_callers():
@@ -73,7 +74,7 @@ def test_the_agent_gives_its_reason_only_to_the_platforms_own_test_callers():
     assert '"error": log["error"] if log["outcome"] == "error" and self._may_see_error(ci, s, log) else None' in source
     rule = source[source.index("def _may_see_error("):source.index("def _save_turn(")]
     assert 'if not ci.get("synthetic"):\n            return False' in rule          # a person asking never is
-    assert 'access.jobs_run_as' in rule and "access.synthetic_callers" in rule
+    assert "return idn.is_platform_caller(caller, s)" in rule                      # the same rule as for access
     assert "except Exception:  # noqa: BLE001 - when in doubt, no\n            return False" in rule
     log = {"request_id": "r", "tokens": [0, 0], "outcome": "error", "error_type": "PermissionDenied", "bot_id": "b"}
     assert trace_tags(log)["error_type"] == "PermissionDenied"                    # the kind, never the message

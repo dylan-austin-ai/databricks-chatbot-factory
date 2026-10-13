@@ -106,6 +106,12 @@ account budget with block-at-100%, created in the account console.
 retrieval Hit@k/MRR, citations, leakage and sensitive output; the agent's retrieval is mirrored
 into a RETRIEVER span so retrieval judges can read it. Results attach to traces, the run links
 to the release's LoggedModel, and the golden set is mirrored into a UC evaluation dataset.
+The gate decides from what each scorer returned, kept in the job as it happens
+(`evals.recording_scorer`), not from a read-back of trace storage; a scorer that gave no score
+is reported with its reason. The agent answers the check's questions without consulting the
+chatbot's access list only when the request is marked `synthetic` and its caller is one of the
+platform's own (`identity.is_platform_caller`: `access.jobs_run_as`, `access.synthetic_callers`,
+`access.trusted_callers`); a refused or failed first question stops the check before scoring.
 Judges are switchable per bot (custom `make_judge`, simulated conversations and multi-turn
 judges off by default). Production judges run natively on 20% of live traces (100% for
 critical bots), gated per bot by trace tags. Failed or thumbs-down answers go to a Review Queue

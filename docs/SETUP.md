@@ -725,11 +725,41 @@ output and the first smoke test:
   ```
 
   It runs three questions one at a time and prints a `DIAG:` line for each thing the check depends
-  on (the chatbot answering, a trace being written, sent to storage, read back by id, traces
-  searched through the SQL warehouse, the judge model answering, then the check itself), each with
-  its time, `FAILED` and the reason, or `STILL WAITING`. Every 90 seconds it is still going it also
-  prints what every thread is doing (`Thread 0x...` blocks in the run's output), which shows the
-  exact call a stalled scorer is waiting on. It records no quality result.
+  on, each with its time, `FAILED` and the reason, or `STILL WAITING`:
+
+  | Line | What it shows |
+  |---|---|
+  | 0 | Who the job calls the chatbot as, and whether the settings name that identity as one of the platform's own callers. |
+  | 1, 1b | The chatbot answers one question, and what it did with it (`answered`, `denied`, `error`...). |
+  | 1c | The chatbot's **own** trace, written by the serving endpoint under the agent service principal, is read back by its id (it is given 90 seconds to arrive). This is the proof that the endpoint's traces are saved; lines 2 to 6 only prove it for traces the job writes. |
+  | 2 to 6 | A trace written by the job: written, sent to storage, read back by id, its steps read, recent traces searched through the SQL warehouse. |
+  | 7 | The judge model answers one question. |
+  | 8 | The check itself. |
+  | 9 | For every question: the chatbot's outcome, how each scorer went (`done`, `failed`, `skipped`, `running`), every score, and `NO SCORE from <scorer>: <reason>` for each one that gave none. Then what trace storage holds for that question, read back by id, and whether the chatbot's own trace for it is stored. |
+  | 10 | Whether searching trace storage for the run finds the questions and their scores (what MLflow's evaluation page relies on). |
+
+  Every 90 seconds it is still going it also prints what every thread is doing (`Thread 0x...`
+  blocks in the run's output), which shows the exact call a stalled scorer is waiting on. It
+  records no quality result.
+- Where a quality check gets its scores. The scorers run inside the job, so the job keeps what
+  each one returns for each question and decides from that. It no longer reads the scores back
+  from trace storage to decide, so a slow or failed read-back can't turn judged answers into "0
+  questions scored". The scores are still attached to the traces for MLflow's evaluation page.
+  A scorer that gave no score is named with its reason in the run's output ("scorers that gave no
+  score") and in the stored result; a judge the check requires fails it with that reason.
+  `expectations_guidelines` only runs on "should refuse" questions, the only ones that carry
+  guidelines of their own; on every other question MLflow's judge raised "Guidelines must be
+  specified", which is what "'expectations_guidelines': N/N failed" was.
+- Who gets past a chatbot's access list. A request does only when it says it is a test question
+  (`synthetic`) **and** its caller is one of the platform's own: the identity in
+  `access.jobs_run_as`, or one listed in `access.synthetic_callers` or `access.trusted_callers`.
+  The agent, the quality check and the diagnostic all use that one rule. Everyone else is checked
+  against the chatbot's access list as usual, whatever the request says. So `access.jobs_run_as`
+  (C1) must be the identity the jobs really run as: in QA, where the bundle is deployed in
+  development mode, that is the person who deployed it. A check whose first question is refused
+  stops with "there is nothing to score", names the identity it called as and says which setting
+  to change. The agent picks a changed setting up within a minute; the rule itself needs the
+  agent redeployed (`deploy_agent`) once after this change.
 - Who the agent's endpoint signs in as. The deploy gives the endpoint the agent service
   principal's credentials (A6) as references to the secret scope, together with this workspace's
   own host and `DATABRICKS_AUTH_TYPE=oauth-m2m`. The host matters: without it the SDK skips
@@ -741,9 +771,9 @@ output and the first smoke test:
   Admin shows the identity under Platform.
 - A chatbot that answers with "Sorry, something went wrong". The quality check now asks one
   question first and stops with the reason, instead of scoring error messages. The agent gives
-  the reason only to callers named in `access.jobs_run_as`, `access.synthetic_callers` or
-  `access.trusted_callers` (C1), so the jobs' identity must be recorded there, and the agent
-  must have been redeployed (`deploy_agent`) since this change.
+  the reason only to the platform's own callers (the rule above), so the jobs' identity must be
+  recorded in `access.jobs_run_as` (C1), and the agent must have been redeployed
+  (`deploy_agent`) since this change.
 - Redeploying the agent after a new commit. The endpoint carries a `git_commit` tag, and
   `agents.deploy` refuses to change a tag's value in one request ("Duplicate key(s) detected in
   tags to add and tags to delete"). The deploy therefore hands over existing tags unchanged and

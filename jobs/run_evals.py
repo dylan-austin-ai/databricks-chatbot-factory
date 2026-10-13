@@ -5,13 +5,15 @@
 --channel live   evaluate the live release instead (post-promotion smoke test, REL-11)
 --limit N        only the first N approved questions (smoke test)
 --diagnose true  a small controlled run that prints, step by step, how long each thing the check
-                 depends on takes (the chatbot, reading a trace back, the judge model, one scorer)
-                 and, every 90 seconds something is still going, what every thread is waiting on
+                 depends on takes (the chatbot, its own trace, reading a trace back, the judge
+                 model), what every scorer said about every question and, every 90 seconds
+                 something is still going, what every thread is waiting on
 
 Each question runs through the deployed agent. Scores come from Databricks built-in judges
 (Claude Haiku 4.5 by default) plus code scorers for the deterministic checks; every result is attached
 to the question's trace and the run appears in MLflow's evaluation UI for side-by-side release
-comparison. The golden set is mirrored into a Unity Catalog evaluation dataset per bot.
+comparison. The pass/fail decision uses the results as the scorers return them, in this process,
+so it does not wait on (or fail with) reading them back from trace storage. The golden set is mirrored into a Unity Catalog evaluation dataset per bot.
 Per-bot options (admin): which judges run, a custom make_judge judge, and a simulated
 multi-turn pass with conversation judges (informational, not part of the gate).
 """
@@ -23,13 +25,14 @@ import uuid
 import mlflow
 from mlflow.entities import Feedback
 from mlflow.genai.scorers import (Correctness, ExpectationsGuidelines, Guidelines, RelevanceToQuery,
-                                  RetrievalGroundedness, RetrievalRelevance, RetrievalSufficiency, Safety,
-                                  scorer)
+                                  RetrievalGroundedness, RetrievalRelevance, RetrievalSufficiency, Safety)
 
 from _bootstrap import args, context
 
 from factory import PLATFORM_VERSION, evals, llm
+from factory.identity import is_platform_caller
 from factory.ingestion import BotPaths
+from factory.problems import safe_text
 from factory.releases import index_table
 from factory.tracing import as_dict, assessment_value, documents
 
@@ -89,35 +92,52 @@ def agent_outputs(trace) -> dict:
     return as_dict(spans[0].outputs) if spans else {}
 
 
-def chatbot_error(custom: dict) -> str:
-    """Why the chatbot answered with its error message, or "" when it gave a real answer. The
-    reason is only returned to the platform's own test callers; without it, say where to look."""
-    if (custom or {}).get("outcome") != "error":
+def runs_as() -> str:
+    """Who this job calls the chatbot as, worked out the way the agent works out its caller."""
+    try:
+        me = w.current_user.me()
+        return me.user_name or (me.emails[0].value if me.emails else "") or me.display_name or ""
+    except Exception as e:  # noqa: BLE001 - only used to explain a refusal
+        print(f"could not read this job's own identity: {type(e).__name__}")
         return ""
-    return str(custom.get("error") or "the chatbot gave no reason (it shares one only with the platform's own "
-               "test callers: check access.jobs_run_as under Admin, Platform, and that the agent has been "
-               "redeployed)")
 
 
-# What the chatbot did with each question of this run, so an error isn't judged as if it were an answer.
-OUTCOMES: dict[str, str] = {}
+RUNS_AS = runs_as()
+
+
+def chatbot_fault(custom: dict) -> str:
+    """Why there is nothing to score in what the chatbot returned (its error message, or it
+    refused the check's own question), or "" when it gave an answer."""
+    return evals.chatbot_fault(custom, RUNS_AS, is_platform_caller(RUNS_AS, settings))
+
+
+# What happened to each question of this run, kept as it happens:
+OUTCOMES: dict[str, str] = {}                # what the chatbot did with it, so a fault isn't judged as an answer
+TRACE_IDS: dict[str, tuple[str, str]] = {}   # (this check's trace, the chatbot's own trace on the serving endpoint)
+RESULTS: dict[str, dict[str, dict]] = {}     # what every scorer said about it: the gate decides from these
+STATUS: dict[str, dict[str, str]] = {}       # how each scorer went: running, done, failed or skipped
+# A judge that can't work without something in the question's expectations: it is skipped on a
+# question that lacks it. Only "should refuse" questions carry guidelines of their own.
+NEEDS = {"expectations_guidelines": "guidelines"}
 
 
 def build_scorers(cfg, allowed: set[str], chunks: dict[str, str]) -> list:
-    out = [judge(cls, n, **kw) for n, (cls, kw) in BUILTINS.items() if cfg.judge_on(n)]
+    judges = {n: judge(cls, n, **kw) for n, (cls, kw) in BUILTINS.items() if cfg.judge_on(n)}
     if cfg.judge_on("custom") and cfg.custom_judge_instructions:
         from mlflow.genai.judges import make_judge
-        out.append(make_judge(name="custom", model=judge_model, instructions=cfg.custom_judge_instructions
-                              + "\n\nQuestion: {{ inputs }}\nAnswer: {{ outputs }}"))
+        judges["custom"] = make_judge(name="custom", model=judge_model, instructions=cfg.custom_judge_instructions
+                                      + "\n\nQuestion: {{ inputs }}\nAnswer: {{ outputs }}")
 
-    @scorer
-    def checks(outputs, expectations, trace):
+    def checks(inputs, outputs, expectations, trace):
         custom = agent_outputs(trace)
         scores = evals.deterministic_scores(expectations.get("kind", "in_scope"),
                                             {"response": outputs, "custom": custom}, expectations, chunks, allowed)
         return [Feedback(name=k, value=v) for k, v in scores.items()]
 
-    return out + [checks]
+    def kept(name, work):
+        return evals.recording_scorer(name, work, RESULTS, STATUS, assessment_value, NEEDS.get(name, ""), safe_text)
+
+    return [kept(n, j.run) for n, j in judges.items()] + [kept("checks", checks)]
 
 
 def make_predict(cfg, channel: str, p: BotPaths, chunks: dict[str, str]):
@@ -131,6 +151,7 @@ def make_predict(cfg, channel: str, p: BotPaths, chunks: dict[str, str]):
         except Exception as e:  # noqa: BLE001
             response, custom = f"ERROR: {e}", {"outcome": "error"}
         OUTCOMES[question] = custom.get("outcome") or ""
+        TRACE_IDS[question] = (mlflow.get_active_trace_id() or "", str(custom.get("trace_id") or ""))
         hits = custom.get("retrieval") or []
         need = [h["chunk_id"] for h in hits if h.get("chunk_id") and h["chunk_id"] not in chunks]
         if need:
@@ -150,7 +171,8 @@ def make_predict(cfg, channel: str, p: BotPaths, chunks: dict[str, str]):
 
 
 def read_scores(run_id: str) -> dict[str, tuple[dict, dict]]:
-    """question -> (scores, rationales) from the assessments on the run's traces."""
+    """question -> (scores, rationales) from the assessments on the run's traces, found by searching
+    trace storage for the run. Only the diagnostic uses it now, to say whether that search works."""
     out = {}
     for t in mlflow.search_traces(run_id=run_id, return_type="list", max_results=5000):
         question = as_dict(t.data.request).get("question")
@@ -166,6 +188,22 @@ def read_scores(run_id: str) -> dict[str, tuple[dict, dict]]:
                 scores[x.name], why[x.name] = v, x.rationale or ""
         out[question] = (scores, why)
     return out
+
+
+def stored_trace(trace_id: str):
+    trace = mlflow.get_trace(trace_id) if trace_id else None
+    if trace is None:
+        raise LookupError("it has no trace id" if not trace_id else "it is not in trace storage")
+    return trace
+
+
+def stored_results(trace_id: str) -> str:
+    """What trace storage holds against one of this check's traces, read back by its id."""
+    found = [x for x in (getattr(stored_trace(trace_id).info, "assessments", None) or [])
+             if getattr(x, "feedback", None) is not None]
+    as_errors = sorted({x.name for x in found if getattr(x.feedback, "error", None) is not None})
+    return (f"{len(found)} result(s): {', '.join(sorted({x.name for x in found})) or 'none'}"
+            + (f". Stored as errors: {', '.join(as_errors)}" if as_errors else ""))
 
 
 def simulate(cfg, channel: str, cases: list[dict]) -> None:
@@ -249,30 +287,59 @@ for bot in bots:
             print(f"{cfg.bot_id}: version link skipped: {e}")
 
     chunks: dict[str, str] = {}
-    OUTCOMES.clear()
+    for store in (OUTCOMES, TRACE_IDS, RESULTS, STATUS):
+        store.clear()
     if cases and not DIAGNOSE:
-        # One question first. If the chatbot itself is failing there is nothing to score, and every
-        # judge would be marking its error message as a bad answer.
+        # One question first. If the chatbot itself is failing, or refuses the check's own
+        # questions, there is nothing to score, and every judge would be marking its error or
+        # its refusal as a bad answer.
         try:
             _, first = evals.call_agent(client, agent_ep, cfg.bot_id, cases[0]["question"], channel)
         except Exception as e:  # noqa: BLE001
             first = {"outcome": "error", "error": f"{type(e).__name__}: {str(e).splitlines()[0][:300] if str(e) else ''}"}
-        if chatbot_error(first):
-            message = (f"The chatbot answered a test question with an error instead of an answer, so there is "
-                       f"nothing to score for {cfg.bot_id}: {chatbot_error(first)}")
+        if chatbot_fault(first):
+            message = (f"The chatbot gave a test question no answer, so there is nothing to score for "
+                       f"{cfg.bot_id}: {chatbot_fault(first)}")
             if len(bots) == 1:
                 raise SystemExit(message)
             print(message)
             continue
     if DIAGNOSE and cases:   # each thing the check depends on, on its own, timed
         question = cases[0]["question"]
+        print(f"DIAG: 0. this run calls the chatbot as {RUNS_AS or 'an identity that could not be read'}. "
+              + ("The settings name that identity as one of the platform's own callers, so the chatbot should treat "
+                 "these as test questions." if is_platform_caller(RUNS_AS, settings) else
+                 "THE SETTINGS DO NOT NAME THAT IDENTITY as one of the platform's own callers (access.jobs_run_as, "
+                 "access.synthetic_callers, access.trusted_callers), so the chatbot will treat these questions as "
+                 "coming from an ordinary person and may refuse them."), flush=True)
         ok, answered = evals.timed("1. the chatbot answers one question",
                                    lambda: evals.call_agent(client, agent_ep, cfg.bot_id, question, channel), 120)
         if ok:
-            outcome = (answered[1] or {}).get("outcome")
-            print(f"DIAG: 1b. what it did with that question: {outcome}"
-                  + (f". THE CHATBOT IS FAILING: {chatbot_error(answered[1])}" if outcome == "error" else ""),
+            said = answered[1] or {}
+            print(f"DIAG: 1b. what it did with that question: {said.get('outcome')}"
+                  + (f". THE CHATBOT GAVE NO ANSWER: {chatbot_fault(said)}" if chatbot_fault(said) else ""),
                   flush=True)
+            # The traces in steps 2 to 6 are written by this job. This one was written by the serving
+            # endpoint, under its own identity, a moment ago and in the background: so it is given
+            # up to 90 seconds to arrive.
+            agent_trace = str(said.get("trace_id") or "")
+
+            def _endpoint_trace():
+                if not agent_trace:
+                    raise LookupError("the chatbot returned no trace id, so it was not tracing that request")
+                found, why = evals.wait_for(lambda: mlflow.get_trace(agent_trace))
+                if found is None:
+                    raise LookupError("it is not in trace storage after 90 seconds" + (f" ({why})" if why else ""))
+                return len(found.data.spans)
+
+            ok, steps = evals.timed("1c. the chatbot's own trace, written by the serving endpoint, is read back "
+                                    "by its id", _endpoint_trace, 150)
+            print("DIAG: 1c. " + (
+                f"it is stored, with {steps} step(s): the serving endpoint's traces are being saved" if ok else
+                "THE SERVING ENDPOINT'S OWN TRACES ARE NOT PROVEN TO BE SAVED. The endpoint answered, so either its "
+                "identity (the agent service principal) may not write the trace tables, or the endpoint is not "
+                "sending its traces to this environment's trace storage. The deploy_agent job prints which trace "
+                "grants it made and which were refused."), flush=True)
 
         @mlflow.trace(name="diagnostic_trace")
         def _one_trace() -> str:
@@ -309,13 +376,42 @@ for bot in bots:
                               scorers=build_scorers(cfg, allowed, chunks), model_id=model_id)
         if DIAGNOSE:
             print(f"DIAG: 8. asking and scoring finished in {time.time() - started_at:.1f}s", flush=True)
-        scored = read_scores(run.info.run_id)
-        rows = [scored.get(c["question"], ({}, {}))[0] for c in cases]
+        evals.close_unfinished(RESULTS, STATUS)
+        scored = {c["question"]: evals.scores_from(RESULTS.get(c["question"])) for c in cases}
+        rows = [scored[c["question"]][0] for c in cases]
+        faults = sum(1 for c in cases if OUTCOMES.get(c["question"]) in evals.CANT_BE_SCORED)
+        scorer_errors = evals.scorer_problems([scored[c["question"]][2] for c in cases])
+        if scorer_errors:
+            print(f"{cfg.bot_id}: scorers that gave no score: {scorer_errors}", flush=True)
         if DIAGNOSE:
-            print(f"DIAG: 9. scores read back in {time.time() - started_at:.1f}s from the start; "
-                  f"{sum(1 for r in rows if r)} of {len(rows)} question(s) have scores; the chatbot answered "
-                  f"{sum(1 for c in cases if OUTCOMES.get(c['question']) == 'error')} of them with an error",
-                  flush=True)
+            print(f"DIAG: 9. what each question got, as the scorers returned it (not read back from storage): "
+                  f"{sum(1 for r in rows if r)} of {len(rows)} question(s) have scores; the chatbot gave "
+                  f"{faults} of them no answer", flush=True)
+            for i, c in enumerate(cases, 1):
+                q = c["question"]
+                scores, _, errors = scored[q]
+                ran = STATUS.get(q, {})
+                print(f"DIAG:   question {i} ({q[:60]!r}): the chatbot's outcome was "
+                      f"{OUTCOMES.get(q) or 'not recorded (it was never asked)'}. Scorers: "
+                      + (", ".join(f"{n} {state}" for n, state in sorted(ran.items())) or "none ran"), flush=True)
+                print(f"DIAG:   question {i} scores: "
+                      + (", ".join(f"{n}={v:g}" for n, v in sorted(scores.items())) or "none"), flush=True)
+                for name, why in sorted(errors.items()):
+                    print(f"DIAG:   question {i} NO SCORE from {name}: {why}", flush=True)
+                mine, endpoint = TRACE_IDS.get(q, ("", ""))
+                ok, held = evals.timed(f"  question {i}: this check's trace is read back by its id",
+                                       lambda t=mine: stored_results(t), 60)
+                if ok:
+                    print(f"DIAG:   question {i} storage holds {held}", flush=True)
+                evals.timed(f"  question {i}: the chatbot's own trace for it is in storage",
+                            lambda t=endpoint: stored_trace(t), 60)
+            ok, searched = evals.timed("10. this run's traces are found by searching for the run (what MLflow's "
+                                       "evaluation page does)", lambda: read_scores(run.info.run_id), 180)
+            if ok:
+                print(f"DIAG: 10. the search found {sum(1 for c in cases if c['question'] in searched)} of "
+                      f"{len(cases)} question(s), "
+                      f"{sum(1 for c in cases if searched.get(c['question'], ({}, {}))[0])} with scores attached",
+                      flush=True)
         metrics, zero = evals.aggregate(rows), evals.zero_failures(rows)
         rel = sql.query(f"SELECT safety_override_by FROM {settings.fq('releases')} WHERE release_id = :r",
                         {"r": release_id})
@@ -331,7 +427,7 @@ for bot in bots:
         gate = evals.gate(metrics, thresholds, zero, zero_checks, n_in_scope if a.limit else approved_in_scope,
                           1 if a.limit else min_cases, override,
                           required=[r for r in required if r in thresholds], unscored=sum(1 for r in rows if not r),
-                          agent_errors=sum(1 for c in cases if OUTCOMES.get(c["question"]) == "error"))
+                          agent_errors=faults, scorer_errors=scorer_errors)
         mlflow.set_tags({"passed": str(gate.passed)})
         mlflow.log_metrics({f"gate_{k}": v for k, v in metrics.items()})
     if not a.limit and (cfg.obs_on("simulate_conversations") or cfg.judge_on("multi_turn")):
@@ -345,10 +441,12 @@ for bot in bots:
          "pv": PLATFORM_VERSION, "gc": git_commit, "cv": bot["config_version"],
          "m": json.dumps({"metrics": metrics, "zero_failures": zero, "failures": gate.failures,
                           "n_cases": len(cases), "n_approved": n_approved, "mlflow_run_id": run.info.run_id,
+                          "scorer_errors": scorer_errors,
                           "per_case": [
                               {"eval_id": c["eval_id"], "question": c["question"],
-                               "scores": scored.get(c["question"], ({}, {}))[0],
-                               "rationales": scored.get(c["question"], ({}, {}))[1]} for c in cases]}),
+                               "outcome": OUTCOMES.get(c["question"], ""),
+                               "scores": scored[c["question"]][0], "rationales": scored[c["question"]][1],
+                               "errors": scored[c["question"]][2]} for c in cases]}),
          "p": gate.passed, "nr": gate.needs_safety_review})
     if channel == "candidate" and not a.limit:
         sql.execute(f"""UPDATE {settings.fq('releases')} SET eval_run_id = :e, eval_passed = CAST(:p AS BOOLEAN),

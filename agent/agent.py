@@ -422,8 +422,7 @@ class ChatbotAgent(ResponsesAgent):
             return False
         try:  # the failure may have come before the caller was worked out
             caller, _ = self.caller()
-            return bool(caller) and caller in {*s.get("access.trusted_callers", []), *s.get("access.synthetic_callers", []),
-                                               s.get("access.jobs_run_as")}
+            return idn.is_platform_caller(caller, s)
         except Exception:  # noqa: BLE001 - when in doubt, no
             return False
 
@@ -479,8 +478,9 @@ class ChatbotAgent(ResponsesAgent):
         with mlflow.start_span(name="identity.resolve", span_type="GUARDRAIL") as span:
             caller, obo = self.caller()
             who = idn.resolve(caller, ci, s.get("access.trusted_callers", []))
-            synthetic = bool(ci.get("synthetic")) and caller in set(
-                s.get("access.trusted_callers", []) + s.get("access.synthetic_callers", []))
+            # The flag counts only from the platform's own callers, which includes the identity the
+            # jobs run as: the quality check and its diagnostic call with that one.
+            synthetic = bool(ci.get("synthetic")) and idn.is_platform_caller(caller, s)
             log["synthetic"] = synthetic
             profile = self._profile(who.user, s) if cfg.identity_mode == "pseudonymous" else None
             log.update(idn.log_fields(who, cfg.identity_mode, HASH_KEY, ENC_KEY, profile))

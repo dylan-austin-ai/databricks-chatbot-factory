@@ -121,7 +121,7 @@ _FIND = ("The chatbot isn't finding the right part of your documents often enoug
          "document that was read badly (check it on **Documents**). Then run the check again.")
 # (pattern over one failure line from the quality check, what to do about it). First match wins.
 _CHECK_ADVICE: list[tuple[str, str]] = [
-    (r"with an error instead of an answer", "This is a fault in the chatbot itself, not in your documents or "
+    (r"no answer at all", "This is a fault in the chatbot itself, not in your documents or "
      "questions, and the scores from this check mean nothing until it is fixed. Send it to MLOps; Admin, "
      "**Setup checklist**, **Diagnose the quality check** shows the reason."),
     (r"^Only \d+ approved test question", "Open **Test questions**, approve more questions, then run the check "
@@ -173,6 +173,12 @@ def safe_reason(error: BaseException, limit: int = 300) -> str:
     """brief(), with anything that looks like a credential blanked: for reasons that are printed
     where more people can read them than may know the credential."""
     return _SECRETS.sub("[hidden]", brief(error, limit))
+
+
+def safe_text(text: str | None, limit: int = 300) -> str:
+    """Someone else's error text on one line, cut short, with anything that looks like a
+    credential blanked."""
+    return _SECRETS.sub("[hidden]", one_line(text, limit))
 
 
 def one_line(text: str | None, limit: int = 240) -> str:
@@ -257,7 +263,7 @@ def group_alerts(alerts: list[dict]) -> list[dict]:
 
 
 SETUP, TEMPORARY, UNCLEAR, STOPPED_BY_HAND = "setup", "temporary", "unclear", "stopped"
-_JOB_SETUP = (r"did not answer|environment variable|is required|not set\b|not configured|No module named|ModuleNotFoundError|"
+_JOB_SETUP = (r"nothing to score|did not answer|environment variable|is required|not set\b|not configured|No module named|ModuleNotFoundError|"
               r"ImportError|PERMISSION_DENIED|does not have .*(privilege|permission)|not authorized|Forbidden|"
               r"RESOURCE_DOES_NOT_EXIST|NOT_FOUND|does not exist|cannot be found|AttributeError|TypeError|NameError|"
               r"KeyError|unexpected keyword|SyntaxError|INVALID_PARAMETER_VALUE")

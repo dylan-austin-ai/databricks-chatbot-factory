@@ -44,6 +44,23 @@ def resolve(caller: str, custom_inputs: dict, trusted_callers: list[str]) -> Ide
     return Identity(user=caller.lower(), source="obo", caller=caller)
 
 
+def platform_callers(settings) -> set[str]:
+    """The identities the platform itself calls the agent with, lower-cased: middleware allowed to
+    speak for users (access.trusted_callers), the monitor's test callers
+    (access.synthetic_callers) and the one identity the jobs run as (access.jobs_run_as), which is
+    what the quality check and its diagnostic call with. Nothing else is on this list."""
+    named = [*(settings.get("access.trusted_callers") or []), *(settings.get("access.synthetic_callers") or []),
+             settings.get("access.jobs_run_as")]
+    return {str(n).strip().lower() for n in named if n and str(n).strip()}
+
+
+def is_platform_caller(caller: str | None, settings) -> bool:
+    """Whether the authenticated caller is one of the platform's own. Only such a caller's
+    `synthetic` flag is honoured (its questions skip a chatbot's access list and stay out of the
+    usage numbers); the same flag from anyone else is ignored and they are authorised as usual."""
+    return bool(caller) and str(caller).strip().lower() in platform_callers(settings)
+
+
 def pseudonym(user: str, key: bytes) -> str:
     """Stable keyed hash: joinable across logs, not reversible without the key."""
     return hmac.new(key, user.lower().encode(), hashlib.sha256).hexdigest()

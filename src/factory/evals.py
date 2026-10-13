@@ -107,14 +107,15 @@ class GateResult:
 def gate(metrics: dict[str, float], thresholds: dict[str, float], zero_failures: dict[str, int],
          zero_checks: list[str], n_cases: int, min_cases: int,
          safety_override: bool = False, required: tuple | list = (), unscored: int = 0,
-         agent_errors: int = 0) -> GateResult:
+         agent_errors: int = 0, scorer_errors: dict[str, str] | None = None) -> GateResult:
     """`required`: metrics that must be present (enabled judges, expected checks). A judge that
-    errored or never ran fails the gate instead of being skipped. `agent_errors`: questions the
-    chatbot answered with its error message; those are faults in the chatbot, not answers whose
-    quality can be judged."""
+    errored or never ran fails the gate instead of being skipped; `scorer_errors` ({name: what it
+    said}) is quoted when one did. `agent_errors`: questions the chatbot gave no answer to (its
+    error message, or access refused); those are faults, not answers whose quality can be judged."""
     failures = []
+    scorer_errors = scorer_errors or {}
     if agent_errors:
-        failures.append(f"The chatbot answered {agent_errors} question(s) with an error instead of an answer; "
+        failures.append(f"The chatbot gave {agent_errors} question(s) no answer at all (an error, or access refused); "
                         "this must be zero.")
     if n_cases < min_cases:
         failures.append(f"Only {n_cases} approved test question(s); at least {min_cases} are required.")
@@ -122,7 +123,8 @@ def gate(metrics: dict[str, float], thresholds: dict[str, float], zero_failures:
         failures.append(f"{unscored} test question(s) weren't scored; re-run the check.")
     for name in required:
         if name not in metrics:
-            failures.append(f"{name.replace('_', ' ')} wasn't scored (judge unavailable?); re-run the check.")
+            why = f": {scorer_errors[name]}" if scorer_errors.get(name) else " (judge unavailable?)"
+            failures.append(f"{name.replace('_', ' ')} wasn't scored{why}; re-run the check.")
     for check in zero_checks:
         n = zero_failures.get(check, 0)
         if n:
@@ -298,3 +300,147 @@ def timed(label: str, work, limit_s: int = 60) -> tuple[bool, object]:
         return False, None
     print(f"DIAG: {label}: ok in {took:.1f}s", flush=True)
     return True, box.get("value")
+
+
+CANT_BE_SCORED = ("error", "denied", "unavailable")   # the chatbot gave no answer whose quality could be judged
+
+
+def chatbot_fault(custom: dict | None, runs_as: str = "", recognised: bool = False) -> str:
+    """Why a quality check can't score what the chatbot returned, or "" when it can. `runs_as`
+    is who the check is calling as; `recognised`: the settings already name that identity as one
+    of the platform's own callers (identity.is_platform_caller)."""
+    custom = custom or {}
+    outcome = custom.get("outcome")
+    if outcome == "error":
+        return ("it answered with its error message instead of an answer: " + str(
+            custom.get("error") or "no reason was given (the agent shares the reason only with the platform's own "
+            "callers, and only once it has been redeployed)"))
+    if outcome == "denied":
+        who = runs_as or "an identity that could not be read"
+        return ("it refused the check's own question, the way it refuses a person who is not on the chatbot's access "
+                f"list. This check calls as {who}. " + (
+                    "The settings already name that identity as one of the platform's own callers, so the agent that "
+                    "is serving is older than that rule or has not picked the setting up yet: run the deploy_agent "
+                    "job, then run this again." if recognised else
+                    "The settings do not name that identity as one of the platform's own callers. Under Admin, "
+                    "Platform, set access.jobs_run_as to it (or add it to access.synthetic_callers), wait a minute "
+                    "and run this again. Nobody else gets past a chatbot's access list."))
+    if outcome == "unavailable":
+        return "it is not available (paused, archived or not published), so it answered nothing."
+    return ""
+
+
+def feedback_results(name: str, result, normalise, tidy=str) -> dict[str, dict]:
+    """What one scorer returned for one question, as {assessment name: {"value", "rationale",
+    "error"}}. A scorer returns a plain value, one Feedback or a list of them; `normalise` turns a
+    verdict into a number, or None when it isn't one. Several results under one name (one per
+    search result, say) become their average. A result with no usable value has a value of None
+    and says why in "error": it is "not scored", never a zero."""
+    found: dict[str, list[tuple]] = {}
+    for item in (result if isinstance(result, (list, tuple)) else [result]):
+        if item is None:
+            continue
+        if isinstance(item, (bool, int, float, str)):
+            found.setdefault(name, []).append((item, "", ""))
+            continue
+        label, err = getattr(item, "name", None), getattr(item, "error", None)
+        reason = tidy(str(getattr(err, "error_message", None) or getattr(err, "error_code", None) or err)) if err else ""
+        found.setdefault(name if label in (None, "", "feedback") else label, []).append(
+            (getattr(item, "value", None), getattr(item, "rationale", None) or "", reason))
+    out = {}
+    for label, items in found.items():
+        values = [v for v in (normalise(value) for value, _, reason in items if not reason) if v is not None]
+        reasons = [reason or f"it returned {value!r}, which is not a verdict" for value, _, reason in items
+                   if reason or normalise(value) is None]
+        out[label] = {"value": sum(values) / len(values) if values else None,
+                      "rationale": next((why for _, why, _ in items if why), ""),
+                      "error": "" if values else (reasons[0] if reasons else "it returned nothing")}
+    return out
+
+
+def scores_from(results: dict[str, dict] | None) -> tuple[dict[str, float], dict[str, str], dict[str, str]]:
+    """One question's kept results as (scores, rationales, errors)."""
+    scores, why, errors = {}, {}, {}
+    for name, r in (results or {}).items():
+        if r.get("value") is None:
+            errors[name] = r.get("error") or "it gave no result"
+        else:
+            scores[name], why[name] = float(r["value"]), r.get("rationale") or ""
+    return scores, why, errors
+
+
+def scorer_problems(errors: list[dict[str, str]]) -> dict[str, str]:
+    """The scorers that gave no score, across the questions of one check:
+    {name: "the first reason (on N of M question(s))"}."""
+    out = {}
+    for name in sorted({n for e in errors for n in e}):
+        reasons = [e[name] for e in errors if name in e]
+        out[name] = f"{reasons[0]} (on {len(reasons)} of {len(errors)} question(s))"
+    return out
+
+
+UNFINISHED = "it had not finished when MLflow stopped waiting for it (a scorer gets 300 seconds)"
+
+
+def close_unfinished(results: dict[str, dict], status: dict[str, dict]) -> None:
+    """Give every scorer that started on a question and never came back a result that says so."""
+    for question, scorers in status.items():
+        for name, state in scorers.items():
+            if state == "running":
+                results.setdefault(question, {})[name] = {"value": None, "rationale": "", "error": UNFINISHED}
+
+
+def recording_scorer(name: str, work, results: dict, status: dict, normalise, needs: str = "", tidy=str):
+    """An MLflow scorer that runs `work` and keeps what it said about each question in `results`
+    ({question: feedback_results}) and how it went in `status` ({question: {name: "running" |
+    "done" | "failed" | "skipped"}}).
+
+    A quality check decides from `results`, in the process that did the judging, so it does not
+    depend on reading the assessments back from trace storage. What `work` returns, and anything
+    it raises, passes through untouched for MLflow to attach to the trace as before. `needs`: an
+    expectation `work` can't do without; a question that lacks it is skipped, not failed."""
+    from mlflow.genai.scorers import scorer
+
+    @scorer(name=name)
+    def keep(inputs, outputs, expectations, trace):
+        question = (inputs or {}).get("question") if isinstance(inputs, dict) else str(inputs or "")
+        state = status.setdefault(question or "", {})
+        if needs and not (expectations or {}).get(needs):
+            state[name] = "skipped"
+            return None
+        state[name] = "running"
+        kept = results.setdefault(question or "", {})
+        try:
+            result = work(inputs=inputs, outputs=outputs, expectations=expectations, trace=trace)
+        except Exception as e:  # kept, then raised again for MLflow to record on the trace
+            first = next((line.strip() for line in str(e).splitlines() if line.strip()), "")
+            kept[name] = {"value": None, "rationale": "", "error": tidy(f"{type(e).__name__}: {first}")}
+            state[name] = "failed"
+            raise
+        said = feedback_results(name, result, normalise, tidy)
+        kept.pop(name, None)   # an earlier attempt's error, when MLflow tried again
+        kept.update(said)
+        state[name] = "failed" if said and all(r["value"] is None for r in said.values()) else "done"
+        return result
+
+    return keep
+
+
+def wait_for(read, tries: int = 9, pause_s: float = 10, sleep=None):
+    """Call `read` until it returns something. Storage that is written in the background (a
+    serving endpoint's traces) takes a moment to show up. Returns (what was read or None, the
+    last error as text)."""
+    import time
+
+    why = ""
+    for attempt in range(tries):
+        try:
+            found = read()
+            if found is not None:
+                return found, ""
+            why = ""
+        except Exception as e:  # noqa: BLE001 - "not there yet" comes back as an error from some stores
+            why = f"{type(e).__name__}: {next((x.strip() for x in str(e).splitlines() if x.strip()), '')}"[:200]
+        if attempt < tries - 1:
+            (sleep or time.sleep)(pause_s)
+    return None, why
