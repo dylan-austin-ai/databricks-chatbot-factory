@@ -684,3 +684,38 @@ def test_a_run_can_be_stopped_from_the_page(workspace):
     assert problems(at) == [] and "This one is taking longer than usual" in at.get("progress")[0].proto.text
     at.button(key="stop_evals_7").click().run()
     assert stopped == [7]
+
+
+def test_the_diagnostic_run_is_started_from_admin_and_its_report_is_shown(workspace):
+    common, wh, jobs = workspace(bots=[CHECKABLE], admin=True)
+    at = run("admin", admin_section="Setup checklist")
+    assert problems(at) == [] and "Diagnose the quality check" in page_text(at)
+    at.button(key="run_diagnostic").click().run()
+    assert ("evals", {"bot_id": "hr_bot", "trigger": "diagnose", "channel": "candidate", "limit": "3",
+                      "diagnose": "true"}) in jobs
+
+    common, wh, _ = workspace(bots=[CHECKABLE], admin=True)
+    finished = job_run("TERMINATED", ended_ago_s=60, result="SUCCESS")
+    finished.tasks = [NS(task_key="evals", run_id=77, state=None, status=finished.status)]
+    started_job(common, wh, "evals_diagnose", finished)
+    common.app_client().jobs.get_run_output = lambda run_id: NS(error=None, error_trace=None, logs=(
+        "some other line\nDIAG: 1. the chatbot answers one question: ok in 4.2s\n"
+        "DIAG: 4. that trace is read back by its id: STILL WAITING after 120s (this is where it stalls)\n"
+        "Thread 0x00007f (most recent call first):\n  File \"databricks/sql/client.py\", line 1 in execute\n"))
+    at = run("admin", admin_section="Setup checklist")
+    assert problems(at) == []
+    report = [c.value for c in at.code if "DIAG:" in c.value]
+    assert report[0].splitlines() == [
+        "DIAG: 1. the chatbot answers one question: ok in 4.2s",
+        "DIAG: 4. that trace is read back by its id: STILL WAITING after 120s (this is where it stalls)"]
+    assert any("Thread 0x" in c.value for c in at.code)               # the full output, thread dump included
+    assert "STILL WAITING" in page_text(at)                           # how to read it
+
+
+def test_launch_says_how_many_questions_a_result_rests_on(workspace):
+    common, wh, _ = workspace(bots=[CHECKABLE])
+    wh.on(r"_platform\.releases WHERE bot_id", [release("hr_bot-r0001", "candidate", eval_run_id="e1", eval_passed="true")])
+    wh.on(r"_platform\.eval_runs", [{"run_id": "e1", "needs_safety_review": "false", "metrics_json": json.dumps(
+        {"metrics": {"correctness": 0.95}, "failures": [], "n_cases": 50, "n_approved": 312})}])
+    at = run("launch", bot_id="hr_bot")
+    assert problems(at) == [] and "Checked on 50 of your 312 approved questions" in page_text(at)

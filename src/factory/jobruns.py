@@ -104,10 +104,12 @@ def snapshot(run) -> dict:
     snap = _one(run)
     snap["step"], snap["steps"], snap["task"] = _stage(run, snap["state"])
     snap["task_run_id"] = 0
+    tasks = list(getattr(run, "tasks", None) or [])
     if snap["state"] == FAILED:   # the run only says "see run output"; the task that failed has the reason
-        tasks = list(getattr(run, "tasks", None) or [])
         failed = [t for t in tasks if _one(t)["state"] == FAILED] or tasks[:1]
         snap["task_run_id"] = int(getattr(failed[0], "run_id", 0) or 0) if failed else 0
+    elif snap["state"] == SUCCEEDED and len(tasks) == 1:   # what it printed can be read from here
+        snap["task_run_id"] = int(getattr(tasks[0], "run_id", 0) or 0)
     return snap
 
 

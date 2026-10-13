@@ -717,4 +717,17 @@ output and the first smoke test:
   at a time; if judges still time out, lower `judge_calls_per_second` or give the judge model a
   provisioned-throughput endpoint. Before it starts, the check asks the judge model one trivial
   question and stops with the reason if that fails.
+- If a quality check stalls (scorers timing out, including the plain-Python `checks` scorer), run
+  the diagnostic: Admin › Setup checklist › **Diagnose the quality check**, or
+
+  ```bash
+  databricks bundle run run_evals -t qa --params bot_id=<bot_id>,channel=candidate,trigger=diagnose,limit=3,diagnose=true
+  ```
+
+  It runs three questions one at a time and prints a `DIAG:` line for each thing the check depends
+  on (the chatbot answering, a trace being written, sent to storage, read back by id, traces
+  searched through the SQL warehouse, the judge model answering, then the check itself), each with
+  its time, `FAILED` and the reason, or `STILL WAITING`. Every 90 seconds it is still going it also
+  prints what every thread is doing (`Thread 0x...` blocks in the run's output), which shows the
+  exact call a stalled scorer is waiting on. It records no quality result.
 - README › "Verify against a live workspace first" has the full list.

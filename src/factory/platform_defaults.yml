@@ -101,6 +101,7 @@ quality:
   zero_failure_checks: [citation_mapping, leakage, sensitive_output]   # EVG-1
   min_golden_questions: 50             # EVG-5: approved test questions required to go live
   check:                               # how hard the quality check leans on the judge model
+    max_questions: 50                  # a fixed sample of the approved questions, spread over the documents; 0 = all
     questions_at_once: 4               # MLflow's own default is 10
     judges_at_once: 2                  # per question; MLflow's own default is 10
     judge_calls_per_second: 2          # across everything; raise once the judge endpoint is known to cope

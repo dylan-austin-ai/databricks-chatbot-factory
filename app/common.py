@@ -496,7 +496,8 @@ def show_upload_report(bot_id: str) -> None:
 
 # What each background job is called on screen, and roughly how long it takes when it has never
 # run before (after that, the app goes by how long its recent runs took).
-JOB_WHAT = {"evals": ("quality check", 15), "promote": ("publishing", 10), "rollback": ("roll back", 5),
+JOB_WHAT = {"evals": ("quality check", 15), "evals_diagnose": ("diagnostic run", 6),
+            "promote": ("publishing", 10), "rollback": ("roll back", 5),
             "provision": ("setup", 10), "ingest": ("reading of the documents", 10),
             "ingest_publish": ("update of the test version", 5), "ingest_questions": ("writing of test questions", 5)}
 
@@ -506,6 +507,8 @@ def job_label(kind: str, params: dict) -> str:
     if kind == "ingest":
         return ("ingest_publish" if str(params.get("publish_only")) == "true" else
                 "ingest_questions" if str(params.get("golden_only")) == "true" else "ingest")
+    if kind == "evals" and str(params.get("diagnose")) == "true":
+        return "evals_diagnose"
     return "rollback" if kind == "promote" and params.get("action") == "rollback" else kind
 
 
@@ -574,6 +577,7 @@ NO_RESULT = ("No quality result was recorded, so this says nothing about how goo
              "Answers it had already asked for may show up in MLflow; they are not counted.")
 STOPPED = {
     "evals": NO_RESULT,
+    "evals_diagnose": "What it printed up to that point is in the report below.",
     "promote": "Publishing did not complete. The versions shown on this page are what is live now.",
     "rollback": "The roll back did not complete. The versions shown on this page are what is live now.",
     "provision": "Setup did not complete. The steps that finished are kept.",
@@ -658,11 +662,24 @@ def _typical_seconds(job_id: str, default: int) -> int:
 def typical_seconds(label: str) -> int:
     """How long this job has been taking lately, or a first guess when it has no history."""
     default = JOB_WHAT[label][1] * 60
-    kind = {"ingest_publish": "ingest", "ingest_questions": "ingest", "rollback": "promote"}.get(label, label)
+    kind = {"ingest_publish": "ingest", "ingest_questions": "ingest", "rollback": "promote",
+            "evals_diagnose": "evals"}.get(label, label)
     try:
         return _typical_seconds(JOB_IDS[kind], default) if JOB_IDS.get(kind) else default
     except Exception:  # noqa: BLE001
         return default
+
+
+def run_log(status: jobruns.RunStatus) -> str:
+    """Everything a finished run printed, or "" when it can't be read."""
+    if not status.task_run_id:
+        return ""
+    try:
+        out = app_client().jobs.get_run_output(status.task_run_id)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("factory.app").info("could not read the log of run %s (%s)", status.run_id, type(e).__name__)
+        return ""
+    return "\n".join(x for x in (getattr(out, "logs", None), getattr(out, "error_trace", None)) if x)
 
 
 def watch_job(label: str, bot_id: str, quiet: bool = False) -> jobruns.RunStatus:

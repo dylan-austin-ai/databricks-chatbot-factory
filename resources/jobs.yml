@@ -200,6 +200,10 @@ resources:
         default: manual
       - name: channel
         default: ''
+      - name: limit
+        default: ''
+      - name: diagnose
+        default: 'false'
       tasks:
       - task_key: evals
         environment_key: default
@@ -210,6 +214,8 @@ resources:
           - --bot_id={{job.parameters.bot_id}}
           - --trigger={{job.parameters.trigger}}
           - --channel={{job.parameters.channel}}
+          - --limit={{job.parameters.limit}}
+          - --diagnose={{job.parameters.diagnose}}
           - --environment=${bundle.target}
           - --git_commit=${bundle.git.commit}
           - --warehouse_id=${var.warehouse_id}

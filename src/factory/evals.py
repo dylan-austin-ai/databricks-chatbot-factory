@@ -223,3 +223,72 @@ def judge_problem(client, endpoint: str, timeout: int = 60) -> str:
         first = next((line.strip() for line in str(e).splitlines() if line.strip()), "")
         return f"{type(e).__name__}: {first}"[:300]
     return ""
+
+
+def sample_cases(cases: list[dict], limit: int) -> list[dict]:
+    """The approved questions a quality check uses when there are more than `limit` of them.
+
+    A chatbot with a hundred documents can have several hundred approved questions; asking and
+    judging all of them at every check takes most of an hour. The sample is fixed (the same
+    questions every time, so two checks can be compared and a result can't be re-rolled), keeps
+    each kind of question in proportion with at least a handful of the rare kinds, and takes
+    turns across the source documents so no document dominates. `limit` of 0 means all."""
+    import hashlib
+
+    if not limit or len(cases) <= limit:
+        return cases
+
+    def stable(text) -> str:
+        return hashlib.sha256(str(text).encode()).hexdigest()
+
+    kinds: dict[str, list[dict]] = {}
+    for c in cases:
+        kinds.setdefault(c.get("kind") or "in_scope", []).append(c)
+    quota = {k: max(min(len(v), 5), round(limit * len(v) / len(cases))) for k, v in kinds.items()}
+    while sum(quota.values()) > limit:      # the floors can overshoot: trim the largest kind
+        biggest = max(quota, key=lambda k: quota[k])
+        quota[biggest] -= 1
+    chosen = []
+    for kind, group in kinds.items():
+        by_doc: dict[str, list[dict]] = {}
+        for c in sorted(group, key=lambda c: stable(c.get("eval_id"))):
+            by_doc.setdefault(str(c.get("source_doc_id") or ""), []).append(c)
+        docs = sorted(by_doc, key=stable)
+        while len([c for c in chosen if (c.get("kind") or "in_scope") == kind]) < quota[kind]:
+            for doc in docs:
+                if by_doc[doc] and len([c for c in chosen if (c.get("kind") or "in_scope") == kind]) < quota[kind]:
+                    chosen.append(by_doc[doc].pop(0))
+    keep = {id(c) for c in chosen}
+    return [c for c in cases if id(c) in keep]      # in the order they came
+
+
+def timed(label: str, work, limit_s: int = 60) -> tuple[bool, object]:
+    """Run one step of a diagnostic with a time limit and print how it went:
+    "DIAG: <label>: ok in 1.2s" / "FAILED in 0.4s: <reason>" / "STILL WAITING after 60s".
+    Returns (it finished without an error, its result). A step that hangs is left behind so the
+    diagnostic carries on to the next one."""
+    import threading
+    import time
+
+    box: dict = {}
+
+    def run() -> None:
+        try:
+            box["value"] = work()
+        except BaseException as e:  # noqa: BLE001 - reported, not raised
+            box["error"] = e
+
+    started = time.time()
+    thread = threading.Thread(target=run, name=f"diag-{label[:20]}", daemon=True)
+    thread.start()
+    thread.join(limit_s)
+    took = time.time() - started
+    if thread.is_alive():
+        print(f"DIAG: {label}: STILL WAITING after {limit_s}s (this is where it stalls)", flush=True)
+        return False, None
+    if "error" in box:
+        first = next((line.strip() for line in str(box["error"]).splitlines() if line.strip()), "")
+        print(f"DIAG: {label}: FAILED in {took:.1f}s: {type(box['error']).__name__}: {first[:300]}", flush=True)
+        return False, None
+    print(f"DIAG: {label}: ok in {took:.1f}s", flush=True)
+    return True, box.get("value")

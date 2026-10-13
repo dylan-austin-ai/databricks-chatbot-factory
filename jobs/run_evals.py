@@ -4,6 +4,9 @@
 --bot_id all     every non-draft bot (platform release gate in QA, CAS-4)
 --channel live   evaluate the live release instead (post-promotion smoke test, REL-11)
 --limit N        only the first N approved questions (smoke test)
+--diagnose true  a small controlled run that prints, step by step, how long each thing the check
+                 depends on takes (the chatbot, reading a trace back, the judge model, one scorer)
+                 and, every 90 seconds something is still going, what every thread is waiting on
 
 Each question runs through the deployed agent. Scores come from Databricks built-in judges
 (Claude Haiku 4.5 by default) plus code scorers for the deterministic checks; every result is attached
@@ -30,7 +33,10 @@ from factory.ingestion import BotPaths
 from factory.releases import index_table
 from factory.tracing import assessment_value, documents
 
-a = args("catalog", "bot_id", "trigger", "channel", "limit", "environment")
+a = args("catalog", "bot_id", "trigger", "channel", "limit", "environment", "diagnose")
+DIAGNOSE = a.diagnose == "true"
+if DIAGNOSE:
+    a.limit = a.limit or "3"
 spark, sql, settings, cp, w = context(a.catalog)
 client = llm.openai_client(w)
 agent_ep = settings.get("agent.serving_endpoint")
@@ -44,6 +50,15 @@ mlflow.set_tracking_uri("databricks")
 mlflow.set_experiment(f"/Shared/chatbot-factory/{a.environment or 'qa'}/traces")
 for _var, _value in evals.check_limits(settings).items():   # a few judge calls at a time, not a hundred
     os.environ.setdefault(_var, _value)                      # an explicit environment variable wins
+if DIAGNOSE:
+    import faulthandler
+    import sys
+
+    os.environ["MLFLOW_GENAI_EVAL_MAX_WORKERS"] = os.environ["MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS"] = "1"
+    print(f"DIAG: diagnostic run with mlflow {mlflow.__version__}: {a.limit} question(s), one question and one "
+          "scorer at a time. Every 90 seconds that it is still going, what each thread is doing is printed "
+          "(look for 'Thread 0x' below).", flush=True)
+    faulthandler.dump_traceback_later(90, repeat=True, file=sys.stderr)
 _judge_problem = evals.judge_problem(client, settings.get("models.judge_endpoint"))
 if _judge_problem:
     raise SystemExit(f"The judge model '{settings.get('models.judge_endpoint')}' did not answer a one-line test, so "
@@ -173,6 +188,8 @@ for bot in bots:
             AND effective_ts <= :n AND expires_ts > :n""", {"b": cfg.bot_id, "n": now})}
     cases = sql.query(f"SELECT * FROM {p.t('golden_set')} WHERE approved AND active "
                       "AND kind IN ('in_scope', 'out_of_scope', 'feedback') ORDER BY difficulty, eval_id")
+    n_approved = len(cases)
+    approved_in_scope = sum(1 for c in cases if c["kind"] == "in_scope")   # what the "enough questions" rule counts
     if a.limit:
         cases = [c for c in cases if c["kind"] == "in_scope"][: int(a.limit)]
     # This also runs by itself at the end of every setup and every update of the test version.
@@ -182,6 +199,10 @@ for bot in bots:
     if a.trigger in ("docs_changed", "provisioned") and len(cases) < min_cases:
         print(f"{cfg.bot_id}: {len(cases)} approved test question(s), {min_cases} needed; automatic check skipped")
         continue
+    if not a.limit:   # a fixed sample spread over the documents when there are many more than needed
+        cap = int(settings.get("quality.check.max_questions", 50) or 0)
+        cases = evals.sample_cases(cases, max(cap, min_cases) if cap > 0 else 0)
+        print(f"{cfg.bot_id}: checking {len(cases)} of {n_approved} approved test question(s)")
     records = [evals.dataset_record(c) for c in cases]
 
     try:  # golden set mirrored as a native UC evaluation dataset (browse/compare in MLflow)
@@ -209,14 +230,51 @@ for bot in bots:
             print(f"{cfg.bot_id}: version link skipped: {e}")
 
     chunks: dict[str, str] = {}
+    if DIAGNOSE and cases:   # each thing the check depends on, on its own, timed
+        question = cases[0]["question"]
+        evals.timed("1. the chatbot answers one question",
+                    lambda: evals.call_agent(client, agent_ep, cfg.bot_id, question, channel), 120)
+
+        @mlflow.trace(name="diagnostic_trace")
+        def _one_trace() -> str:
+            with mlflow.start_span(name="child") as span:
+                span.set_outputs({"ok": True})
+            return mlflow.get_current_active_span().trace_id
+
+        def _steps(trace) -> int:
+            if trace is None:
+                raise LookupError("the trace was not found")
+            return len(trace.search_spans(name="child"))
+
+        def _judge() -> None:
+            problem = evals.judge_problem(client, settings.get("models.judge_endpoint"))
+            if problem:
+                raise RuntimeError(problem)
+
+        ok, trace_id = evals.timed("2. a trace is written", _one_trace, 60)
+        evals.timed("3. pending traces are sent to storage", mlflow.flush_trace_async_logging, 120)
+        if ok:
+            ok, found = evals.timed("4. that trace is read back by its id", lambda: mlflow.get_trace(trace_id), 120)
+            if ok:
+                evals.timed("5. its steps are read", lambda: _steps(found), 60)
+        evals.timed("6. recent traces are searched (through the SQL warehouse)",
+                    lambda: len(mlflow.search_traces(max_results=1, return_type="list")), 180)
+        evals.timed("7. the judge model answers one question", _judge, 90)
+        print(f"DIAG: 8. the check itself, on {len(cases)} question(s), starts now", flush=True)
+    started_at = time.time()
     with mlflow.start_run(run_name=f"{cfg.bot_id}-{channel}-{a.trigger or 'manual'}") as run:
         mlflow.set_tags({"bot_id": cfg.bot_id, "release_id": release_id, "channel": channel,
                          "platform_version": PLATFORM_VERSION, "git_commit": git_commit,
                          "trigger": a.trigger or "manual"})
         mlflow.genai.evaluate(data=records, predict_fn=make_predict(cfg, channel, p, chunks),
                               scorers=build_scorers(cfg, allowed, chunks), model_id=model_id)
+        if DIAGNOSE:
+            print(f"DIAG: 8. asking and scoring finished in {time.time() - started_at:.1f}s", flush=True)
         scored = read_scores(run.info.run_id)
         rows = [scored.get(c["question"], ({}, {}))[0] for c in cases]
+        if DIAGNOSE:
+            print(f"DIAG: 9. scores read back in {time.time() - started_at:.1f}s from the start; "
+                  f"{sum(1 for r in rows if r)} of {len(rows)} question(s) have scores", flush=True)
         metrics, zero = evals.aggregate(rows), evals.zero_failures(rows)
         rel = sql.query(f"SELECT safety_override_by FROM {settings.fq('releases')} WHERE release_id = :r",
                         {"r": release_id})
@@ -228,7 +286,9 @@ for bot in bots:
             (["citation_accuracy"] if in_scope else []) + \
             (["refusal_accuracy"] if any(c["kind"] == "out_of_scope" for c in cases) else []) + \
             (["hit_at_1", "hit_at_3", "hit_at_5", "mrr"] if any(c.get("source_doc_id") for c in in_scope) else [])
-        gate = evals.gate(metrics, thresholds, zero, zero_checks, n_in_scope, 1 if a.limit else min_cases, override,
+        # "Enough questions" is about how many are approved, not how many of them this check sampled.
+        gate = evals.gate(metrics, thresholds, zero, zero_checks, n_in_scope if a.limit else approved_in_scope,
+                          1 if a.limit else min_cases, override,
                           required=[r for r in required if r in thresholds], unscored=sum(1 for r in rows if not r))
         mlflow.set_tags({"passed": str(gate.passed)})
         mlflow.log_metrics({f"gate_{k}": v for k, v in metrics.items()})
@@ -242,7 +302,8 @@ for bot in bots:
         {"id": run_id, "b": cfg.bot_id, "rel": release_id, "ch": channel, "t": a.trigger or "manual",
          "pv": PLATFORM_VERSION, "gc": git_commit, "cv": bot["config_version"],
          "m": json.dumps({"metrics": metrics, "zero_failures": zero, "failures": gate.failures,
-                          "n_cases": len(cases), "mlflow_run_id": run.info.run_id, "per_case": [
+                          "n_cases": len(cases), "n_approved": n_approved, "mlflow_run_id": run.info.run_id,
+                          "per_case": [
                               {"eval_id": c["eval_id"], "question": c["question"],
                                "scores": scored.get(c["question"], ({}, {}))[0],
                                "rationales": scored.get(c["question"], ({}, {}))[1]} for c in cases]}),
@@ -258,5 +319,8 @@ for bot in bots:
     elif channel == "live" and not a.limit:
         cp.resolve_alerts(cfg.bot_id, "eval_regression")
     print(cfg.bot_id, channel, "PASSED" if gate.passed else "FAILED", metrics, zero, gate.failures)
-    if a.limit and not gate.passed:  # the promote job treats a failed smoke test as a failure
+    if DIAGNOSE:
+        faulthandler.cancel_dump_traceback_later()
+        print("DIAG: done. Nothing was recorded as a quality result.", flush=True)
+    elif a.limit and not gate.passed:  # the promote job treats a failed smoke test as a failure
         raise SystemExit(f"Smoke test failed for {cfg.bot_id}: {gate.failures}")

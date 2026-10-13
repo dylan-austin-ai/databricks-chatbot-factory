@@ -246,3 +246,70 @@ def test_each_question_of_the_check_is_one_trace_and_the_limits_come_first():
     assert predict.index("@mlflow.trace") < predict.index("mlflow.start_span") < predict.index("update_current_trace")
     assert source.index("evals.check_limits(settings)") < source.index("evals.judge_problem(") \
         < source.index("mlflow.genai.evaluate(")
+
+
+# --- which questions a check uses, and the diagnostic run -----------------------------------------------
+
+def _case(i, doc, kind="in_scope"):
+    return {"eval_id": f"e{i:03d}", "question": f"Question {i}?", "kind": kind,
+            "source_doc_id": doc if kind == "in_scope" else None}
+
+
+def test_a_big_question_set_is_checked_on_a_fixed_sample_spread_over_the_documents():
+    from factory import evals
+
+    cases = [_case(i, f"doc{i % 104}") for i in range(290)] + [_case(300 + i, None, "out_of_scope") for i in range(18)] \
+        + [_case(400 + i, None, "feedback") for i in range(4)]
+    assert len(cases) == 312
+    sample = evals.sample_cases(cases, 50)
+    assert len(sample) == 50 and evals.sample_cases(cases, 50) == sample          # the same ones every time
+    assert evals.sample_cases(list(reversed(cases)), 50) == [c for c in reversed(cases) if c in sample]   # whatever the order
+    kinds = [c["kind"] for c in sample]
+    assert kinds.count("out_of_scope") == 5 and kinds.count("feedback") == 4      # rare kinds keep a handful
+    docs = [c["source_doc_id"] for c in sample if c["kind"] == "in_scope"]
+    assert len(docs) == 41 and len(set(docs)) == 41                               # one per document, no repeats
+    assert [c["eval_id"] for c in sample] == sorted(c["eval_id"] for c in sample)  # in the order they came
+    assert evals.sample_cases(cases[:40], 50) == cases[:40] and evals.sample_cases(cases, 0) == cases   # 0 = all
+
+
+def test_each_diagnostic_step_reports_how_it_went(capsys):
+    import time
+
+    from factory import evals
+
+    assert evals.timed("a quick step", lambda: 7, 5) == (True, 7)
+
+    def broken():
+        raise PermissionError("PERMISSION_DENIED: no CAN_USE on warehouse\nmore detail")
+
+    assert evals.timed("a step that fails", broken, 5) == (False, None)
+    assert evals.timed("a step that hangs", lambda: time.sleep(3), 1) == (False, None)
+    said = capsys.readouterr().out.splitlines()
+    assert said[0].startswith("DIAG: a quick step: ok in ")
+    assert said[1].startswith("DIAG: a step that fails: FAILED in ") and said[1].endswith(
+        "PermissionError: PERMISSION_DENIED: no CAN_USE on warehouse")
+    assert said[2] == "DIAG: a step that hangs: STILL WAITING after 1s (this is where it stalls)"
+
+
+def test_the_diagnostic_run_is_wired_into_the_job_and_enough_questions_counts_the_approved_ones():
+    import pathlib
+
+    import yaml
+
+    root = pathlib.Path(__file__).resolve().parents[1]
+    source = (root / "jobs" / "run_evals.py").read_text()
+    assert 'os.environ["MLFLOW_GENAI_EVAL_MAX_WORKERS"] = os.environ["MLFLOW_GENAI_EVAL_MAX_SCORER_WORKERS"] = "1"' in source
+    assert "faulthandler.dump_traceback_later(90, repeat=True" in source and "cancel_dump_traceback_later()" in source
+    for step in ("1. the chatbot answers one question", "4. that trace is read back by its id",
+                 "6. recent traces are searched", "7. the judge model answers one question"):
+        assert step in source, step
+    # sampling must not make "at least 50 approved questions" fail: the rule counts what is approved
+    assert "n_in_scope if a.limit else approved_in_scope" in source
+    assert source.index("approved_in_scope = sum(") < source.index("evals.sample_cases(cases")
+    job = yaml.safe_load((root / "resources" / "jobs.yml").read_text())["resources"]["jobs"]["run_evals"]
+    assert {"limit", "diagnose"} <= {p["name"] for p in job["parameters"]}
+    params = job["tasks"][0]["spark_python_task"]["parameters"]
+    assert "--limit={{job.parameters.limit}}" in params and "--diagnose={{job.parameters.diagnose}}" in params
+    done = new("TERMINATED", "SUCCESS", start=1, end=2)
+    done.tasks = [NS(task_key="evals", run_id=55, state=None, status=done.status)]
+    assert jobruns.snapshot(done)["task_run_id"] == 55                 # so its output can be read afterwards

@@ -150,6 +150,9 @@ if cand:
     else:
         data = json.loads(ev["metrics_json"])
         th, m = s.thresholds(), data.get("metrics", {})
+        if int(data.get("n_approved") or 0) > int(data.get("n_cases") or 0):
+            st.caption(f"Checked on {data['n_cases']} of your {data['n_approved']} approved questions: a fixed sample "
+                       "spread across your documents and kinds of question, the same ones at every check.")
         (st.success if passed else st.error)(
             "**The quality check passed.** Every result below meets its target." if passed else
             "**The quality check didn't pass.** The results marked **Below** need work; what to do about each is "

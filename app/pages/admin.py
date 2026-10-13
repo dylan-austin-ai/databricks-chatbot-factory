@@ -17,7 +17,8 @@ import streamlit as st
 import yaml
 
 from common import (JOB_IDS, STATE_LABEL, all_bots, app_client, bot_config, cp, current_user, forget, fresh_sql,
-                    has_usage_policy, is_admin, open_alerts, run_job, settings, soft, sql, technical_details)
+                    has_usage_policy, is_admin, open_alerts, run_job, run_log, settings, soft, sql, technical_details,
+                    watch_job)
 from factory.explain import help_text
 from factory.config import DEFAULT_JUDGES, DEFAULT_OBSERVABILITY
 from factory.gateway import ui_checklist
@@ -462,6 +463,34 @@ if section == "Setup checklist":  # Setup checklist: Databricks steps with no AP
         st.caption("Set on each model service in AI Gateway: rate limits, inference table, and guardrail policies "
                    "with their phase and mode.")
         st.dataframe(pd.DataFrame(ui_checklist(s)), hide_index=True, width="stretch")
+    st.markdown("**Diagnose the quality check**")
+    st.caption("For when a quality check stalls or stops. A small controlled run: three questions, one at a time. "
+               "It times each thing the check depends on (the chatbot, writing a trace, reading it back, the judge "
+               "model) and, every 90 seconds it is still going, prints what each part of the job is waiting on. It "
+               "records no quality result and takes a few minutes.")
+    testable = {b["bot_id"]: b["display_name"] for b in all_bots() if b.get("candidate_release_id")}
+    if not testable:
+        st.caption("No chatbot has a test version to run it on yet.")
+    else:
+        chosen = st.selectbox("Chatbot to run it on", list(testable), format_func=testable.get, key="diagnose_bot")
+        diagnostic = watch_job("evals_diagnose", chosen)
+        if st.button("Diagnostic running…" if diagnostic.active else "Run the diagnostic", disabled=diagnostic.active,
+                     key="run_diagnostic"):
+            run_job("evals", bot_id=chosen, trigger="diagnose", channel="candidate", limit="3", diagnose="true")
+            st.rerun()
+        if diagnostic.state in ("succeeded", "failed"):
+            log = run_log(diagnostic)
+            steps = [line for line in log.splitlines() if line.startswith("DIAG:")]
+            st.markdown("**What the last diagnostic found**")
+            st.code("\n".join(steps) or "The run printed no diagnostic lines, or its output can't be read from here. "
+                    "Open the run in Databricks to see it.", language=None)
+            st.caption("A line saying **STILL WAITING** is where the check stalls. **FAILED** lines carry the reason.")
+            if log:
+                with st.expander("Everything the run printed (for whoever maintains the app)"):
+                    st.caption("Includes, for a run that was still going after 90 seconds, what each thread was "
+                               "doing at that moment (the blocks starting with \"Thread 0x\").")
+                    st.code(log[-30000:], language=None)
+
     st.markdown("**Check that the warehouse accepts batched writes**")
     st.caption("Uploads, audit entries and saved test questions send many rows in one statement. This reads two "
                "rows that way and writes nothing. Run it once after the first deploy, and again after a "

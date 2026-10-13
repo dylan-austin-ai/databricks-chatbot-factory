@@ -130,9 +130,12 @@ with c1.container(border=True):
         st.rerun()
 with c2.container(border=True):
     st.markdown("**Ready to see how the chatbot does?**")
-    st.caption("Asks the chatbot every approved question and scores the answers. It runs by itself at the end of "
-               "every update of the test version; this starts it on demand. The results appear on the **Launch** "
-               "page.")
+    cap = int(settings().get("quality.check.max_questions", 50) or 0)
+    st.caption("Asks the chatbot the approved questions and scores the answers"
+               + (f" (a fixed sample of {max(cap, n_req)} spread across your documents, when more are approved)"
+                  if cap else "")
+               + ". It runs by itself at the end of every update of the test version; this starts it on demand. The "
+                 "results appear on the **Launch** page.")
     has_version = bool(bot.get("candidate_release_id"))
     checking = watch_job("evals", cfg.bot_id)   # real progress while it runs; what to do if it stopped
     updating = update_in_progress(job_statuses(cfg.bot_id))   # an update ends with a check of its own
