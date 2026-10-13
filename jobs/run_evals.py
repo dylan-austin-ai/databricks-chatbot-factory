@@ -164,6 +164,13 @@ for bot in bots:
                       "AND kind IN ('in_scope', 'out_of_scope', 'feedback') ORDER BY difficulty, eval_id")
     if a.limit:
         cases = [c for c in cases if c["kind"] == "in_scope"][: int(a.limit)]
+    # This also runs by itself at the end of every setup and every update of the test version.
+    # Until enough questions are approved such a check can only fail on the count, after asking
+    # and judging every question, so it is left for the update that follows the approvals. A
+    # check someone asked for always runs.
+    if a.trigger in ("docs_changed", "provisioned") and len(cases) < min_cases:
+        print(f"{cfg.bot_id}: {len(cases)} approved test question(s), {min_cases} needed; automatic check skipped")
+        continue
     records = [evals.dataset_record(c) for c in cases]
 
     try:  # golden set mirrored as a native UC evaluation dataset (browse/compare in MLflow)

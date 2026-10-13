@@ -599,3 +599,39 @@ def test_starting_a_job_notes_its_run_so_every_page_can_follow_it(workspace, mon
         ("hr_bot", "ingest_publish", 41), ("hr_bot", "rollback", 41)]
     assert noted[0]["actor"] == "ana@corp.com"
     assert common.run_job("ingest", bot_id="all") == 41 and len(noted) == 2      # platform-wide runs aren't noted
+
+
+def test_launch_says_when_the_search_method_was_chosen_and_that_it_is_not_the_quality_check(workspace):
+    common, wh, _ = workspace(bots=[CHECKABLE])
+    wh.on(r"_platform\.releases WHERE bot_id", [release("hr_bot-r0001", "candidate")])
+    wh.on(r"strategy_results", [{"explanation": 'We tested 5 ways of searching your documents. "Meaning + keyword '
+                                                'search" worked best.', "seconds_ago": str(3 * 86400 + 40)}])
+    at = run("launch", bot_id="hr_bot")
+    assert problems(at) == []
+    assert any(i.value.startswith("**Search method, chosen automatically 3 days ago.** We tested 5 ways")
+               for i in at.info)
+    text = page_text(at)
+    assert "This is not the quality check" in text and "The chatbot doesn't answer anything in this step" in text
+    assert "runs by itself at the end of every update of the test version once 50 questions are approved" in text
+
+
+def test_an_update_of_the_test_version_shows_its_stage_and_locks_the_manual_check(workspace):
+    common, wh, jobs = workspace(bots=[CHECKABLE])
+    wh.on(r"_platform\.releases WHERE bot_id", [release("hr_bot-r0001", "candidate")])
+    update = job_run("RUNNING", started_ago_s=480)
+    task = lambda key, state, code=None: NS(task_key=key, state=None, status=NS(   # noqa: E731
+        state=NS(value=state), termination_details=NS(code=NS(value=code), message=None) if code else None))
+    update.tasks = [task("ingest", "TERMINATED", "SUCCESS"), task("compare_strategies", "TERMINATED", "SUCCESS"),
+                    task("evals", "RUNNING")]
+    started_job(common, wh, "ingest_publish", update)
+    at = run("launch", bot_id="hr_bot")
+    assert problems(at) == []
+    assert "update of the test version is running: step 3 of 3 (the quality check), 8 minutes so far" in \
+        at.get("progress")[0].proto.text
+    assert ("Runs when the update finishes", True) in [(b.label, b.disabled) for b in at.button]
+    assert "A quality check runs by itself as the last step of every update" in page_text(at)
+    assert "The quality check is running. **Launch** shows how far along it is" in page_text(at)   # not "Your turn"
+
+    at = run("test_questions", bot_id="hr_bot")                       # the same lock on the questions page
+    assert problems(at) == [] and ("Runs when the update finishes", True) in [(b.label, b.disabled) for b in at.button]
+    assert jobs == []

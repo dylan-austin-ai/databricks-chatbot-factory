@@ -62,6 +62,9 @@ class RunStatus:
     message: str = ""        # Databricks' own words when it stopped with an error
     url: str = ""            # the run's page in Databricks, for MLOps
     by: str = ""             # who started it
+    step: int = 0            # for a job made of several tasks: the one it is on, or stopped at (1-based)
+    steps: int = 0           # how many tasks the job has
+    task: str = ""           # that task's key
 
     @property
     def active(self) -> bool:
@@ -72,9 +75,37 @@ def _word(value) -> str:
     return str(getattr(value, "value", value) or "").upper()
 
 
+# What each task of the factory's jobs is doing, in words for the people waiting on it.
+TASK_WHAT = {"provision": "setting up the chatbot", "ingest": "updating the documents and sections",
+             "compare_strategies": "choosing the search method", "evals": "the quality check",
+             "first_eval": "the quality check"}
+
+
+def _stage(run, state: str) -> tuple[int, int, str]:
+    """Which task a multi-task run is on: (position, how many, task key). For a run that stopped
+    it is the task that failed; for one still going, the first task that hasn't finished."""
+    tasks = list(getattr(run, "tasks", None) or [])
+    if len(tasks) < 2:
+        return 0, len(tasks), ""
+    states = [_one(t)["state"] for t in tasks]
+    wanted = (FAILED,) if state == FAILED else (RUNNING, WAITING)
+    for want in wanted:
+        if want in states:
+            i = states.index(want)
+            return i + 1, len(tasks), str(getattr(tasks[i], "task_key", "") or "")
+    return 0, len(tasks), ""
+
+
 def snapshot(run) -> dict:
-    """A Jobs API run reduced to plain values: state, start and end (ms), message and page URL.
-    Handles both shapes the API returns (the newer `status` and the older `state`)."""
+    """A Jobs API run reduced to plain values: state, start and end (ms), message, page URL and,
+    for a job made of several tasks, which one it is on. Handles both shapes the API returns (the
+    newer `status` and the older `state`)."""
+    snap = _one(run)
+    snap["step"], snap["steps"], snap["task"] = _stage(run, snap["state"])
+    return snap
+
+
+def _one(run) -> dict:
     life = _state(run)
     details = getattr(getattr(run, "status", None), "termination_details", None)
     old = getattr(run, "state", None)
@@ -109,13 +140,16 @@ def typical_seconds(runs, default: int) -> int:
 
 
 def span(seconds: float) -> str:
-    """A length of time the way people say it: "under a minute", "6 minutes", "1 hour 5 minutes"."""
+    """A length of time the way people say it: "under a minute", "6 minutes", "1 hour 5 minutes",
+    "3 days"."""
     minutes = int(seconds // 60)
     if minutes < 1:
         return "under a minute"
     if minutes < 60:
         return f"{minutes} minute{'' if minutes == 1 else 's'}"
     hours, rest = divmod(minutes, 60)
+    if hours >= 48:
+        return f"{hours // 24} days"
     return f"{hours} hour{'' if hours == 1 else 's'}" + (f" {rest} minute{'' if rest == 1 else 's'}" if rest else "")
 
 
@@ -130,6 +164,8 @@ def progress(status: RunStatus, now_ms: float, typical_s: int) -> float:
 def sentence(status: RunStatus, what: str, now_ms: float, typical_s: int) -> str:
     """One plain sentence about where a run stands. `what` names the job, e.g. "quality check"."""
     who = f" by {status.by}" if status.by else ""
+    stage = (f"step {status.step} of {status.steps} ({TASK_WHAT.get(status.task, status.task.replace('_', ' '))})"
+             if status.step and status.steps > 1 else "")
     if status.state == WAITING:
         waited = span((now_ms - status.asked_ms) / 1000) if status.asked_ms else "a moment"
         return (f"The {what} was started{who} and is waiting its turn ({waited} so far). It begins as soon as "
@@ -137,10 +173,11 @@ def sentence(status: RunStatus, what: str, now_ms: float, typical_s: int) -> str
     if status.state == RUNNING:
         elapsed = (now_ms - (status.started_ms or status.asked_ms)) / 1000
         slow = " This one is taking longer than usual." if elapsed > typical_s * 1.5 else ""
-        return f"The {what} is running: {span(elapsed)} so far. It usually takes about {span(typical_s)}.{slow}"
+        return (f"The {what} is running: {stage + ', ' if stage else ''}{span(elapsed)} so far. It usually takes "
+                f"about {span(typical_s)}.{slow}")
     when = span(max(0, now_ms - (status.ended_ms or status.asked_ms)) / 1000) + " ago"
     if status.state == FAILED:
-        return f"The last {what} stopped with an error {when}."
+        return f"The last {what} stopped with an error {when}{', at ' + stage if stage else ''}."
     if status.state == SUCCEEDED:
         return f"The last {what} finished {when}."
     if status.state == UNKNOWN:

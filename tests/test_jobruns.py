@@ -29,7 +29,7 @@ def test_a_run_is_read_the_same_from_either_shape_the_api_returns():
         assert jobruns.snapshot(run)["state"] == state, run
     failed = jobruns.snapshot(new("TERMINATED", "RUN_EXECUTION_ERROR", "Task failed: x", start=5, end=9))
     assert failed == {"state": FAILED, "started_ms": 5, "ended_ms": 9, "message": "Task failed: x",
-                      "url": "https://host/run/1"}
+                      "url": "https://host/run/1", "step": 0, "steps": 0, "task": ""}
     assert "another run of the same job" in jobruns.snapshot(old("SKIPPED"))["message"]
     assert len(jobruns.snapshot(old("TERMINATED", "FAILED", "x" * 5000))["message"]) == 500
 
@@ -84,3 +84,33 @@ def test_a_running_check_is_nobodys_turn():
     passed = journey.steps("testing", {"approved": 4}, {"total": 60, "approved": 55}, 50,
                            {"release_id": "r1", "eval_passed": "true"}, False, checking=True)[4]
     assert passed.status == journey.DONE          # a re-run in progress doesn't undo a pass
+
+
+def task(key, state, code=None):
+    details = NS(code=NS(value=code)) if code else None
+    return NS(task_key=key, status=NS(state=NS(value=state), termination_details=details), state=None)
+
+
+def test_a_job_made_of_several_tasks_says_which_one_it_is_on():
+    going = new("RUNNING", start=1)
+    going.tasks = [task("ingest", "TERMINATED", "SUCCESS"), task("compare_strategies", "RUNNING"), task("evals", "BLOCKED")]
+    snap = jobruns.snapshot(going)
+    assert (snap["state"], snap["step"], snap["steps"], snap["task"]) == (RUNNING, 2, 3, "compare_strategies")
+    now = 100 * MIN
+    said = jobruns.sentence(RunStatus(RUNNING, 1, started_ms=now - 6 * MIN, step=3, steps=3, task="evals"),
+                            "update of the test version", now, 17 * 60)
+    assert said == ("The update of the test version is running: step 3 of 3 (the quality check), 6 minutes so far. "
+                    "It usually takes about 17 minutes.")
+
+    stopped = new("TERMINATED", "RUN_EXECUTION_ERROR", "Task evals failed", start=1, end=2)
+    stopped.tasks = [task("ingest", "TERMINATED", "SUCCESS"), task("compare_strategies", "TERMINATED", "SUCCESS"),
+                     task("evals", "TERMINATED", "RUN_EXECUTION_ERROR")]
+    snap = jobruns.snapshot(stopped)
+    assert (snap["state"], snap["step"], snap["task"]) == (FAILED, 3, "evals")
+    assert jobruns.sentence(RunStatus(FAILED, 1, ended_ms=now - 2 * MIN, step=3, steps=3, task="evals"), "update", now, 0) \
+        == "The last update stopped with an error 2 minutes ago, at step 3 of 3 (the quality check)."
+
+    single = new("RUNNING", start=1)
+    single.tasks = [task("evals", "RUNNING")]
+    assert jobruns.snapshot(single)["step"] == 0                       # one task: no "step 1 of 1"
+    assert jobruns.span(3 * 86400 + 5) == "3 days" and jobruns.span(30 * 3600) == "30 hours"

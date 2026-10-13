@@ -43,7 +43,7 @@ failure. `releases`, `release_chunks` and `index_history` reconstruct the index 
 | `jobs/` | setup_platform, setup_observability, provision, ingest (+ per-bot file-arrival triggers), compare_strategies, run_evals (`mlflow.genai.evaluate`), promote, monitor, prod_judging, drift, optimize_prompt, reindex, git_sync, maintenance |
 | `sql/` | Control-plane DDL, per-bot DDL, dashboard views, ABAC governance, metric views, system-table cost views |
 | `resources/`, `databricks.yml` | Declarative Automation Bundle (qa and prod targets, direct deployment engine) |
-| `tests/` | 269 unit tests for the pure logic, and 71 that run every page of the app against a pretend workspace (these need the `app` extra) |
+| `tests/` | 270 unit tests for the pure logic, and 73 that run every page of the app against a pretend workspace (these need the `app` extra) |
 
 ## Prerequisites
 
@@ -151,6 +151,9 @@ that run stands (`common.watch_job`, `factory/jobruns.py`): waiting, running wit
 bar measured against how long the job's recent runs took, or stopped with an error and what to
 do. The bar updates itself every 15 seconds, the page reloads once when the job ends, and the
 button that started it stays locked until then, for everyone and across a browser refresh.
+An update of the test version is three steps (update, choose the search method, quality check),
+shown as such, and the manual quality check is locked while one is going because a check is
+already on its way.
 
 Streamlit runs a page again on every click, so the app avoids asking twice:
 

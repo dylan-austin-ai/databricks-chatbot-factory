@@ -5,7 +5,7 @@ documents."""
 import pandas as pd
 import streamlit as st
 
-from common import cp, current_user, pick_bot, run_job, settings, sql, watch_job
+from common import cp, current_user, job_statuses, pick_bot, run_job, settings, sql, update_in_progress, watch_job
 from factory import golden
 from factory.explain import help_text
 from factory.ingestion import BotPaths
@@ -101,7 +101,8 @@ def save(change: dict, message: str) -> None:
 
 b1, b2, _ = st.columns([1, 1, 2])
 if b1.button("Save changes", type="primary", disabled=not unsaved, width="stretch"):
-    save(delta, f"Saved: {pending}. The test version is being updated; this takes a few minutes.")
+    save(delta, f"Saved: {pending}. The test version is being updated, and a quality check runs at the end of "
+                "the update once enough questions are approved. Progress is shown at the top of this page.")
 
 not_yet = [r for r in rows if not r["approved"]]
 with b2.popover(f"Approve all {len(not_yet)} remaining", disabled=not not_yet or unsaved, width="stretch"):
@@ -129,13 +130,16 @@ with c1.container(border=True):
         st.rerun()
 with c2.container(border=True):
     st.markdown("**Ready to see how the chatbot does?**")
-    st.caption("Asks the chatbot every approved question and scores the answers. The results appear on the "
-               "**Launch** page.")
+    st.caption("Asks the chatbot every approved question and scores the answers. It runs by itself at the end of "
+               "every update of the test version; this starts it on demand. The results appear on the **Launch** "
+               "page.")
     has_version = bool(bot.get("candidate_release_id"))
     checking = watch_job("evals", cfg.bot_id)   # real progress while it runs; what to do if it stopped
-    if st.button("Quality check running…" if checking.active else "Run the quality check", key="run_check",
-                 disabled=checking.active or n_ok < n_req or not has_version,
-                 help=None if checking.active else f"Available once {n_req} questions are approved." if n_ok < n_req
+    updating = update_in_progress(job_statuses(cfg.bot_id))   # an update ends with a check of its own
+    busy = "Quality check running…" if checking.active else "Runs when the update finishes" if updating else ""
+    if st.button(busy or "Run the quality check", key="run_check",
+                 disabled=bool(busy) or n_ok < n_req or not has_version,
+                 help=None if busy else f"Available once {n_req} questions are approved." if n_ok < n_req
                  else None if has_version else "There is no test version to check yet. One is built a few minutes "
                                                "after you approve documents or save questions."):
         run_job("evals", bot_id=cfg.bot_id, trigger="manual", channel="candidate")

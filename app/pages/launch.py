@@ -7,7 +7,8 @@ import json
 import streamlit as st
 
 from common import (METRIC_LABEL, PAGES, RETRIEVAL_METRICS, STATE_LABEL, cp, current_user, fresh_sql, is_admin,
-                    job_statuses, pick_bot, read_many, run_job, settings, soft, sql, user_groups, watch_job)
+                    job_statuses, pick_bot, read_many, run_job, settings, soft, sql, update_in_progress,
+                    user_groups, watch_job)
 from factory import jobruns, journey
 from factory.config import MAX_TESTERS
 from factory.explain import help_text
@@ -50,8 +51,8 @@ else:
                       "WHERE status <> 'superseded'", None),
         "questions": (f"SELECT count(*) AS questions, count_if(approved) AS questions_ok "
                       f"FROM {p.t('golden_set')} WHERE active", None),
-        "search": (f"""SELECT explanation FROM {s.fq('strategy_results')} WHERE bot_id = :b AND chosen
-                       ORDER BY ts DESC LIMIT 1""", b),
+        "search": (f"""SELECT explanation, unix_timestamp(current_timestamp()) - unix_timestamp(ts) AS seconds_ago
+                       FROM {s.fq('strategy_results')} WHERE bot_id = :b AND chosen ORDER BY ts DESC LIMIT 1""", b),
         "checks": (f"""SELECT * FROM {s.fq('eval_runs')} WHERE run_id IN (
                          SELECT eval_run_id FROM {s.fq('releases')} WHERE release_id IN (:c, :l))""",
                    {"c": bot.get("candidate_release_id") or "", "l": bot.get("live_release_id") or ""}),
@@ -102,7 +103,8 @@ docs_count = {"reading": sum(d["status"] == "pending_review" and not d["readabil
 q = (found["questions"] or [{}])[0]
 needed = int(s.get("quality.min_golden_questions", 50))
 jobs_now = job_statuses(cfg.bot_id)   # where each background job stands, as Databricks reports it
-checking = jobs_now.get("evals", jobruns.RunStatus()).active
+updating = update_in_progress(jobs_now)   # an update of the test version ends with a quality check of its own
+checking = jobs_now.get("evals", jobruns.RunStatus()).active or bool(updating)
 path = journey.steps(state, docs_count, {"total": q.get("questions"), "approved": q.get("questions_ok")}, needed,
                      cand, bool(live), cfg.reviewer, is_reviewer, checking=checking)
 now = journey.next_step(state, path, bool(cand))
@@ -112,7 +114,8 @@ else:
     st.subheader("What to do next" + (" for the new version" if live else ""))
     st.caption("The steps to get this chatbot live. The one marked **Your turn** is what to do now.")
     checklist(path, journey.STATUS_LABEL, PAGES, here="launch")
-watch_job("ingest_publish", cfg.bot_id)   # the test version being rebuilt after a change, if it is
+for label in ("ingest", "ingest_questions", "ingest_publish"):   # the test version being updated, if it is
+    watch_job(label, cfg.bot_id)
 
 # Test version: checks and approval ------------------------------------------------------
 if cand:
@@ -120,19 +123,29 @@ if cand:
     st.caption("Only owners, the Reviewer and invited testers can use it. Try it on the **Chat** page with "
                "**Use the test version** switched on.")
     if found["search"]:
-        st.info(found["search"][0]["explanation"])
+        ago = jobruns.span(float(found["search"][0].get("seconds_ago") or 0))
+        st.info(f"**Search method, chosen automatically {ago} ago.** {found['search'][0]['explanation']}")
+        st.caption("This is not the quality check. Every time the test version is updated, each test question "
+                   "(approved or not) is run through the different ways of searching, and the one that finds the "
+                   "right document most often is kept. The chatbot doesn't answer anything in this step. The quality "
+                   "check comes after it: there the chatbot answers every approved question and the answers are "
+                   "scored.")
     ev = checks.get(cand.get("eval_run_id"))
     passed = str(cand.get("eval_passed")).lower() == "true"
     check = watch_job("evals", cfg.bot_id)   # progress while it runs; what to do if it stopped
+    if updating and not check.active:
+        st.caption("The test version is being updated (progress above). A quality check runs by itself as the last "
+                   "step of every update, so there is nothing to press: the results appear here when it finishes.")
+    busy = "Quality check running…" if check.active else "Runs when the update finishes" if updating else ""
     if not ev:
-        if not check.active:
+        if not busy:
             st.write("The quality check hasn't run on this version yet. It asks the chatbot every approved test "
-                     "question and scores the answers.")
+                     f"question and scores the answers. It runs by itself at the end of every update of the test "
+                     f"version once {needed} questions are approved, and you can start it here at any time.")
             if check.state == jobruns.SUCCEEDED:
                 st.warning("A quality check finished earlier but left no result for this version. Either the test "
                            "version has changed since, or that run found nothing to check. Run it again.")
-        if st.button("Quality check running…" if check.active else "Run the quality check", type="primary",
-                     disabled=check.active, key="run_check"):
+        if st.button(busy or "Run the quality check", type="primary", disabled=bool(busy), key="run_check"):
             start("evals", trigger="manual", channel="candidate")
     else:
         data = json.loads(ev["metrics_json"])
@@ -155,9 +168,8 @@ if cand:
                     st.markdown(f"- **{f}**  \n  What to do: {check_advice(f)}")
         else:
             st.caption("No wrong citations, no leaked content, no unmasked personal data.")
-        if (not passed or check.active) and st.button(
-                "Quality check running…" if check.active else "Run the quality check again", disabled=check.active,
-                key="run_check_again"):
+        if (not passed or busy) and st.button(busy or "Run the quality check again", disabled=bool(busy),
+                                              key="run_check_again"):
             start("evals", trigger="manual", channel="candidate")
         if str(ev["needs_safety_review"]).lower() == "true" and is_reviewer:
             unsafe = [c for c in data.get("per_case", []) if c["scores"].get("safety") == 0]

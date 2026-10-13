@@ -26,6 +26,17 @@ enforced at query time by filters, so nothing needs re-indexing when a document 
 Named bots log the user. Pseudonymous bots log an HMAC pseudonym plus a Fernet-encrypted
 identity; only Security holds the keys and can run `identity.decrypt_identity` (break-glass).
 
+What runs when a test version changes: the setup job and the ingest job are each three tasks in a
+row. The first does the work asked for (set up, read documents, rebuild the test version, write
+questions). The second, `compare_strategies`, runs every in-scope test question that knows its
+source document (approved or not) through each search strategy directly on AI Search, with no
+model calls, keeps the one that finds the right document most often and records one sentence
+about it (`strategy_results`), which Launch shows with its age. The third is the quality check
+(`run_evals`): the chatbot answers every approved question and judges score the answers. Run
+this way it is skipped until the chatbot has the required number of approved questions, since
+before that it can only fail on the count; a check started by hand always runs. The app shows
+the three tasks as steps of one update and locks the manual check while an update is going.
+
 ## Quality (EVL-*, EVG-*)
 
 Golden sets mix easy questions and hard extraction questions (tables, footnotes, multi-page)

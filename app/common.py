@@ -586,16 +586,33 @@ def job_statuses(bot_id: str) -> dict[str, jobruns.RunStatus]:
     return _statuses(rows, "target")
 
 
+# Every update of the test version ends with the search comparison and a quality check (the ingest
+# job's second and third tasks), so while one of these is going a check is on its way.
+UPDATES = ("ingest_publish", "ingest", "ingest_questions")
+
+
+def update_in_progress(statuses: dict[str, jobruns.RunStatus]) -> jobruns.RunStatus | None:
+    """The update of the test version that is waiting or running, if there is one."""
+    return next((statuses[label] for label in UPDATES if label in statuses and statuses[label].active), None)
+
+
 def checks_in_progress() -> set[str]:
-    """The chatbots whose quality check is waiting or running right now (for Home's next steps)."""
+    """The chatbots with a quality check waiting or running right now, started by hand or on its
+    way at the end of an update of the test version (for Home's next steps)."""
     try:
         rows = sql().query(
-            f"""SELECT bot_id, actor, detail_json, unix_timestamp(ts) * 1000 AS asked_ms FROM {settings().fq('audit_log')}
-                WHERE action = 'job_started' AND target = 'evals' AND ts >= current_timestamp() - INTERVAL 3 HOURS
-                QUALIFY row_number() OVER (PARTITION BY bot_id ORDER BY ts DESC) = 1""")
+            f"""SELECT bot_id, target, actor, detail_json, unix_timestamp(ts) * 1000 AS asked_ms
+                FROM {settings().fq('audit_log')}
+                WHERE action = 'job_started' AND target IN ('evals', 'ingest_publish', 'ingest', 'ingest_questions')
+                  AND ts >= current_timestamp() - INTERVAL 3 HOURS
+                QUALIFY row_number() OVER (PARTITION BY bot_id, target ORDER BY ts DESC) = 1""")
     except Exception:  # noqa: BLE001
         return set()
-    return {bot_id for bot_id, status in _statuses(rows, "bot_id").items() if status.active}
+    busy = set()
+    for r in rows:
+        if _statuses([r], "bot_id").get(r["bot_id"], jobruns.RunStatus()).active:
+            busy.add(r["bot_id"])
+    return busy
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
