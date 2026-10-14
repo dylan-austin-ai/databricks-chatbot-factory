@@ -476,6 +476,30 @@ def unexpected_nonanswers(kinds: list[str], outcomes: list[str]) -> dict[str, in
     return found
 
 
+def stale_sources(cases: list[dict], status_by_doc: dict[str, str]) -> list[tuple[dict, str]]:
+    """The test questions whose source document is gone or not in use (`status_by_doc`: each
+    current document's status), with what is wrong. Checked before anything is asked or scored."""
+    out = []
+    for c in cases:
+        doc = c.get("source_doc_id")
+        if not doc:
+            continue
+        status = status_by_doc.get(doc)
+        if status is None:
+            out.append((c, "its source document no longer exists"))
+        elif status != "approved":
+            out.append((c, f"its source document is {status.replace('_', ' ')}"))
+    return out
+
+
+def stale_message(stale: list[tuple[dict, str]], bot_id: str) -> str:
+    listed = "; ".join(f"{c['eval_id']} “{str(c.get('question', ''))[:60]}” ({why})" for c, why in stale[:20])
+    return (f"{len(stale)} approved test question(s) for {bot_id} point at a document that is missing or not in use, so "
+            "the check was stopped before anything was asked or scored. On Test questions, set each one's Source "
+            "document to a current document that supports its expected answer, or untick Approved: " + listed
+            + (f"; and {len(stale) - 20} more" if len(stale) > 20 else "") + ".")
+
+
 def withheld_summary(kinds: list[list[str]]) -> str:
     """Why answers were withheld as unverified, across a check: each cause with how many answers
     it applied to (one answer can have several), most common first."""

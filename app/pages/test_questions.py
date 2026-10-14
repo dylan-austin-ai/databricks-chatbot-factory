@@ -17,10 +17,15 @@ if not bot:
     st.stop()
 p, user = BotPaths(settings(), cfg.bot_id), current_user()
 
-latest = sql().query(f"""SELECT eval_id, kind, difficulty, origin, question, expected_answer, approved
-                         FROM {p.t('golden_set')} WHERE active ORDER BY kind, origin, question""")
+golden.ensure_review_note(sql(), p)
+latest = sql().query(f"""SELECT eval_id, kind, difficulty, origin, question, expected_answer, approved, source_doc_id,
+                                review_note FROM {p.t('golden_set')} WHERE active ORDER BY kind, origin, question""")
 for r in latest:
     r["approved"] = str(r["approved"]).lower() == "true"
+# The Source document column: documents in use by name, others with what is wrong with them.
+labels = golden.source_labels(sql().query(f"SELECT doc_id, doc_name, status FROM {p.t('manifest')} "
+                                          "WHERE status <> 'superseded' ORDER BY doc_name"))
+NO_SOURCE = "(none)"
 # The table's unsaved ticks and edits are remembered by row position. While there are any, keep
 # showing the rows they were made on: questions written in the background must not slide in
 # underneath and move a tick onto a different question.
@@ -59,9 +64,13 @@ if not rows:
     st.info("There are no questions yet. Press **Suggest questions from my approved documents** below, wait a few "
             "minutes, then press **Refresh** in the menu on the left. You can also type your own in the table.")
 
-df = pd.DataFrame(rows, columns=["eval_id", "kind", "difficulty", "origin", "question", "expected_answer", "approved"])
+df = pd.DataFrame(rows, columns=["eval_id", "kind", "difficulty", "origin", "question", "expected_answer", "approved",
+                               "source_doc_id", "review_note"])
 df["kind"] = df["kind"].map(lambda k: golden.KIND_LABEL.get(k, k))
+df["source"] = df["source_doc_id"].map(lambda d: labels.get(d, f"missing document {str(d)[:8]}") if d else NO_SOURCE)
+df = df.drop(columns=["source_doc_id"])
 df["delete"] = False
+in_use = sorted(name for doc_id, name in labels.items() if not name.endswith(")"))
 edited = st.data_editor(
     df, hide_index=True, width="stretch", num_rows="dynamic",
     key=editor_key,
@@ -79,10 +88,21 @@ edited = st.data_editor(
         "expected_answer": st.column_config.TextColumn("Expected answer", width="large",
                                                        help="Leave empty for questions the chatbot should refuse."),
         "approved": st.column_config.CheckboxColumn("Approved", default=False),
+        "source": st.column_config.SelectboxColumn(
+            "Source document", options=[NO_SOURCE] + in_use + sorted(set(df["source"]) - set(in_use) - {NO_SOURCE}),
+            default=NO_SOURCE,
+            help="The document whose text supports the expected answer. Choose a document in use: a question "
+                 "pointing at an archived or missing one stops the quality check before it scores anything."),
+        "review_note": st.column_config.TextColumn("Needs review because", disabled=True, width="medium"),
         "delete": st.column_config.CheckboxColumn("Remove", default=False),
     })
-
-delta = golden.changes(rows, edited.to_dict("records"))
+by_label = {name: doc_id for doc_id, name in labels.items()}
+records = [{**r, "source_doc_id": by_label.get(r.get("source")) if r.get("source") not in (None, NO_SOURCE) else None}
+           for r in edited.to_dict("records")]
+for r in records:   # a document the page couldn't name keeps the id it had
+    if r.get("source", "").startswith("missing document "):
+        r["source_doc_id"] = next((o["source_doc_id"] for o in rows if o["eval_id"] == r.get("eval_id")), None)
+delta = golden.changes(rows, records)
 pending = golden.counts(delta)
 unsaved = pending != "nothing to save"
 if unsaved:
@@ -95,7 +115,9 @@ def save(change: dict, message: str) -> None:
     """Write only what changed (at most three statements), then rebuild the test version once."""
     for statement, params in golden.save_statements(p, change, user):
         sql().execute(statement, params)
-    cp().audit(user, cfg.bot_id, "golden_set_saved", "", {k: len(v) for k, v in change.items()})
+    cp().audit(user, cfg.bot_id, "golden_set_saved", "",   # which questions, so the history can be followed
+               {"added": len(change["add"]), "changed": [r["eval_id"] for r in change["update"]],
+                "removed": change["remove"]})
     run_job("ingest", bot_id=cfg.bot_id, publish_only="true")  # new question set on the test version
     st.session_state["questions_saved"] = message
     st.session_state["questions_round"] = st.session_state.get("questions_round", 0) + 1  # a clean table

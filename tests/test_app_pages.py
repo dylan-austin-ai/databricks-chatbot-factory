@@ -739,3 +739,19 @@ def test_the_diagnostic_can_run_a_batch_at_the_checks_normal_pace(workspace):
     assert ("evals", {"bot_id": "hr_bot", "trigger": "diagnose", "channel": "candidate", "limit": "10",
                       "diagnose": "paced"}) in jobs
     assert common.job_label("evals", {"diagnose": "paced"}) == "evals_diagnose"
+
+
+def test_test_questions_show_each_questions_source_document_and_why_it_needs_review(workspace):
+    common, wh, _ = workspace(bots=[CHECKABLE])
+    wh.on(r"FROM `chatbots_test`\.`hr_bot`\.`golden_set` WHERE active", [
+        {"eval_id": "e1", "kind": "in_scope", "difficulty": "easy", "origin": "generated", "question": "Coaching hours?",
+         "expected_answer": "Up to 4 hours.", "approved": "false", "source_doc_id": "old1",
+         "review_note": "Needs review: its source document was archived on 2026-10-14."}])
+    wh.on(r"SELECT doc_id, doc_name, status FROM `chatbots_test`\.`hr_bot`\.`manifest`", [
+        {"doc_id": "old1", "doc_name": "Coaching.pdf", "status": "archived"},
+        {"doc_id": "new1", "doc_name": "Coaching 2026.pdf", "status": "approved"}])
+    at = run("test_questions", bot_id="hr_bot")
+    assert problems(at) == []
+    table = at.dataframe[0].value
+    assert table.loc[0, "source"] == "Coaching.pdf (archived)"                   # what is wrong, by name
+    assert table.loc[0, "review_note"].startswith("Needs review: its source document was archived")

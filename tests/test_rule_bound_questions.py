@@ -56,7 +56,7 @@ def test_owners_see_and_can_choose_the_third_kind():
                            [{"eval_id": "e7", "question": "q", "expected_answer": "", "approved": True,
                              "kind": "Share documents, don't decide"}])
     assert delta["update"] == [{"eval_id": "e7", "question": "q", "expected_answer": "", "kind": "rule_bound",
-                                "approved": True}]
+                                "approved": True, "source_doc_id": None}]
     page = (ROOT / "app" / "pages" / "test_questions.py").read_text()
     assert "never make the decision or give the advice itself" in page
 

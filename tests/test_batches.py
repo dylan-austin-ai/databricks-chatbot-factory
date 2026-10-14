@@ -115,9 +115,10 @@ def test_only_the_differences_are_saved(settings):
                    "kind": "Should answer", "approved": True, "delete": False})
     edited.append({"eval_id": None, "question": "", "expected_answer": "", "kind": None, "approved": False})   # blank row
     delta = golden.changes(LOADED, edited)
-    assert delta["add"] == [{"question": "What about dental?", "expected_answer": "", "kind": "in_scope", "approved": True}]
+    assert delta["add"] == [{"question": "What about dental?", "expected_answer": "", "kind": "in_scope", "approved": True,
+                             "source_doc_id": None}]
     assert delta["update"] == [{"eval_id": "e1", "question": "How do I enroll?", "expected_answer": "Click Benefits.",
-                                "kind": "in_scope", "approved": True}]
+                                "kind": "in_scope", "approved": True, "source_doc_id": None}]
     assert delta["remove"] == ["e3"] and golden.counts(delta) == "1 added, 1 changed, 1 removed"
     statements = golden.save_statements(BotPaths(settings, "claims_chatbot"), delta, "ana@corp.com")
     assert [s.split()[0] for s, _ in statements] == ["INSERT", "MERGE", "UPDATE"]      # three, whatever the size
@@ -179,7 +180,8 @@ def test_empty_checkbox_cells_are_not_ticks():
                    "approved": nan, "delete": nan})
     delta = golden.changes(LOADED, edited)
     assert delta["update"] == [] and delta["remove"] == ["e2"]
-    assert delta["add"] == [{"question": "New one", "expected_answer": "", "kind": "in_scope", "approved": False}]
+    assert delta["add"] == [{"question": "New one", "expected_answer": "", "kind": "in_scope", "approved": False,
+                             "source_doc_id": None}]
 
 
 def test_in_list_is_a_plain_parameter_list():

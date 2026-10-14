@@ -10,7 +10,7 @@ from datetime import date
 
 from .config import PlatformSettings
 from .controlplane import ControlPlane
-from . import guardrails, sensitive
+from . import golden, guardrails, sensitive
 from .ingestion import BotPaths, archive_chunks_sql, chunk_archive_ddl, chunk_id_for
 from .sql import in_list, json_rows
 from .validation import ValidationResult, validate_file
@@ -128,6 +128,8 @@ class Documents:
              "ne": bool(no_expiry or not expires_at), "sc": security_scope, "geo": geo_scope})
         self.cp.audit(actor, bot_id, "doc_uploaded", doc_id,
                       {"name": file_name, "version": version, "source": source})
+        if prior:
+            self._questions_need_review(p, [doc_id], "replaced", actor)
         return res
 
     MANIFEST_BATCH = {"doc_id": "STRING", "doc_version": "INT", "doc_name": "STRING", "file_path": "STRING",
@@ -219,6 +221,8 @@ class Documents:
                 f"UPDATE {p.t('manifest')} SET status = 'superseded', is_active = false, "
                 f"updated_at = current_timestamp() WHERE concat(doc_id, '_v', doc_version) IN (SELECT k FROM {source})",
                 params)
+        if replaced:
+            self._questions_need_review(p, [k.rsplit("_v", 1)[0] for k in replaced], "replaced", actor)
         source, params = json_rows(rows, self.MANIFEST_BATCH)
         self.sql.execute(
             f"""INSERT INTO {p.t('manifest')} (doc_id, doc_version, doc_name, file_path, file_ext,
@@ -305,6 +309,7 @@ class Documents:
             "updated_at = current_timestamp() WHERE doc_id = :d AND status <> 'superseded'",
             {"r": reason, "d": doc_id})
         self.cp.audit(actor, bot_id, "doc_flagged", doc_id, {"reason": reason} if reason else {})
+        self._questions_need_review(p, [doc_id], "flagged", actor)
 
     def archive(self, bot_id, doc_id, actor):
         """Take the document out of the chatbot and keep it. Its flag reason stays, so a document
@@ -314,6 +319,7 @@ class Documents:
             f"UPDATE {p.t('manifest')} SET status = 'archived', is_active = false, "
             "updated_at = current_timestamp() WHERE doc_id = :d AND status <> 'superseded'", {"d": doc_id})
         self.cp.audit(actor, bot_id, "doc_archived", doc_id)
+        self._questions_need_review(p, [doc_id], "archived", actor)
 
     def restore(self, bot_id, doc_id, actor):
         """Bring an archived document back for a decision. It is not approved by restoring it:
@@ -493,6 +499,14 @@ class Documents:
                              "AND status <> 'superseded'", {"d": doc_id})[0]
         return row["doc_name"], self.w.files.download(row["file_path"]).contents.read()
 
+    def _questions_need_review(self, p: BotPaths, doc_ids: list[str], why: str, actor: str) -> None:
+        """The approved test questions that rely on these documents lose their approval until the
+        owner checks them, and the audit log keeps which ones and why."""
+        found = golden.flag_for_review(self.sql, p, doc_ids, why)
+        if found:
+            self.cp.audit(actor, p.bot_id, "questions_need_review", "",
+                          {"doc_ids": list(doc_ids), "eval_ids": found, "reason": why})
+
     def set_page_range(self, bot_id, doc_id, page_range: str | None, actor):
         """Re-parse with pages excluded (QA-11). Format: '1-3,5,7-40'."""
         import re
@@ -504,6 +518,7 @@ class Documents:
             "WHERE doc_id = :d AND status <> 'superseded'",
             {"r": page_range.replace(" ", "") if page_range else None, "d": doc_id})
         self.cp.audit(actor, bot_id, "doc_page_range_set", doc_id, {"page_range": page_range})
+        self._questions_need_review(p, [doc_id], "edited", actor)
 
     def save_override(self, bot_id, doc_id, text, actor):
         """Manual text correction (QA-11); takes priority over parser output."""
@@ -514,6 +529,7 @@ class Documents:
             f"INSERT INTO {p.t('parsed_elements')} VALUES (:d, CAST(:v AS INT), 'manual_override', "
             "NULL, :t, true, current_timestamp())", {"d": doc_id, "v": v, "t": text})
         self.cp.audit(actor, bot_id, "doc_override_saved", doc_id)
+        self._questions_need_review(p, [doc_id], "edited", actor)
 
     def current_override(self, bot_id: str, doc_id: str) -> dict | None:
         """The hand-typed text in use for this document's current version, if any: {text, saved_at}."""
@@ -559,6 +575,7 @@ class Documents:
                 f"UPDATE {p.t('manifest')} SET status = 'archived', is_active = false, "
                 f"updated_at = current_timestamp() WHERE status <> 'superseded' AND {chosen}", params)
             self.cp.audit_many(actor, bot_id, "doc_archived", [(d, None) for d in doc_ids])
+            self._questions_need_review(p, doc_ids, "archived", actor)
         elif action == "restore":
             self.sql.execute(
                 f"UPDATE {p.t('manifest')} SET "
@@ -583,6 +600,7 @@ class Documents:
                 except Exception:  # noqa: BLE001 - the table rows are gone; the job can't read it
                     pass
             self.cp.audit_many(actor, bot_id, "doc_hard_deleted", [(d, {"reason": reason.strip()}) for d in doc_ids])
+            self._questions_need_review(p, doc_ids, "deleted", actor)
         return len(doc_ids)
 
     def hard_delete(self, bot_id, doc_id, actor, is_admin: bool, legal_reason: str):
@@ -605,3 +623,4 @@ class Documents:
                 except Exception:  # noqa: BLE001
                     pass
         self.cp.audit(actor, bot_id, "doc_hard_deleted", doc_id, {"reason": legal_reason})
+        self._questions_need_review(p, [doc_id], "deleted", actor)

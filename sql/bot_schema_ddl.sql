@@ -99,7 +99,8 @@ CREATE TABLE IF NOT EXISTS {catalog}.{schema}.golden_set (
   difficulty STRING,             -- easy | hard (EVG-4)
   question_type STRING,          -- fact | table | figure | footnote | multi_page | number | ...
   origin STRING,                 -- generated | manual | feedback
-  approved BOOLEAN, active BOOLEAN, updated_by STRING, updated_at TIMESTAMP
+  approved BOOLEAN, active BOOLEAN, updated_by STRING, updated_at TIMESTAMP,
+  review_note STRING             -- why a question lost its approval (its document changed), until re-approved
 );
 
 -- UC access probes (GOV-3/GOV-4). The agent checks them with the caller's own

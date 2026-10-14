@@ -195,10 +195,13 @@ def test_many_documents_can_be_archived_restored_or_deleted_at_once(settings):
 
     docs, sql, cp = _docs(settings, [(r"SELECT file_path", [{"file_path": "/Volumes/x/a.pdf"}])])
     assert docs.change_many("claims_chatbot", ["a", "b", "a"], "archive", "ana@corp.com") == 2
-    archive, params = sql.statements[-1]
+    updates = [(s, p) for s, p in sql.statements if s.startswith("UPDATE") and "manifest" in s]
+    assert len(updates) == 1                                                        # one statement for all
+    archive, params = updates[0]
     assert "status = 'archived'" in archive and "flag_reason" not in archive
     assert archive.endswith("doc_id IN (:d0, :d1)") and params == {"d0": "a", "d1": "b"}
-    assert len(sql.statements) == 1                                                 # one statement for all
+    asks = [s for s, _ in sql.statements if s.startswith("SELECT eval_id") and "golden_set" in s]
+    assert len(asks) == 1 and asks[0].endswith("source_doc_id IN (:d0, :d1)")      # their questions, looked up once
     assert [a for a in cp.audits if a[0] == "doc_archived"] == [("doc_archived", "a"), ("doc_archived", "b")]
     assert docs.change_many("claims_chatbot", ["a"], "restore", "ana@corp.com") == 1
     assert "THEN 'flagged' ELSE 'pending_review' END" in sql.statements[-1][0]     # restoring never approves

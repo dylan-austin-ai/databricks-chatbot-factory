@@ -305,6 +305,15 @@ for bot in bots:
         cap = int(settings.get("quality.check.max_questions", 50) or 0)
         cases = evals.sample_cases(cases, max(cap, min_cases) if cap > 0 else 0)
         print(f"{cfg.bot_id}: checking {len(cases)} of {n_approved} approved test question(s)")
+    # Before anything is asked or scored: every question's source document must exist and be in use.
+    in_use = {r["doc_id"]: r["status"] for r in sql.query(
+        f"SELECT doc_id, status FROM {p.t('manifest')} WHERE status <> 'superseded'")}
+    stale = evals.stale_sources(cases, in_use)
+    if stale:
+        if len(bots) == 1:
+            raise SystemExit(evals.stale_message(stale, cfg.bot_id))
+        print(evals.stale_message(stale, cfg.bot_id))
+        continue
     records = [evals.dataset_record(c, platform_rules(settings.get('guardrails.platform_rules', {}),
                                                   cfg.disabled_rules)) for c in cases]
 

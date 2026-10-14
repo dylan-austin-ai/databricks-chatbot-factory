@@ -854,6 +854,17 @@ output and the first smoke test:
   ```
 
   Like a run with `limit`, it records no quality result for the release.
+- Test questions follow their documents. When a document is archived, flagged, deleted, replaced
+  by a new version, or has its text or pages changed by hand, every approved question whose
+  source is that document loses its approval and gets a note saying why ("Needs review because"
+  on Test questions); the audit log records which questions and why, and the table's history
+  keeps every earlier version. The owner checks the expected answer against a current document,
+  sets the question's **Source document** (documents with the same name are told apart by
+  their id; archived or missing ones are labelled), and approves it again, which clears the
+  note. Before anything is asked or scored, the quality check stops if any approved question
+  points at a document that is missing or not in use, and lists them. Generated questions name
+  the system or program they are about (myCigna, Workday) and ask about current policy, not a
+  worked example, a screenshot's sample value or a past deadline.
 - Quality check bookkeeping. Results are kept by each test question's `eval_id`, not its text,
   so a question that appears twice keeps two records. The correctness judge runs only on
   questions with an expected answer or expected facts; "should refuse" questions are judged by

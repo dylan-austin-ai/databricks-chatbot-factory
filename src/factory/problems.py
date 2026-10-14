@@ -284,6 +284,10 @@ def job_stopped(message: str | None) -> tuple[str, str]:
     text = message or ""
     if re.search(r"CANCEL", text, re.I):
         return STOPPED_BY_HAND, "Someone stopped it. Start it again with the button here when you are ready."
+    if re.search(r"point at a document that is missing or not in use", text):
+        return SETUP, ("Your test questions need attention, not the job: open **Test questions**, set each listed "
+                       "question's **Source document** to a current document, or untick **Approved**, then save. "
+                       "The check runs again when you save.")
     if re.search(_JOB_SETUP, text, re.I):
         return SETUP, ("This is a fault in how the job is set up, not something you did, and starting it again "
                        "won't help. Send MLOps the message below.")

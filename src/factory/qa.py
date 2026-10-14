@@ -237,6 +237,11 @@ Tasks:
    an automated reader is likely to get wrong: values inside tables, numbers and dates, footnotes,
    figure/chart captions, lists split across pages, exceptions buried in long paragraphs, and facts
    that require combining two sections.
+Every question must make sense on its own, to someone who doesn't know which document it came from:
+name the system, program, form or benefit it is about (for example "in myCigna" or "in Workday"),
+never "this document" or "the screenshot". Ask about what the document states as current policy or
+procedure, not about a worked example, a sample value in a screenshot or a past deadline, unless the
+document presents it as the rule.
 For every question give: the expected answer in 1-3 sentences, an exact supporting quote copied
 verbatim from the text (under 40 words), the 1-based page number(s) it comes from, difficulty
 ("easy" or "hard") and question_type (fact, table, number, footnote, figure, list, multi_section).
