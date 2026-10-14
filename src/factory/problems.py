@@ -143,6 +143,10 @@ _CHECK_ADVICE: list[tuple[str, str]] = [
     (r"^relevance is", "Some answers don't address what was asked. Check the wording of the questions on **Test "
      "questions**: vague questions get vague answers. Then run the check again."),
     (r"^citation accuracy is", "Some answers cite a page that doesn't back them up. " + _FIND),
+    (r"answerable test question\(s\) got no answer", "These are questions the chatbot should have answered. "
+     "\"Withheld as unverified\" and \"blocked by a guardrail\" are for MLOps. \"Said its documents don't cover "
+     "it\" usually means a document is missing or the test question points at the wrong one: check it on **Test "
+     "questions**. \"Declined as out of scope\" may mean the question belongs under another type."),
     (r"^rule compliance is", "An answer to a question near a platform rule went too far: it made a decision or "
      "gave advice the rules forbid, instead of sharing what the documents say and who decides. This needs MLOps, "
      "not a change to your documents: send them this line."),

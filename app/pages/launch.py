@@ -170,9 +170,10 @@ if cand:
                                  ("Answer quality", [k for k in METRIC_LABEL if k not in RETRIEVAL_METRICS], "judges")]:
             st.markdown(f"**{title}**", help=help_text(why))
             shown = [k for k in keys if k in m]
+            counts = data.get("metric_counts") or {}
             for col, k in zip(st.columns(max(len(shown), 1)), shown):
-                with col:
-                    html(tile(METRIC_LABEL[k], m[k], th.get(k)))
+                with col:   # every percentage with what it is out of
+                    html(tile(METRIC_LABEL[k], m[k], th.get(k), evals.metric_detail(k, counts.get(k))))
         if data.get("failures"):
             with st.container(border=True):
                 st.markdown("**What needs fixing**")

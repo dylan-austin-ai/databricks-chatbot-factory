@@ -19,6 +19,7 @@ multi-turn pass with conversation judges (informational, not part of the gate).
 """
 import json
 import os
+import re
 import time
 import uuid
 
@@ -37,10 +38,14 @@ from factory.problems import safe_text
 from factory.releases import index_table
 from factory.tracing import as_dict, assessment_value, documents, question_of
 
-a = args("catalog", "bot_id", "trigger", "channel", "limit", "environment", "diagnose")
+a = args("catalog", "bot_id", "trigger", "channel", "limit", "environment", "diagnose", "eval_ids")
+# Chosen test questions only (their eval_ids, separated by spaces, commas or semicolons): a targeted
+# run, e.g. the cases a fix is meant to repair. Like --limit, it records no quality result for a release.
+CHOSEN = {x for x in re.split(r"[\s,;]+", a.eval_ids or "") if x}
 DIAGNOSE = a.diagnose in ("true", "paced")   # "true": one at a time. "paced": at the check's normal pace
-if DIAGNOSE:
+if DIAGNOSE and not CHOSEN:
     a.limit = a.limit or "3"
+PARTIAL = bool(a.limit or CHOSEN)   # not a full check: no release result, no "enough questions" rule
 spark, sql, settings, cp, w = context(a.catalog)
 client = llm.openai_client(w)
 agent_ep = settings.get("agent.serving_endpoint")
@@ -135,7 +140,12 @@ def outcome_of(case: dict) -> str:
 
 
 def build_scorers(cfg, allowed: set[str], chunks: dict[str, str]) -> list:
-    judges = {n: judge(cls, n, **kw) for n, (cls, kw) in BUILTINS.items() if cfg.judge_on(n)}
+    # The platform-rules judge gets the same rubric as rule questions: declining, and sharing what
+    # the documents say and who decides, both follow the rules; deciding or advising does not.
+    rubric = [evals.RULE_GUIDELINE.format(rules=" ".join(platform_rules(settings.get("guardrails.platform_rules", {}),
+                                                                        cfg.disabled_rules)))]
+    judges = {n: judge(cls, n, **({"guidelines": rubric} if n == "platform_rules" else kw))
+              for n, (cls, kw) in BUILTINS.items() if cfg.judge_on(n)}
     if cfg.judge_on("custom") and cfg.custom_judge_instructions:
         from mlflow.genai.judges import make_judge
         judges["custom"] = make_judge(name="custom", model=judge_model, instructions=cfg.custom_judge_instructions
@@ -157,7 +167,7 @@ def build_scorers(cfg, allowed: set[str], chunks: dict[str, str]) -> list:
 
     def kept(name, work):
         return evals.recording_scorer(name, work, RESULTS, STATUS, assessment_value, NEEDS.get(name, ()), safe_text,
-                                      TRACE_OF)
+                                      TRACE_OF, evals.JUDGE_KINDS.get(name, ()))
 
     return [kept(n, j.run) for n, j in judges.items()] + [kept("rule_compliance", rule_compliance),
                                                           kept("checks", checks)]
@@ -277,16 +287,21 @@ for bot in bots:
                       "AND kind IN ('in_scope', 'out_of_scope', 'rule_bound', 'feedback') ORDER BY difficulty, eval_id")
     n_approved = len(cases)
     approved_in_scope = sum(1 for c in cases if c["kind"] == "in_scope")   # what the "enough questions" rule counts
-    if a.limit:
+    if CHOSEN:
+        cases = [c for c in cases if c["eval_id"] in CHOSEN]
+        missing = sorted(CHOSEN - {c["eval_id"] for c in cases})
+        print(f"{cfg.bot_id}: checking the {len(cases)} chosen question(s)"
+              + (f"; not found among its approved, active questions: {', '.join(missing)}" if missing else ""))
+    elif a.limit:
         cases = [c for c in cases if c["kind"] == "in_scope"][: int(a.limit)]
     # This also runs by itself at the end of every setup and every update of the test version.
     # Until enough questions are approved such a check can only fail on the count, after asking
     # and judging every question, so it is left for the update that follows the approvals. A
     # check someone asked for always runs.
-    if a.trigger in ("docs_changed", "provisioned") and len(cases) < min_cases:
+    if a.trigger in ("docs_changed", "provisioned") and len(cases) < min_cases and not PARTIAL:
         print(f"{cfg.bot_id}: {len(cases)} approved test question(s), {min_cases} needed; automatic check skipped")
         continue
-    if not a.limit:   # a fixed sample spread over the documents when there are many more than needed
+    if not PARTIAL:   # a fixed sample spread over the documents when there are many more than needed
         cap = int(settings.get("quality.check.max_questions", 50) or 0)
         cases = evals.sample_cases(cases, max(cap, min_cases) if cap > 0 else 0)
         print(f"{cfg.bot_id}: checking {len(cases)} of {n_approved} approved test question(s)")
@@ -411,7 +426,9 @@ for bot in bots:
             print(f"DIAG: 8. asking and scoring finished in {time.time() - started_at:.1f}s", flush=True)
         evals.close_unfinished(RESULTS, STATUS)
         scored = {c["eval_id"]: evals.scores_from(RESULTS.get(c["eval_id"])) for c in cases}
-        rows = [scored[c["eval_id"]][0] for c in cases]
+        kinds = [c["kind"] for c in cases]
+        raw = [scored[c["eval_id"]][0] for c in cases]   # what the scorers returned
+        rows = evals.eligible_rows(raw, kinds, [outcome_of(c) for c in cases])   # what the gate counts
         faults = sum(1 for c in cases if outcome_of(c) in evals.CANT_BE_SCORED)
         scorer_errors = evals.scorer_problems([scored[c["eval_id"]][2] for c in cases])
         if scorer_errors:
@@ -424,7 +441,7 @@ for bot in bots:
               + (f". Withheld because of: {evals.withheld_summary(withheld)}" if withheld else ""), flush=True)
         if DIAGNOSE:
             print(f"DIAG: 9. what each question got, as the scorers returned it (not read back from storage): "
-                  f"{sum(1 for r in rows if r)} of {len(rows)} question(s) have scores. What the chatbot did: "
+                  f"{sum(1 for r in raw if r)} of {len(raw)} question(s) have scores. What the chatbot did: "
                   + evals.outcome_counts([outcome_of(c) for c in cases]), flush=True)
             for i, c in enumerate(cases, 1):
                 q, eid = c["question"], c["eval_id"]
@@ -460,19 +477,21 @@ for bot in bots:
         n_in_scope = sum(1 for c in cases if c["kind"] == "in_scope")
         in_scope = [c for c in cases if c["kind"] == "in_scope"]
         required = [j for j in ("groundedness", "relevance", "safety") if cfg.judge_on(j)] + \
+            (["answer_rate"] if any(k in evals.ANSWERABLE for k in kinds) else []) + \
             (["correctness"] if cfg.judge_on("correctness") and any(c.get("expected_answer") for c in in_scope) else []) + \
             (["citation_accuracy"] if in_scope else []) + \
             (["refusal_accuracy"] if any(c["kind"] == "out_of_scope" for c in cases) else []) + \
             (["rule_compliance"] if any(c["kind"] == "rule_bound" for c in cases) else []) + \
             (["hit_at_1", "hit_at_3", "hit_at_5", "mrr"] if any(c.get("source_doc_id") for c in in_scope) else [])
         # "Enough questions" is about how many are approved, not how many of them this check sampled.
-        gate = evals.gate(metrics, thresholds, zero, zero_checks, n_in_scope if a.limit else approved_in_scope,
-                          1 if a.limit else min_cases, override,
-                          required=[r for r in required if r in thresholds], unscored=sum(1 for r in rows if not r),
-                          agent_errors=faults, scorer_errors=scorer_errors)
+        gate = evals.gate(metrics, thresholds, zero, zero_checks, n_in_scope if PARTIAL else approved_in_scope,
+                          1 if PARTIAL else min_cases, override,
+                          required=[r for r in required if r in thresholds], unscored=sum(1 for r in raw if not r),
+                          agent_errors=faults, scorer_errors=scorer_errors,
+                          nonanswers=evals.unexpected_nonanswers(kinds, outcomes))
         mlflow.set_tags({"passed": str(gate.passed)})
         mlflow.log_metrics({f"gate_{k}": v for k, v in metrics.items()})
-    if not a.limit and (cfg.obs_on("simulate_conversations") or cfg.judge_on("multi_turn")):
+    if not PARTIAL and (cfg.obs_on("simulate_conversations") or cfg.judge_on("multi_turn")):
         simulate(cfg, channel, [c for c in cases if c["kind"] == "in_scope"])
 
     run_id = str(uuid.uuid4())
@@ -483,6 +502,8 @@ for bot in bots:
          "pv": PLATFORM_VERSION, "gc": git_commit, "cv": bot["config_version"],
          "m": json.dumps({"metrics": metrics, "zero_failures": zero, "failures": gate.failures,
                           "n_cases": len(cases), "n_approved": n_approved, "mlflow_run_id": run.info.run_id,
+                          "metric_counts": evals.metric_counts(rows),
+                          "nonanswers": evals.unexpected_nonanswers(kinds, outcomes),
                           "scorer_errors": scorer_errors,
                           "outcomes": {o or "not_asked": outcomes.count(o) for o in set(outcomes)},
                           "answered_view": answered,
@@ -494,19 +515,19 @@ for bot in bots:
                                "scores": scored[c["eval_id"]][0], "rationales": scored[c["eval_id"]][1],
                                "errors": scored[c["eval_id"]][2]} for c in cases]}),
          "p": gate.passed, "nr": gate.needs_safety_review})
-    if channel == "candidate" and not a.limit:
+    if channel == "candidate" and not PARTIAL:
         sql.execute(f"""UPDATE {settings.fq('releases')} SET eval_run_id = :e, eval_passed = CAST(:p AS BOOLEAN),
                         updated_at = current_timestamp() WHERE release_id = :r""",
                     {"e": run_id, "p": gate.passed, "r": release_id})
         cp.publish(cfg.bot_id)
-    if not gate.passed and channel == "live" and not a.limit:
+    if not gate.passed and channel == "live" and not PARTIAL:
         cp.alert(cfg.bot_id, "eval_regression", "high", "; ".join(gate.failures),
                  dedupe_key=f"eval:{cfg.bot_id}:{release_id}:{PLATFORM_VERSION}")
-    elif channel == "live" and not a.limit:
+    elif channel == "live" and not PARTIAL:
         cp.resolve_alerts(cfg.bot_id, "eval_regression")
     print(cfg.bot_id, channel, "PASSED" if gate.passed else "FAILED", metrics, zero, gate.failures)
     if DIAGNOSE:
         faulthandler.cancel_dump_traceback_later()
         print("DIAG: done. Nothing was recorded as a quality result.", flush=True)
-    elif a.limit and not gate.passed:  # the promote job treats a failed smoke test as a failure
+    elif a.limit and not CHOSEN and not gate.passed:  # the promote job treats a failed smoke test as a failure
         raise SystemExit(f"Smoke test failed for {cfg.bot_id}: {gate.failures}")

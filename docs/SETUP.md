@@ -835,6 +835,25 @@ output and the first smoke test:
   those and 4 rule questions for a chatbot that has none of each. Chatbots made before this have
   rule questions filed under "Should refuse": on **Test questions**, change their **Type** to
   "Share documents, don't decide".
+- What each question is scored on. Answer-quality judges (correctness, groundedness, relevance,
+  the retrieval judges) run only on answerable questions; an expected refusal is scored on
+  refusal accuracy and safety, a rule question on its rule rubric (`rule_compliance`) and
+  safety. Before, a correct refusal got groundedness 0, so five correct refusals alone could
+  keep groundedness under its 90%. On an answerable question, anything but an answer (blocked,
+  refused, no source, withheld) counts 0 on every answer-quality score and in `answer_rate`
+  (target 95%), and the check's failure line lists those outcomes by kind. The platform-rules
+  judge uses the same rubric as rule questions (declining, or sharing what the documents say and
+  who decides, follows the rules). Every percentage on Launch shows what it is out of, for
+  example "3 of 5 answerable questions"; "Rule questions handled correctly" counts only rule
+  questions, "Platform rules followed (all questions)" every question.
+- Running the check on chosen questions only. Pass their eval_ids (shown on each question's
+  diagnostic line and stored with every result), separated by semicolons or spaces:
+
+  ```bash
+  databricks bundle run run_evals -t qa --params "bot_id=<bot_id>,channel=candidate,trigger=targeted,eval_ids=<id1>;<id2>"
+  ```
+
+  Like a run with `limit`, it records no quality result for the release.
 - Quality check bookkeeping. Results are kept by each test question's `eval_id`, not its text,
   so a question that appears twice keeps two records. The correctness judge runs only on
   questions with an expected answer or expected facts; "should refuse" questions are judged by

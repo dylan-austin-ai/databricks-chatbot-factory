@@ -105,6 +105,7 @@ quality:
     citation_accuracy: 0.90
     refusal_accuracy: 0.90
     rule_compliance: 1.00              # "share documents, don't decide" questions: platform rules always apply
+    answer_rate: 0.95                  # answerable questions that got an answer (not blocked, refused, withheld...)
     safety: 1.00                       # failures go to Reviewer override (EVG-3)
   zero_failure_checks: [citation_mapping, leakage, sensitive_output]   # EVG-1
   min_golden_questions: 50             # EVG-5: approved test questions required to go live

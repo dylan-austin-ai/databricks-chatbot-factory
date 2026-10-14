@@ -118,7 +118,8 @@ class GateResult:
 def gate(metrics: dict[str, float], thresholds: dict[str, float], zero_failures: dict[str, int],
          zero_checks: list[str], n_cases: int, min_cases: int,
          safety_override: bool = False, required: tuple | list = (), unscored: int = 0,
-         agent_errors: int = 0, scorer_errors: dict[str, str] | None = None) -> GateResult:
+         agent_errors: int = 0, scorer_errors: dict[str, str] | None = None,
+         nonanswers: dict[str, int] | None = None) -> GateResult:
     """`required`: metrics that must be present (enabled judges, expected checks). A judge that
     errored or never ran fails the gate instead of being skipped; `scorer_errors` ({name: what it
     said}) is quoted when one did. `agent_errors`: questions the chatbot gave no answer to (its
@@ -141,8 +142,13 @@ def gate(metrics: dict[str, float], thresholds: dict[str, float], zero_failures:
         if n:
             failures.append(f"{n} {check.replace('_', ' ')} failure(s); this must be zero.")
     needs_review = False
+    if "answer_rate" in metrics and metrics["answer_rate"] < thresholds.get("answer_rate", 1.0):
+        failures.append(f"{sum((nonanswers or {}).values())} answerable test question(s) got no answer ("
+                        + ", ".join(f"{OUTCOME_WORDS.get(k, k)} {n}" for k, n in
+                                    sorted((nonanswers or {}).items(), key=lambda kv: -kv[1]))
+                        + f"); answered {metrics['answer_rate']:.0%}, needs {thresholds.get('answer_rate', 1.0):.0%}.")
     for name, threshold in thresholds.items():
-        if name not in metrics or metrics[name] >= threshold:
+        if name == "answer_rate" or name not in metrics or metrics[name] >= threshold:
             continue
         if name == "safety":
             needs_review = not safety_override
@@ -401,6 +407,75 @@ WITHHELD_WORDS = {
 }
 
 
+# Which questions each judge is scored on. An expected refusal is judged on whether it refused and
+# was safe, a rule question on its rule rubric; neither on answer quality, which a correct refusal
+# can only fail.
+ANSWERABLE = ("in_scope", "feedback")
+ANSWER_QUALITY = ("correctness", "groundedness", "relevance", "retrieval_relevance", "retrieval_relevance/precision",
+                  "retrieval_sufficiency", "custom")
+JUDGE_KINDS = {**{n: ANSWERABLE for n in ANSWER_QUALITY}, "expectations_guidelines": ("out_of_scope",),
+               "rule_compliance": ("rule_bound",)}
+APPLIES_TO = {**{n: "answerable questions" for n in ANSWER_QUALITY}, "answer_rate": "answerable questions",
+              "citation_accuracy": "answerable questions", "hit_at_1": "answerable questions with a source document",
+              "hit_at_3": "answerable questions with a source document",
+              "hit_at_5": "answerable questions with a source document", "mrr": "answerable questions with a source document",
+              "refusal_accuracy": "should-refuse questions", "rule_compliance": "rule questions",
+              "safety": "all questions", "platform_rules": "all questions"}
+
+
+def eligible_rows(rows: list[dict[str, float]], kinds: list[str], outcomes: list[str]) -> list[dict[str, float]]:
+    """Each question's scores as the gate counts them. Answer-quality scores are dropped from
+    questions that aren't meant to be answered. On an answerable question an answer counts 1 in
+    answer_rate, and anything else (blocked, refused, no source, withheld) counts 0 there and 0 on
+    every answer-quality score it got: a fallback message that a judge found "grounded" is still a
+    question nobody answered."""
+    out = []
+    for row, kind, outcome in zip(rows, kinds, outcomes):
+        row = dict(row)
+        if kind in ANSWERABLE:
+            row["answer_rate"] = 1.0 if outcome == "answered" else 0.0
+            if outcome != "answered":
+                row.update({k: 0.0 for k in row if k in ANSWER_QUALITY})
+        else:
+            row = {k: v for k, v in row.items() if k not in ANSWER_QUALITY}
+        out.append(row)
+    return out
+
+
+def metric_counts(rows: list[dict[str, float]]) -> dict[str, dict]:
+    """For every metric: over how many questions it was scored ("n") and, when its scores are pass
+    or fail, how many passed. Every percentage shown comes with these."""
+    out: dict[str, dict] = {}
+    for row in rows:
+        for k, v in row.items():
+            if v is None:
+                continue
+            c = out.setdefault(k, {"n": 0, "passed": 0, "binary": True})
+            c["n"] += 1
+            c["passed"] += 1 if float(v) >= 0.5 else 0
+            c["binary"] = c["binary"] and float(v) in (0.0, 1.0)
+    return out
+
+
+def metric_detail(name: str, count: dict | None) -> str:
+    """"17 of 20 answerable questions", or "over 44 answerable questions with a source document"."""
+    if not count:
+        return ""
+    over = APPLIES_TO.get(name, "questions")
+    if count.get("binary"):
+        return f"{count['passed']} of {count['n']} {over}"
+    return f"over {count['n']} {over}"
+
+
+def unexpected_nonanswers(kinds: list[str], outcomes: list[str]) -> dict[str, int]:
+    """What happened to the answerable questions that got no answer, by outcome."""
+    found: dict[str, int] = {}
+    for kind, outcome in zip(kinds, outcomes):
+        if kind in ANSWERABLE and outcome != "answered":
+            found[outcome or "not_asked"] = found.get(outcome or "not_asked", 0) + 1
+    return found
+
+
 def withheld_summary(kinds: list[list[str]]) -> str:
     """Why answers were withheld as unverified, across a check: each cause with how many answers
     it applied to (one answer can have several), most common first."""
@@ -502,7 +577,7 @@ def close_unfinished(results: dict[str, dict], status: dict[str, dict]) -> None:
 
 
 def recording_scorer(name: str, work, results: dict, status: dict, normalise, needs=(), tidy=str,
-                     traces: dict | None = None):
+                     traces: dict | None = None, kinds=()):
     """An MLflow scorer that runs `work` and keeps what it said about each test question in
     `results` ({eval_id: feedback_results}) and how it went in `status` ({eval_id: {name:
     "running" | "done" | "failed" | "skipped"}}); `traces` gets {eval_id: the trace it scored}.
@@ -512,7 +587,8 @@ def recording_scorer(name: str, work, results: dict, status: dict, normalise, ne
     depend on reading the assessments back from trace storage. What `work` returns, and anything
     it raises, passes through untouched for MLflow to attach to the trace as before. `needs`: the
     expectations `work` can use as its ground truth, any one of which will do; a question with
-    none of them is skipped, not failed."""
+    none of them is skipped, not failed. `kinds`: the kinds of question it is scored on (all when
+    empty); on the others it is skipped, so no judge call is paid for."""
     from mlflow.genai.scorers import scorer
 
     alternatives = tuple(k for k in ((needs,) if isinstance(needs, str) else needs) if k)
@@ -524,7 +600,8 @@ def recording_scorer(name: str, work, results: dict, status: dict, normalise, ne
         if traces is not None and getattr(getattr(trace, "info", None), "trace_id", None):
             traces[key] = trace.info.trace_id
         state = status.setdefault(key, {})
-        if alternatives and not any((expectations or {}).get(k) for k in alternatives):
+        if (alternatives and not any((expectations or {}).get(k) for k in alternatives)) or (
+                kinds and (expectations or {}).get("kind") not in kinds):
             state[name] = "skipped"
             return None
         state[name] = "running"

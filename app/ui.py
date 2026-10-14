@@ -80,11 +80,12 @@ def bar(used: float, total: float) -> str:
     return f'<div class="cf-bar"><div style="width:{pct:.0f}%;background:{color}"></div></div>'
 
 
-def tile(label: str, value: float, target: float | None) -> str:
+def tile(label: str, value: float, target: float | None, detail: str = "") -> str:
     ok = target is None or value >= target
     need = f'<div class="cf-muted">needs {target:.0%}</div>' if target is not None else ""
+    over = f'<div class="cf-muted">{escape(detail)}</div>' if detail else ""
     return (f'<div class="cf-tile"><b>{value:.0%}</b> {pill("Pass" if ok else "Below", "green" if ok else "red")}'
-            f'<div>{escape(label)}</div>{need}</div>')
+            f'<div>{escape(label)}</div>{over}{need}</div>')
 
 
 def steps(current: int, labels: list[str]) -> None:

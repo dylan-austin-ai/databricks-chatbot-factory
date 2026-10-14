@@ -304,7 +304,7 @@ def test_the_diagnostic_run_is_wired_into_the_job_and_enough_questions_counts_th
                  "6. recent traces are searched", "7. the judge model answers one question"):
         assert step in source, step
     # sampling must not make "at least 50 approved questions" fail: the rule counts what is approved
-    assert "n_in_scope if a.limit else approved_in_scope" in source
+    assert "n_in_scope if PARTIAL else approved_in_scope" in source
     assert source.index("approved_in_scope = sum(") < source.index("evals.sample_cases(cases")
     job = yaml.safe_load((root / "resources" / "jobs.yml").read_text())["resources"]["jobs"]["run_evals"]
     assert {"limit", "diagnose"} <= {p["name"] for p in job["parameters"]}
