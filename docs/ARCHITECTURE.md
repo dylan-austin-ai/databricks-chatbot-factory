@@ -116,7 +116,9 @@ platform's own (`identity.is_platform_caller`: `access.jobs_run_as`, `access.syn
 `access.trusted_callers`); a refused or failed first question stops the check before scoring.
 The caller is always worked out from the on-behalf-of-user credentials Model Serving passes in
 (`identity.obo_caller`); when they are missing, or are the agent's own, the agent answers nobody
-(`CallerUnknown`) rather than deciding access for another identity.
+(`CallerUnknown`) rather than deciding access for another identity. Retrieval, by contrast, runs
+as the agent service principal (`serving.agent_search_credentials`), which holds SELECT on every
+index of the environment; the caller's access is checked before it.
 Judges are switchable per bot (custom `make_judge`, simulated conversations and multi-turn
 judges off by default). Production judges run natively on 20% of live traces (100% for
 critical bots), gated per bot by trace tags. Failed or thumbs-down answers go to a Review Queue

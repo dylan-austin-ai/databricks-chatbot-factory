@@ -101,3 +101,25 @@ def agent_identity_env(host: str, secret_scope: str) -> dict[str, str]:
     return {"DATABRICKS_HOST": host, "DATABRICKS_AUTH_TYPE": "oauth-m2m",
             "DATABRICKS_CLIENT_ID": f"{{{{secrets/{secret_scope}/agent-sp-client-id}}}}",
             "DATABRICKS_CLIENT_SECRET": f"{{{{secrets/{secret_scope}/agent-sp-client-secret}}}}"}
+
+
+def agent_search_credentials(env=None) -> dict[str, str]:
+    """How the agent's AI Search client signs in: as the agent service principal, with the
+    secret-backed credentials agent_identity_env puts on the endpoint.
+
+    Given nothing, the client borrows MLflow's credentials, and once the endpoint signs in with
+    OAuth client credentials those carry no token, so the client refuses to start ("Please specify
+    either personal access token or service principal client ID and secret"). The search covers
+    every chatbot's documents and is never done as the person asking: whether they may use the
+    chatbot is decided before it, from their own credentials, and the search is filtered to that
+    chatbot. Outside Model Serving the same three variables must be set to run the agent."""
+    import os
+
+    env = os.environ if env is None else env
+    missing = [k for k in ("DATABRICKS_HOST", "DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET") if not env.get(k)]
+    if missing:
+        raise RuntimeError(f"The agent can't sign in to AI Search: {', '.join(missing)} not set on the serving "
+                           "endpoint. Run the deploy_agent job, which sets them.")
+    return {"workspace_url": env["DATABRICKS_HOST"].strip().rstrip("/"),
+            "service_principal_client_id": env["DATABRICKS_CLIENT_ID"],
+            "service_principal_client_secret": env["DATABRICKS_CLIENT_SECRET"]}

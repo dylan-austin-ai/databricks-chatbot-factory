@@ -122,7 +122,9 @@ bundle again.
 
 ### A6. Create the agent service principal [UI] + [CLI]
 
-The shared agent endpoint runs as this principal. It reads runtime config and writes logs.
+The shared agent endpoint runs as this principal. It reads runtime config, writes logs and
+searches the AI Search indexes (`deploy_agent` grants it SELECT on them and Can Use on the AI
+Search endpoint; provisioning grants each confidential chatbot's own index).
 
 1. **Settings** › **Identity and access** › **Service principals** › **Add service principal** ›
    **Add new**. Name it `chatbot-factory-agent`.
@@ -776,6 +778,16 @@ output and the first smoke test:
   `sql.warehouses`) and creates its client inside `predict` with
   `ModelServingUserCredentials`, and the `databricks-ai-bridge` warning from the endpoint's logs
   ("Unable to get auth from Databricks Model Serving Environment").
+- How the agent signs in to AI Search. Searching is shared across chatbots and runs as the agent
+  service principal, with the same secret-backed credentials the deploy puts on the endpoint
+  (`serving.agent_search_credentials`). Left to itself the AI Search client borrowed MLflow's
+  credentials, which carry no token once the endpoint signs in with OAuth client credentials, and
+  it refused to start: "Please specify either personal access token or service principal client
+  ID and secret." Who may use a chatbot is still decided first, from the asking user's own
+  credentials, and the search is filtered to that chatbot. The deploy prints "Search index
+  grants" with what succeeded and what failed (and stops if any failed), then whether the agent
+  service principal may use the AI Search endpoint. If a chatbot then reports a permission error
+  while searching, give that principal **Can Use** on the endpoint's **Permissions** in the UI.
 - Trace requests read back from storage. A trace's request can come back as JSON text of JSON
   text (encoded twice). Everything that reads span or trace values goes through one decoder
   (`tracing.as_dict`), which decodes again while the value is still text, four layers at most,

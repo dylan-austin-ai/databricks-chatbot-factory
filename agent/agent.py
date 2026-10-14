@@ -121,9 +121,13 @@ class ChatbotAgent(ResponsesAgent):
 
     @property
     def vsc(self):
+        """The AI Search client, signed in as the agent service principal (not as the person
+        asking: their access is checked first, from their own credentials)."""
         if self._vsc is None:
             from databricks.vector_search.client import VectorSearchClient
-            self._vsc = VectorSearchClient(disable_notice=True)
+
+            from factory.serving import agent_search_credentials
+            self._vsc = VectorSearchClient(disable_notice=True, **agent_search_credentials())
         return self._vsc
 
     def _read_json(self, path: str) -> dict:

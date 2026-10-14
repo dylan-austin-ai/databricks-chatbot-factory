@@ -77,7 +77,7 @@ from _bootstrap import context, vector_client  # noqa: E402
 from factory.gateway import (ensure_model_service, grant_execute, labels, logging_problems,  # noqa: E402
                              ui_checklist)
 from factory.preflight import deploy_problems, gate_problems  # noqa: E402
-from factory.provisioning import ensure_shared_index, grant_agent_access  # noqa: E402
+from factory.provisioning import ensure_shared_index, grant_agent_access, search_grants  # noqa: E402
 from factory.serving import (agent_identity_env, endpoint_tags, remove_old_versions, retag,  # noqa: E402
                              split_tags, wait_until_serving)
 
@@ -105,8 +105,34 @@ step(2, "Control plane: platform schema, volumes and tables")
 cp.ensure()  # idempotent; shared_chunks and platform_releases are used below
 grant_agent_access(sql, s, a.agent_principal)
 
+from factory.problems import safe_reason  # noqa: E402
+from factory.tracing import apply_grants, grant_report  # noqa: E402
+
 step(3, "AI Search endpoint and shared index (the first run waits for provisioning)")
-index_name = ensure_shared_index(vector_client(), s, usage_policy_id=a.usage_policy_id)
+vsc = vector_client()
+index_name = ensure_shared_index(vsc, s, usage_policy_id=a.usage_policy_id)
+# The agent searches as its own service principal (serving.agent_search_credentials), so it needs
+# SELECT on every index of this environment: the shared one and each confidential chatbot's own
+# (provisioning grants those as they are made; this also covers the ones made before), and Can
+# Use on the endpoint.
+search_endpoint = s.get("ai_search.endpoint")
+ours = [n for n in (str(i.get("name") or "") for i in vsc.list_indexes(search_endpoint).get("vector_indexes", []))
+        if n.startswith(f"{a.catalog}.") and n.endswith(".chunks_index")]   # a confidential chatbot's own
+granted, refused = apply_grants(sql.execute, search_grants([index_name, *ours], a.agent_principal))
+print(grant_report(granted, refused, "Search index grants"))
+if refused:
+    raise SystemExit(f"{len(refused)} search index grant(s) failed (listed above). The chatbot searches as the agent "
+                     "service principal and can't find anything until they are granted.")
+try:
+    from databricks.sdk.service.iam import AccessControlRequest, PermissionLevel
+    w.permissions.update("vector-search-endpoints", w.vector_search_endpoints.get_endpoint(search_endpoint).id,
+                         access_control_list=[AccessControlRequest(service_principal_name=a.agent_principal,
+                                                                   permission_level=PermissionLevel.CAN_USE)])
+    print(f"AI Search endpoint {search_endpoint}: the agent service principal may use it.")
+except Exception as e:  # noqa: BLE001 - the index grants above are what querying is documented to need
+    print(f"WARNING: Can Use on the AI Search endpoint {search_endpoint} was not given to the agent service "
+          f"principal: {safe_reason(e)}. If the chatbot then reports a permission error while searching, give it "
+          "Can Use on that endpoint's Permissions in the UI.")
 
 step(4, "Runtime settings file the agent reads at startup")
 cp.publish(None)
@@ -266,7 +292,7 @@ except Exception as e:  # noqa: BLE001
 step(11, "Trace table grants and the platform release record")
 # The endpoint signs in as the dedicated agent service principal, so that principal is the trace
 # writer, and it is recorded as the identity the endpoint serves with.
-from factory.tracing import TRACE_TABLES, apply_grants, grant_report, trace_grants  # noqa: E402
+from factory.tracing import TRACE_TABLES, trace_grants  # noqa: E402
 
 if a.agent_principal and s.get("access.serving_identity") != a.agent_principal:
     cp.set_setting("access", {**(s.get("access") or {}), "serving_identity": a.agent_principal}, "system:deploy")

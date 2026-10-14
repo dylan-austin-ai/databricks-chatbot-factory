@@ -2,7 +2,7 @@
 from types import SimpleNamespace
 
 from factory.preflight import deploy_problems
-from factory.provisioning import ensure_shared_index, grant_agent_access
+from factory.provisioning import Provisioner, ensure_shared_index, grant_agent_access, search_grants
 
 
 class FakeIndex:
@@ -330,3 +330,31 @@ def test_the_deploy_keeps_tag_changes_out_of_agents_deploy():
     assert 'deploy_kwargs["tags"], changed_tags = split_tags(wanted_tags, endpoint_tags(w, a.endpoint))' in source
     assert source.index("split_tags(wanted_tags") < source.index("agents.deploy(model_name, version, **deploy_kwargs)") \
         < source.index("wait_until_serving(w, a.endpoint, model_name, version)") < source.index("retag(w, a.endpoint, changed_tags)")
+
+
+def test_the_agent_principal_is_granted_each_index_it_searches():
+    grants = search_grants(["chatbots_test._platform.shared_chunks_index", "chatbots_test.hr_bot.chunks_index",
+                            "chatbots_test._platform.shared_chunks_index", ""], "agent-sp-id")
+    assert grants == [
+        "GRANT USE SCHEMA ON SCHEMA `chatbots_test`.`_platform` TO `agent-sp-id`",
+        "GRANT SELECT ON TABLE `chatbots_test`.`_platform`.`shared_chunks_index` TO `agent-sp-id`",
+        "GRANT USE SCHEMA ON SCHEMA `chatbots_test`.`hr_bot` TO `agent-sp-id`",
+        "GRANT SELECT ON TABLE `chatbots_test`.`hr_bot`.`chunks_index` TO `agent-sp-id`"]
+    assert not [g for g in grants if "MODIFY" in g or "ALL PRIVILEGES" in g]      # read only
+    assert search_grants(["chatbots_test._platform.shared_chunks_index"], "") == []
+
+
+def test_a_confidential_chatbots_own_index_is_granted_to_the_agent_new_or_existing(settings, cfg, fake_sql):
+    cfg.sensitivity = "confidential"
+    name = f"chatbots_test.{cfg.bot_id}.chunks_index"
+    for indexes, created in (((), ["create_index"]), ((name,), [])):     # made now, or made by an earlier run
+        vsc, sql = FakeVsc(indexes=indexes), type(fake_sql)()
+        Provisioner(sql, settings, None, vector_client=vsc, agent_principal="agent-sp-id").ensure_index(cfg)
+        assert vsc.log == created
+        assert [st for st, _ in sql.statements] == [
+            f"GRANT USE SCHEMA ON SCHEMA `chatbots_test`.`{cfg.bot_id}` TO `agent-sp-id`",
+            f"GRANT SELECT ON TABLE `chatbots_test`.`{cfg.bot_id}`.`chunks_index` TO `agent-sp-id`"]
+    cfg.sensitivity = "internal"                                         # shared index: nothing of its own
+    sql = type(fake_sql)()
+    Provisioner(sql, settings, None, vector_client=FakeVsc(), agent_principal="agent-sp-id").ensure_index(cfg)
+    assert sql.statements == []

@@ -185,16 +185,18 @@ class Provisioner:
         name = f"{self.s.catalog}.{cfg.bot_id}.chunks_index"
         existing = {i.get("name") for i in self.vsc.list_indexes(
             self.s.get("ai_search.endpoint")).get("vector_indexes", [])}
-        if name in existing:
-            return
-        self.vsc.create_delta_sync_index(
-            endpoint_name=self.s.get("ai_search.endpoint"), index_name=name,
-            source_table_name=f"{self.s.catalog}.{cfg.bot_id}.index_source",
-            pipeline_type="TRIGGERED", primary_key="chunk_id",
-            embedding_source_column="chunk_to_embed",
-            embedding_model_endpoint_name=self.s.get("models.embedding_endpoint"),
-            columns_to_sync=INDEX_COLUMNS,
-        )
+        if name not in existing:
+            self.vsc.create_delta_sync_index(
+                endpoint_name=self.s.get("ai_search.endpoint"), index_name=name,
+                source_table_name=f"{self.s.catalog}.{cfg.bot_id}.index_source",
+                pipeline_type="TRIGGERED", primary_key="chunk_id",
+                embedding_source_column="chunk_to_embed",
+                embedding_model_endpoint_name=self.s.get("models.embedding_endpoint"),
+                columns_to_sync=INDEX_COLUMNS,
+            )
+        # The agent searches as its own service principal, so it needs this index as well.
+        for statement in search_grants([name], self.agent_principal):
+            self.sql.execute(statement)
 
     def create_alerts(self, cfg: BotConfig) -> bool | None:
         """Email alerts for the owner (OBS-5). Never blocks provisioning: on failure it raises an
@@ -232,6 +234,20 @@ PROGRESS_MESSAGES = {
     "create_alerts": "Setting up email alerts…",
     "create_trigger": "Turning on automatic reading of new documents…",
 }
+
+
+def search_grants(index_names, agent_principal: str | None) -> list[str]:
+    """What the agent service principal needs to search these indexes: USE SCHEMA on each index's
+    schema and SELECT on the index, which Unity Catalog grants as on a table. (USE CATALOG comes
+    from grant_agent_access.) The agent searches as that principal: serving.agent_search_credentials."""
+    if not agent_principal:
+        return []
+    who, out = principal(agent_principal), []
+    for name in sorted({n for n in index_names if n}):
+        catalog, schema, index = name.split(".")
+        out += [f"GRANT USE SCHEMA ON SCHEMA {ident(catalog, schema)} TO {who}",
+                f"GRANT SELECT ON TABLE {ident(catalog, schema, index)} TO {who}"]
+    return out
 
 
 def grant_agent_access(sql: SqlRunner, settings: PlatformSettings, agent_principal: str) -> None:
