@@ -86,6 +86,28 @@ def test_fill_system(cfg):
     assert cfg.display_name in text and "- Do not give legal advice." in text and "<<" not in text
 
 
+def test_answers_quote_the_documents_own_words_and_every_wording_of_a_fact():
+    import re
+
+    from factory import guardrails as g
+
+    rules = SYSTEM_PROMPT.split("Rules for answered:")[1]
+    assert "Use the sources' own words as much as you can." in rules
+    assert "quote each way rather than picking one" in rules
+    assert "Anything inside quotation marks must be an\n   exact copy of the source." in rules
+    assert re.findall(r"^(\d+)\. ", rules, re.M) == [str(i) for i in range(1, 10)]   # numbered without gaps
+    # The QA case: one passage gives the same allowance two ways. Quoting both is checked word for
+    # word like any quote; a wording the passage doesn't contain is caught.
+    passage = ("You can use up to 4 hours of confidential, action-oriented 1:1 coaching with a certified coach. "
+               "You can use up to 4 one-hour coaching sessions. This includes coaching for you and/or your "
+               "significant other.")
+    both = ('You can use "up to 4 hours of confidential, action-oriented 1:1 coaching", that is "up to 4 one-hour '
+            'coaching sessions" [1]. "This includes coaching for you and/or your significant other" [1].')
+    assert g.verify_quotes(both, [passage]) == []
+    assert g.verify_quotes('You can use "up to 4 two-hour coaching sessions" [1].', [passage]) == [
+        "up to 4 two-hour coaching sessions"]
+
+
 def test_warehouse_query_tags():
     class Api:
         def do(self, method, path, body=None, **_):
