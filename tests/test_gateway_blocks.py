@@ -14,14 +14,21 @@ HALLUCINATION = {"databricks_service_policy": {
 def test_a_block_says_which_guardrail_and_where():
     assert gateway.block_details(HALLUCINATION) == {
         "reason": "The response makes specific factual claims ... not supported by the provided excerpt.",
-        "handler": "system.ai.block_hallucination", "stage": "post_call", "dry_run": False}
+        "policy": "hallucination", "action": "deny", "handler": "system.ai.block_hallucination", "stage": "post_call",
+        "dry_run": False}
+    # The QA unsafe-content blocks: the policy's name is kept even when no guardrail name comes with it.
+    unsafe = {"databricks_service_policy": {"policy": "unsafe_content", "action": "deny", "stage": "post_call",
+                                            "reason": "Contains contact information considered PII."}}
+    said = gateway.block_details(unsafe)
+    assert (said["policy"], said["action"], said["stage"], said["handler"]) == ("unsafe_content", "deny", "post_call", "")
+    assert evals.block_sentence(said) == "BLOCKED by unsafe_content at the post_call stage."
     assert gateway.blocked_reason(HALLUCINATION).startswith("The response makes")    # unchanged for its callers
 
 
 def test_the_guardrail_is_found_under_another_field_name_and_missing_fields_stay_empty():
     other = {"databricks_service_policy": {"decision": "BLOCK", "name": "system.ai.block_jailbreak", "reason": "x"}}
-    assert gateway.block_details(other) == {"reason": "x", "handler": "system.ai.block_jailbreak", "stage": "",
-                                            "dry_run": None}
+    assert gateway.block_details(other) == {"reason": "x", "policy": "system.ai.block_jailbreak", "action": "block",
+                                            "handler": "system.ai.block_jailbreak", "stage": "", "dry_run": None}
     assert gateway.block_details({"databricks_service_policy": "denied"})["reason"] == "denied"
     assert gateway.block_details({"databricks_service_policy": {"result": "ALLOW"}}) is None
     assert gateway.block_details({"choices": []}) is None
@@ -48,10 +55,10 @@ def test_the_diagnostic_counts_every_outcome_instead_of_calling_blocks_answers()
 
 
 def test_a_blocked_question_names_the_guardrail_and_the_mismatch():
-    note = {"handler": "system.ai.block_hallucination", "stage": "post_call",
+    note = {"policy": "hallucination", "handler": "system.ai.block_hallucination", "stage": "post_call",
             "settings_mismatch": "system.ai.block_hallucination blocked this, but the settings say it should only log"}
     line = evals.block_sentence(note)
-    assert line.startswith("BLOCKED by system.ai.block_hallucination at the post_call stage.")
+    assert line.startswith("BLOCKED by hallucination (system.ai.block_hallucination) at the post_call stage.")
     assert "SETTINGS MISMATCH: system.ai.block_hallucination blocked this" in line
     assert evals.block_sentence({}) == "BLOCKED by a Unity Gateway service policy (the gateway didn't say which)."
 
@@ -63,4 +70,4 @@ def test_only_the_platforms_own_callers_are_told_which_guardrail_blocked_them():
     assert "raise _GatewayBlocked(block)" in agent and "gw.blocked_reason(" not in agent
     assert 'drift = gw.blocked_against_settings(block["handler"], s)' in agent
     assert '_event(log, "gateway_policy_mode", "flag", drift)' in agent
-    assert 'span.set_outputs({"blocked": True, "reason": str(e)[:500], "handler": block["handler"],' in agent
+    assert '"policy": block.get("policy"),' in agent and '"action": block.get("action"),' in agent

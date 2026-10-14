@@ -65,7 +65,12 @@ def retrieval_metrics(retrieval: list[dict], expected_doc: str | None,
 
 # Deterministic checks (zero tolerance), run as MLflow code scorers ------------------------
 def citation_check(answer: str, custom: dict, chunk_texts: dict[str, str]) -> tuple[bool, list[str]]:
-    """Every citation maps to a retrieved chunk, and its excerpt is verbatim from it (ANS-1)."""
+    """Every citation maps to a retrieved chunk and its excerpt is verbatim from it (ANS-1), and
+    every quotation in each part of the answer is in the chunks that part cites, not merely
+    somewhere in what was retrieved. Never stricter than the agent: it checks the lines a part
+    cites, which lie inside those chunks."""
+    from .answer_contract import quotations
+
     problems = []
     retrieved = set(custom.get("retrieved_chunk_ids") or [])
     cites = custom.get("citations") or []
@@ -77,9 +82,14 @@ def citation_check(answer: str, custom: dict, chunk_texts: dict[str, str]) -> tu
         text = chunk_texts.get(c.get("chunk_id"), "")
         if text and not g.excerpt_found(c.get("excerpt", ""), text):   # the same check the agent makes
             problems.append(f"excerpt for [{c.get('n')}] is not verbatim")
-    bad_quotes = g.verify_quotes(answer, [chunk_texts.get(c.get("chunk_id"), "") for c in cites])
-    if bad_quotes:
-        problems.append("quoted text not found in cited sources")
+    blocks = custom.get("blocks") or [{"text": answer, "cites": list(range(len(cites)))}]
+    for i, b in enumerate(blocks, 1):
+        chunks = " \n ".join(chunk_texts.get(cites[j].get("chunk_id"), "") for j in b.get("cites", []) if j < len(cites))
+        found, balanced = quotations(b.get("text", ""))
+        if not balanced:
+            problems.append(f"part {i} has unbalanced quotation marks")
+        if any(q.strip() and not g.excerpt_found(q, chunks) for q in found):
+            problems.append(f"part {i} quotes text that isn't in the sources it cites")
     return not problems, problems
 
 
@@ -152,9 +162,14 @@ def sample_for_judging(rows: list[dict], critical_bots: set[str], rate: float,
 
 def citation_accuracy(response: str, cited_texts: list[str]) -> tuple[bool, str]:
     """Production judging variant (no structured citations available in the log table)."""
+    from .answer_contract import quotations
+
     if not g.has_citation(response):
         return False, "No source citation in the answer."
-    bad = g.verify_quotes(response, cited_texts)
+    found, balanced = quotations(response)
+    if not balanced:
+        return False, "Quotation marks don't pair up."
+    bad = [q for q in found if q.strip() and not g.excerpt_found(q, " \n ".join(cited_texts))]
     if bad:
         return False, f"Quote not found in cited sources: {bad[0][:80]}"
     return True, "Citations and quotes verified."
@@ -418,7 +433,9 @@ def answer_headline(outcomes: dict[str, int], asked: int) -> str:
 
 def block_sentence(blocked_by: dict) -> str:
     """One line on which guardrail blocked an answer, and whether the settings say it may."""
-    who = blocked_by.get("handler") or "a Unity Gateway service policy (the gateway didn't say which)"
+    name, handler = blocked_by.get("policy"), blocked_by.get("handler")
+    who = (f"{name} ({handler})" if name and handler else name or handler
+           or "a Unity Gateway service policy (the gateway didn't say which)")
     where = f" at the {blocked_by['stage']} stage" if blocked_by.get("stage") else ""
     return f"BLOCKED by {who}{where}." + (f" SETTINGS MISMATCH: {blocked_by['settings_mismatch']}"
                                           if blocked_by.get("settings_mismatch") else "")

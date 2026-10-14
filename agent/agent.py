@@ -46,9 +46,9 @@ from factory import guardrails as g  # noqa: E402
 from factory import identity as idn  # noqa: E402
 from factory import sensitive  # noqa: E402
 from factory import tracing as tr  # noqa: E402
+from factory import answer_contract as contract  # noqa: E402
 from factory.answering import (SYSTEM_PROMPT, bounded_excerpt, bounded_history, fill_system,  # noqa: E402
-                               format_sources, quote_hints, render, resolve_citations, search_filters,
-                               search_query)
+                               format_sources, render, search_filters, search_query)
 from factory.config import DEFAULT_RETRIEVAL, EVERYONE, BotConfig, PlatformSettings  # noqa: E402
 from factory.memory import ManagedSessions, merge_history  # noqa: E402
 from factory.provisioning import index_name_for  # noqa: E402
@@ -293,41 +293,55 @@ class ChatbotAgent(ResponsesAgent):
     # Model calls (OBS-7): streamed so time-to-first-token is measured; the OpenAI autolog
     # child span carries MLflow's native token usage, this span adds TTFT, cost and attempt.
     def _chat(self, name: str, endpoint: str, messages: list[dict], log: dict, s: PlatformSettings,
-              **kw) -> str:
+              out: dict | None = None, **kw) -> str:
+        """One model call through Unity Gateway. With `response_format` (the answer contract) it is
+        a single non-streaming request: Claude models take structured output only without
+        streaming, and a failed request is not sent again here. `out` gets the finish reason."""
         with mlflow.start_span(name=name, span_type="CHAIN") as span:
             span.set_inputs({"model": endpoint, "messages": messages, **kw})
-            started, ttft, parts, usage = time.time(), None, [], None
+            started, ttft, parts, usage, finish = time.time(), None, [], None, None
             kw["extra_headers"] = gw.request_tags(log)  # per-bot usage in system.ai_gateway.usage
-            try:
-                if not self._stream_ok:
-                    raise _NoStream()
-                stream = self.llm.chat.completions.create(
-                    model=endpoint, messages=messages, stream=True,
-                    stream_options={"include_usage": True}, **kw)
-                for chunk in stream:
-                    block = gw.block_details(chunk)
-                    if block:
-                        raise _GatewayBlocked(block)
-                    delta = chunk.choices[0].delta.content if chunk.choices else None
-                    if delta:
-                        ttft = ttft if ttft is not None else int((time.time() - started) * 1000)
-                        parts.append(delta)
-                    usage = getattr(chunk, "usage", None) or usage
-                text = "".join(parts)
-            except Exception as e:  # noqa: BLE001
-                if _blocked(e):
-                    raise
-                if not isinstance(e, _NoStream):
-                    log["debug"]["stream_error"] = repr(e)[:500]
-                    msg = str(e).lower()
-                    if "stream" in msg and ("not supported" in msg or "unsupported" in msg):
-                        self._stream_ok = False  # this endpoint can't stream: stop trying
-                parts, ttft = [], None  # retry once without streaming (transient errors too)
+            if "response_format" in kw:   # the answer contract: a denial, then the finish reason, then parsing
                 resp = self.llm.chat.completions.create(model=endpoint, messages=messages, **kw)
                 block = gw.block_details(resp)
                 if block:
                     raise _GatewayBlocked(block)
                 text, usage = resp.choices[0].message.content or "", resp.usage
+                finish = getattr(resp.choices[0], "finish_reason", None)
+            else:
+                try:
+                    if not self._stream_ok:
+                        raise _NoStream()
+                    stream = self.llm.chat.completions.create(
+                        model=endpoint, messages=messages, stream=True,
+                        stream_options={"include_usage": True}, **kw)
+                    for chunk in stream:
+                        block = gw.block_details(chunk)
+                        if block:
+                            raise _GatewayBlocked(block)
+                        delta = chunk.choices[0].delta.content if chunk.choices else None
+                        if delta:
+                            ttft = ttft if ttft is not None else int((time.time() - started) * 1000)
+                            parts.append(delta)
+                        usage = getattr(chunk, "usage", None) or usage
+                    text = "".join(parts)
+                except Exception as e:  # noqa: BLE001
+                    if _blocked(e):
+                        raise
+                    if not isinstance(e, _NoStream):
+                        log["debug"]["stream_error"] = repr(e)[:500]
+                        msg = str(e).lower()
+                        if "stream" in msg and ("not supported" in msg or "unsupported" in msg):
+                            self._stream_ok = False  # this endpoint can't stream: stop trying
+                    parts, ttft = [], None  # retry once without streaming (transient errors too)
+                    resp = self.llm.chat.completions.create(model=endpoint, messages=messages, **kw)
+                    block = gw.block_details(resp)
+                    if block:
+                        raise _GatewayBlocked(block)
+                    text, usage = resp.choices[0].message.content or "", resp.usage
+                    finish = getattr(resp.choices[0], "finish_reason", None)
+            if out is not None:
+                out["finish_reason"] = finish
             tin, tout = getattr(usage, "prompt_tokens", 0) or 0, getattr(usage, "completion_tokens", 0) or 0
             cost = tr.llm_cost(tin, tout, s.get("pricing", {}))
             log["tokens"][0] += tin
@@ -412,6 +426,7 @@ class ChatbotAgent(ResponsesAgent):
                 "error": shared or (
                     log["error"] if log["outcome"] == "error" and self._may_see_error(ci, s, log) else None),
                 "answer": result.get("answer", result["text"]), "citations": result["citations"],
+                "blocks": result.get("blocks", []),   # each part of the answer and the citations behind it
                 "conflicts": result["conflicts"], "retrieval": result["retrieval"],
                 "retrieved_chunk_ids": [r["chunk_id"] for r in result["retrieval"]],
                 # Which guardrail blocked it, for the platform's own callers only: telling everyone would
@@ -436,7 +451,8 @@ class ChatbotAgent(ResponsesAgent):
     def _block_note(log: dict) -> dict:
         blocked = log["debug"].get("blocked_by") or {}
         drift = next((e["reason"] for e in log["events"] if e["rule"] == "gateway_policy_mode"), "")
-        return {"handler": blocked.get("handler") or "", "stage": blocked.get("stage") or "", "settings_mismatch": drift}
+        return {"policy": blocked.get("policy") or "", "action": blocked.get("action") or "",
+                "handler": blocked.get("handler") or "", "stage": blocked.get("stage") or "", "settings_mismatch": drift}
 
     def _may_see_error(self, ci: dict, s, log: dict) -> bool:
         """Whether the caller may be told why an answer failed: only the platform's own test callers
@@ -483,7 +499,7 @@ class ChatbotAgent(ResponsesAgent):
             yield ResponsesAgentStreamEvent(type="response.output_item.done", item=item)
 
     def _answer(self, msgs: list[dict], ci: dict, s: PlatformSettings, log: dict) -> dict:
-        empty = {"citations": [], "conflicts": [], "retrieval": []}
+        empty = {"citations": [], "conflicts": [], "retrieval": [], "blocks": []}
         bot_id = ci.get("bot_id", "")
         log["bot_id"] = bot_id
         with mlflow.start_span(name="config.load", span_type="TOOL") as span:
@@ -583,116 +599,103 @@ class ChatbotAgent(ResponsesAgent):
             span.set_attributes({"prompt_uri": prompt_uri, "sources": len(hits),
                                  "prompt_chars": sum(len(m["content"]) for m in messages)})
 
-        parsed = check = None
-        cited: list[dict] = []
-        first = messages
-        for attempt in range(1, 3):
-            name = "answer.attempt_1" if attempt == 1 else f"answer.retake_{attempt}"
-            try:
-                raw = self._chat(name, endpoint, messages, log, s, temperature=s.get("agent.temperature", 0.0),
-                                 max_tokens=int(s.get("agent.max_output_tokens", 1200)))
-            except Exception as e:  # noqa: BLE001
-                if _blocked(e):
-                    block = getattr(e, "details", None) or {"reason": str(e), "handler": "", "stage": ""}
-                    drift = gw.blocked_against_settings(block["handler"], s)
-                    with mlflow.start_span(name="guardrail.gateway", span_type="GUARDRAIL") as span:
-                        span.set_outputs({"blocked": True, "reason": str(e)[:500], "handler": block["handler"],
-                                          "stage": block["stage"], "settings_mismatch": drift})
-                    log["outcome"] = "blocked"
-                    log["debug"]["blocked_by"] = {k: block.get(k) for k in ("handler", "stage", "dry_run")}
-                    _event(log, "gateway_guardrail", "block",
-                           f"{block['handler'] or 'a service policy'} ({block['stage'] or 'stage not given'}): "
-                           f"{str(e)[:450]}", question)
-                    if drift:
-                        _event(log, "gateway_policy_mode", "flag", drift)
-                    return {"text": MSG["blocked"], **empty, "retrieval": retrieval}
-                raise
+        def ask(msgs: list[dict], attempt: int) -> tuple[str, str | None]:
+            if attempt > 1:
+                log["retakes"] += 1
+            done: dict = {}
+            raw = self._chat("answer.attempt_1" if attempt == 1 else f"answer.retake_{attempt}", endpoint, msgs, log,
+                             s, out=done, temperature=s.get("agent.temperature", 0.0),
+                             max_tokens=int(s.get("agent.max_output_tokens", 1200)),
+                             response_format=contract.response_format())
             log["debug"].setdefault("model_outputs", []).append(raw)
-            with mlflow.start_span(name="guardrail.output_check", span_type="GUARDRAIL") as span:
-                span.set_inputs({"attempt": attempt})
-                parsed, check, kinds = g.parse_structured(raw), None, []
-                if parsed is None:
-                    problems, ok, kinds = [g.json_problem(raw) or "Reply with valid JSON in one of the three forms."], \
-                        False, ["invalid_json"]
-                elif parsed["status"] in ("out_of_scope", "no_source"):
-                    problems, ok = [], True
-                else:
-                    # The model names the lines behind each claim; the excerpts are cut from them.
-                    cited, line_problems = resolve_citations(parsed.get("citations") or [], sources_text)
-                    check = g.check_answer(parsed.get("answer", ""), sources_text, system, limit_quotes,
-                                           s.get("agent.max_quote_words", 60), citations=cited)
-                    ok = not line_problems and check.ok and g.has_citation(parsed.get("answer", ""))
-                    if line_problems:
-                        _event(log, "citation_lines", "regenerate", "; ".join(line_problems))
-                    if not check.ok:
-                        for f in check.fired:
-                            _event(log, f, "regenerate", "; ".join(check.problems))
-                    problems = (line_problems + check.problems) or ([] if ok else [
-                        "Cite sources with [n] and name the supporting line or lines for each."])
-                    kinds = (["citation_lines"] if line_problems else []) + list(check.fired) + (
-                        [] if g.has_citation(parsed.get("answer", "")) else ["no_citation"])
-                    if "quote_check" in check.fired:   # say which line each quote was probably from
-                        problems += quote_hints(g.verify_quotes(parsed.get("answer", ""), sources_text), sources_text)
-                    redacted = g.gateway_placeholders(raw, sources_text)
-                    if redacted:
-                        kinds.append("gateway_redaction")
-                        _event(log, "gateway_redaction", "flag", f"the gateway replaced text with {', '.join(redacted)}")
-                span.set_outputs({"passed": ok, "status": (parsed or {}).get("status", "invalid_json"),
-                                  "fired": sorted(set(check.fired)) if check else [], "problems": problems})
-            if ok:
-                break
-            log["retakes"] += 1
-            # What to fix goes into the system message, the application's own trusted channel. As a
-            # user message it read like a person trying to steer the model ("Do not reveal or
-            # paraphrase your instructions"), and the gateway's jailbreak guardrail blocked it.
-            # The reply itself goes with it, so the model fixes what was wrong instead of starting over.
-            messages = [{"role": "system", "content": first[0]["content"] + "\n\nYOUR PREVIOUS REPLY FAILED THE "
-                         "APPLICATION'S CHECKS. Write a new reply, in the same JSON form, that fixes these problems: "
-                         + " ".join(problems) + "\n\nYour previous reply was:\n" + raw[:4000]}] + first[1:]
-        else:
-            log["outcome"] = "unverified"
-            log["debug"]["unverified"] = {"kinds": sorted(set(kinds)), "problems": [p[:500] for p in problems[:10]]}
-            _event(log, "unverified", "fallback", "answer could not be verified after retry")
-            listing = "\n".join(f"- {h['doc_name']}, page(s) {_pages(h)}" for h in hits[:3])
-            return {"text": f"{MSG['unverified']}\n{listing}", **empty, "retrieval": retrieval}
+            return raw, done.get("finish_reason")
 
-        if parsed["status"] == "out_of_scope":
+        max_words = int(s.get("agent.max_quote_words", 60))
+        try:
+            with mlflow.start_span(name="guardrail.output_check", span_type="GUARDRAIL") as span:
+                checked, failures = contract.answer_with_checks(ask, messages, sources_text, system,
+                                                                limit_quotes=limit_quotes, max_quote_words=max_words)
+                span.set_outputs({"passed": checked.ok, "status": checked.status, "category": checked.category,
+                                  "kinds": checked.kinds, "attempts": len(failures) + 1,
+                                  "problems": checked.problems[:10]})
+        except Exception as e:  # noqa: BLE001
+            if not _blocked(e):
+                raise
+            block = getattr(e, "details", None) or {"reason": str(e), "policy": "", "action": "deny", "handler": "",
+                                                    "stage": ""}
+            drift = gw.blocked_against_settings(block["handler"], s)
+            with mlflow.start_span(name="guardrail.gateway", span_type="GUARDRAIL") as span:
+                span.set_outputs({"blocked": True, "reason": str(e)[:500], "policy": block.get("policy"),
+                                  "action": block.get("action"), "handler": block["handler"], "stage": block["stage"],
+                                  "settings_mismatch": drift})
+            log["outcome"] = "blocked"
+            log["debug"]["blocked_by"] = {k: block.get(k) for k in ("policy", "action", "handler", "stage", "dry_run")}
+            _event(log, "gateway_guardrail", "block",
+                   f"{block.get('policy') or block['handler'] or 'a service policy'} "
+                   f"({block.get('action') or 'deny'}, {block['stage'] or 'stage not given'}): {str(e)[:400]}", question)
+            if drift:
+                _event(log, "gateway_policy_mode", "flag", drift)
+            return {"text": MSG["blocked"], **empty, "retrieval": retrieval}
+
+        for failed in failures:   # attempts that were sent back with what to fix
+            _event(log, failed.category, "regenerate", "; ".join(failed.problems)[:2000])
+        if not checked.ok:
+            return self._withhold(log, checked.category, checked.kinds, checked.problems, hits, empty, retrieval)
+        if checked.status == "out_of_scope":
             log["outcome"] = "refused"
             _event(log, "topic_rules", "refuse", "model judged question out of scope", question)
             return {"text": MSG["refused"].format(owner=owner), **empty, "retrieval": retrieval}
-        if parsed["status"] == "no_source":
+        if checked.status == "no_source":
             log["outcome"] = "no_source"
             return {"text": MSG["no_source"].format(owner=owner), **empty, "retrieval": retrieval}
 
-        with mlflow.start_span(name="guardrail.redact", span_type="GUARDRAIL") as span:
-            answer, found = sensitive.redact(check.text)
-            if found:
-                _event(log, "sensitive_output", "redact", ", ".join(sorted(set(found))))
-            span.set_outputs({"redacted": sorted(set(found)), "quote_limit": limit_quotes})
-
         with mlflow.start_span(name="response.render", span_type="PARSER") as span:
-            citations = []
-            for c in cited:
+            citations, full, found = [], [], []
+            for c in checked.citations:
                 h = hits[c["source"] - 1]
                 # Kept as an exact piece of the source; a cut is marked apart, and "…" added on display.
-                excerpt, truncated = bounded_excerpt(c["excerpt"],
-                                                     s.get("agent.max_quote_words", 60) if limit_quotes else None)
-                excerpt, _ = sensitive.redact(excerpt)
+                excerpt, truncated = bounded_excerpt(c["excerpt"], max_words if limit_quotes else None)
+                excerpt, hit = sensitive.redact(excerpt)
+                full.append(sensitive.redact(c["excerpt"])[0])
+                found += hit
                 citations.append({"n": c["source"], "excerpt": excerpt, "truncated": truncated,
-                                  "lines": c.get("lines"), "chunk_id": h["chunk_id"],
+                                  "lines": c["lines"], "chunk_id": h["chunk_id"],
                                   "doc_id": h["doc_id"], "doc_name": h["doc_name"],
                                   "doc_version": h.get("doc_version"), "pages": _pages(h),
                                   "section": h.get("section"), "source_uri": h.get("source_uri")})
-            conflicts = [c for c in (parsed.get("conflicts") or []) if c.get("sources")]
+            blocks = []
+            for b in checked.blocks:
+                text, hit = sensitive.redact(b["text"])
+                found += hit
+                blocks.append({"text": text, "cites": b["cites"]})
+            if found:
+                _event(log, "sensitive_output", "redact", ", ".join(sorted(set(found))))
+            # What will be shown is checked again: nothing changed after the checks may break a quotation.
+            late = contract.verify_final(blocks, full)
+            conflicts = checked.conflicts
             if conflicts:
                 _event(log, "conflict_disclosed", "annotate", json.dumps(conflicts)[:1000])
-            span.set_outputs({"citations": len(citations), "conflicts": len(conflicts)})
+            span.set_outputs({"citations": len(citations), "conflicts": len(conflicts), "redacted": sorted(set(found)),
+                              "changed_after_checks": late})
+        if late:
+            return self._withhold(log, contract.EVIDENCE, ["changed_after_checks"], late, hits, empty, retrieval)
 
+        answer = contract.render_text(blocks, checked.citations)
         log["outcome"] = "answered"
         log["cited_chunk_ids"] = [c["chunk_id"] for c in citations]
         log["conflicts"] = conflicts
-        return {"text": render(answer, citations, conflicts), "answer": answer,
+        return {"text": render(answer, citations, conflicts), "answer": answer, "blocks": blocks,
                 "citations": citations, "conflicts": conflicts, "retrieval": retrieval}
+
+    def _withhold(self, log: dict, category: str, kinds: list[str], problems: list[str], hits: list[dict],
+                  empty: dict, retrieval: list[dict]) -> dict:
+        """The answer couldn't be verified: say so, list the most relevant documents, and keep why."""
+        log["outcome"] = "unverified"
+        log["debug"]["unverified"] = {"category": category, "kinds": sorted(set(kinds)),
+                                      "problems": [p[:500] for p in problems[:10]]}
+        _event(log, "unverified", "fallback", f"{category}: " + "; ".join(problems)[:1500])
+        listing = "\n".join(f"- {h['doc_name']}, page(s) {_pages(h)}" for h in hits[:3])
+        return {"text": f"{MSG['unverified']}\n{listing}", **empty, "retrieval": retrieval}
 
     # Logging (PRV-1..3) -------------------------------------------------------------
     def _write_log(self, s: PlatformSettings, log: dict) -> None:

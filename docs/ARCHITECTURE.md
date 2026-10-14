@@ -108,6 +108,9 @@ account budget with block-at-100%, created in the account console.
 retrieval Hit@k/MRR, citations, leakage and sensitive output; the agent's retrieval is mirrored
 into a RETRIEVER span so retrieval judges can read it. Results attach to traces, the run links
 to the release's LoggedModel, and the golden set is mirrored into a UC evaluation dataset.
+Answers follow a strict JSON contract (`answer_contract`): blocks of text, each with the source
+lines behind it, requested with `response_format` and checked before anything is shown; see
+SETUP, "The answer contract".
 The gate decides from what each scorer returned, kept in the job as it happens
 (`evals.recording_scorer`), not from a read-back of trace storage; a scorer that gave no score
 is reported with its reason. The agent answers the check's questions without consulting the

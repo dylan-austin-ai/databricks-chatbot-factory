@@ -798,20 +798,27 @@ output and the first smoke test:
   grants" with what succeeded and what failed (and stops if any failed), then whether the agent
   service principal may use the AI Search endpoint. If a chatbot then reports a permission error
   while searching, give that principal **Can Use** on the endpoint's **Permissions** in the UI.
-- Citations and their excerpts. Each source is shown to the model as numbered lines (a sentence,
-  or one table row); the model names the lines behind what it said, and the agent cuts the
-  excerpts out of the source from them, so an excerpt can't be misquoted, stitched together or
-  two table rows merged. The lines need not be next to each other: each run of consecutive lines
-  becomes its own excerpt (at most four places of at most four lines per citation). The first
-  version required one run, and withheld correct answers that cited, say, lines 16, 29 and 30.
-  Quotes in the answer itself use curly quotation marks (straight ones broke the JSON) and must
-  still come word for word from a single line; both are still checked exactly. A shortened excerpt is stored
-  as the exact words kept, with `truncated` set; the "…" is added only where it is shown. The
-  agent and the quality check use the same excerpt check (`guardrails.excerpt_found`), so they
-  can't disagree again. When the model's reply fails a check, what to fix and the reply itself
-  are added to the system message for the second try (as a user message it once tripped the
-  gateway's jailbreak guardrail), with specific help: the JSON error, the line a misquote was
-  probably meant to come from, or a gateway placeholder such as `[UK_NHS]` to leave out.
+- The answer contract (`factory/answer_contract.py`). The answer model is held to a strict JSON
+  schema: the request carries `response_format` (`json_schema`, strict) and is sent without
+  streaming, because Claude models on Databricks take structured output only without streaming.
+  So every route of the answer model service must be a model that supports structured output
+  (Databricks lists Claude Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.1 as not supporting
+  it): check the fallback route too before relying on it. Answers are not streamed, so `ttft_ms`
+  stays empty for them. The reply is checked in this order: a gateway denial, the finish reason
+  (cut off at the length limit is a truncation), valid JSON, the schema (statuses, field types,
+  evidence structure, what each status requires), then the evidence. The model answers in
+  blocks, each with the SOURCE and numbered lines behind it (a sentence, or one table row);
+  lines need not be next to each other, a run longer than four lines is split into several
+  excerpts, and the budget is 12 lines per block and 30 per answer. The agent cuts the excerpts
+  out of the source, writes the [n] markers itself, and checks every quotation, including short
+  ones such as a button label or an amount, against the lines its own block cites, so a quote
+  from one source can't be credited to another. What will be shown is checked once more after
+  redaction. A shortened excerpt is stored as the exact words kept, with `truncated` set; the
+  "…" is added only where it is shown. A reply that fails is sent back once, with the problems
+  by block and source line added to the system message (never the earlier reply itself), and
+  withheld if it fails again. Each failure is recorded as one of `invalid_json`,
+  `schema_validation`, `truncation`, `evidence_failure`, or a gateway `policy_denial` (outcome
+  blocked); a failed request is not sent again automatically.
 - Why answers were withheld. When an answer still fails its checks, the platform's own callers
   are told why (the kinds of problem and the problem text). The quality check prints each
   question's reasons in the diagnostic, a count by cause in every run ("Withheld because of:

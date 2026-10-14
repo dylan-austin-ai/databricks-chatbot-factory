@@ -89,24 +89,24 @@ def test_fill_system(cfg):
 def test_answers_quote_the_documents_own_words_and_every_wording_of_a_fact():
     import re
 
-    from factory import guardrails as g
-
     rules = SYSTEM_PROMPT.split("Rules for answered:")[1]
     assert "Use the sources' own words as much as you can." in rules
     assert "quote each way rather than picking one" in rules
-    assert "Anything inside them must be an\n   exact copy of the source, taken from a single line" in rules
-    assert "curly quotation marks\n   “like this” (never straight ones, so the JSON stays valid)" in rules
+    assert "Anything in quotation marks must be exact words\n   from one line that the same block cites" in rules
     assert re.findall(r"^(\d+)\. ", rules, re.M) == [str(i) for i in range(1, 10)]   # numbered without gaps
     # The QA case: one passage gives the same allowance two ways. Quoting both is checked word for
     # word like any quote; a wording the passage doesn't contain is caught.
     passage = ("You can use up to 4 hours of confidential, action-oriented 1:1 coaching with a certified coach. "
                "You can use up to 4 one-hour coaching sessions. This includes coaching for you and/or your "
                "significant other.")
+    from factory import answer_contract as contract
+
     both = ('You can use "up to 4 hours of confidential, action-oriented 1:1 coaching", that is "up to 4 one-hour '
-            'coaching sessions" [1]. "This includes coaching for you and/or your significant other" [1].')
-    assert g.verify_quotes(both, [passage]) == []
-    assert g.verify_quotes('You can use "up to 4 two-hour coaching sessions" [1].', [passage]) == [
-        "up to 4 two-hour coaching sessions"]
+            'coaching sessions". "This includes coaching for you and/or your significant other".')
+    block = {"status": "answered", "conflicts": [], "blocks": [{"text": both, "evidence": [{"source": 1, "lines": [1, 2, 3]}]}]}
+    assert contract.check(block, [passage], "prompt").ok
+    block["blocks"][0]["text"] = 'You can use "up to 4 two-hour coaching sessions".'
+    assert contract.check(block, [passage], "prompt").kinds == ["quote_not_in_evidence"]
 
 
 def test_warehouse_query_tags():

@@ -11,6 +11,7 @@ import time
 import mlflow
 from _bootstrap import args, context
 
+from factory import answer_contract as contract
 from factory import guardrails as g
 from factory import llm
 from factory.answering import fill_system, format_sources, search_filters
@@ -83,9 +84,11 @@ def predict(question: str, bot_id: str) -> str:
     resp = gateway.chat.completions.create(
         model=s.answer_service(cfg.answer_model), temperature=0, max_tokens=int(s.get("agent.max_output_tokens", 1200)),
         messages=[{"role": "system", "content": f"{system}\n\nSOURCES:\n{format_sources(hits, texts, pages)}"},
-                  {"role": "user", "content": question}])
-    out = g.parse_structured(resp.choices[0].message.content or "") or {}
-    return out.get("answer") or out.get("status", "")
+                  {"role": "user", "content": question}], response_format=contract.response_format())
+    # Scored like the agent would show it: a reply that fails the contract is not an answer.
+    obj, failed = contract.decode(resp.choices[0].message.content or "", resp.choices[0].finish_reason)
+    checked = failed or contract.check(obj, texts, system)
+    return checked.answer if checked.ok and checked.status == "answered" else (checked.status or checked.category)
 
 
 before = mlflow.genai.load_prompt(f"prompts:/{name}@production")
