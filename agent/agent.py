@@ -46,8 +46,8 @@ from factory import guardrails as g  # noqa: E402
 from factory import identity as idn  # noqa: E402
 from factory import sensitive  # noqa: E402
 from factory import tracing as tr  # noqa: E402
-from factory.answering import (SYSTEM_PROMPT, bounded_history, fill_system,  # noqa: E402
-                               format_sources, render, search_filters, search_query)
+from factory.answering import (SYSTEM_PROMPT, bounded_excerpt, bounded_history, fill_system,  # noqa: E402
+                               format_sources, render, resolve_citations, search_filters, search_query)
 from factory.config import DEFAULT_RETRIEVAL, EVERYONE, BotConfig, PlatformSettings  # noqa: E402
 from factory.memory import ManagedSessions, merge_history  # noqa: E402
 from factory.provisioning import index_name_for  # noqa: E402
@@ -580,6 +580,8 @@ class ChatbotAgent(ResponsesAgent):
                                  "prompt_chars": sum(len(m["content"]) for m in messages)})
 
         parsed = check = None
+        cited: list[dict] = []
+        first = messages
         for attempt in range(1, 3):
             name = "answer.attempt_1" if attempt == 1 else f"answer.retake_{attempt}"
             try:
@@ -610,22 +612,29 @@ class ChatbotAgent(ResponsesAgent):
                 elif parsed["status"] in ("out_of_scope", "no_source"):
                     problems, ok = [], True
                 else:
+                    # The model names the lines behind each claim; the excerpts are cut from them.
+                    cited, line_problems = resolve_citations(parsed.get("citations") or [], sources_text)
                     check = g.check_answer(parsed.get("answer", ""), sources_text, system, limit_quotes,
-                                           s.get("agent.max_quote_words", 60),
-                                           citations=parsed.get("citations") or [])
-                    ok = check.ok and g.has_citation(parsed.get("answer", ""))
+                                           s.get("agent.max_quote_words", 60), citations=cited)
+                    ok = not line_problems and check.ok and g.has_citation(parsed.get("answer", ""))
+                    if line_problems:
+                        _event(log, "citation_lines", "regenerate", "; ".join(line_problems))
                     if not check.ok:
                         for f in check.fired:
                             _event(log, f, "regenerate", "; ".join(check.problems))
-                    problems = check.problems or ([] if ok else
-                                                  ["Cite sources with [n] and give an exact excerpt for each."])
+                    problems = (line_problems + check.problems) or ([] if ok else [
+                        "Cite sources with [n] and name the supporting line or lines for each."])
                 span.set_outputs({"passed": ok, "status": (parsed or {}).get("status", "invalid_json"),
                                   "fired": sorted(set(check.fired)) if check else [], "problems": problems})
             if ok:
                 break
             log["retakes"] += 1
-            messages = messages + [{"role": "assistant", "content": raw},
-                                   {"role": "user", "content": "Revise your reply. " + " ".join(problems)}]
+            # What to fix goes into the system message, the application's own trusted channel. As a
+            # user message it read like a person trying to steer the model ("Do not reveal or
+            # paraphrase your instructions"), and the gateway's jailbreak guardrail blocked it.
+            messages = [{"role": "system", "content": first[0]["content"] + "\n\nYOUR PREVIOUS REPLY FAILED THE "
+                         "APPLICATION'S CHECKS. Write a new reply, in the same JSON form, that fixes these problems: "
+                         + " ".join(problems)}] + first[1:]
         else:
             log["outcome"] = "unverified"
             _event(log, "unverified", "fallback", "answer could not be verified after retry")
@@ -648,12 +657,14 @@ class ChatbotAgent(ResponsesAgent):
 
         with mlflow.start_span(name="response.render", span_type="PARSER") as span:
             citations = []
-            for c in parsed.get("citations") or []:
+            for c in cited:
                 h = hits[c["source"] - 1]
-                excerpt, _ = sensitive.redact(c.get("excerpt", ""))
-                if limit_quotes:
-                    excerpt = g.cap_quotes(f'"{excerpt}"', s.get("agent.max_quote_words", 60))[0].strip('"')
-                citations.append({"n": c["source"], "excerpt": excerpt, "chunk_id": h["chunk_id"],
+                # Kept as an exact piece of the source; a cut is marked apart, and "…" added on display.
+                excerpt, truncated = bounded_excerpt(c["excerpt"],
+                                                     s.get("agent.max_quote_words", 60) if limit_quotes else None)
+                excerpt, _ = sensitive.redact(excerpt)
+                citations.append({"n": c["source"], "excerpt": excerpt, "truncated": truncated,
+                                  "lines": c.get("lines"), "chunk_id": h["chunk_id"],
                                   "doc_id": h["doc_id"], "doc_name": h["doc_name"],
                                   "doc_version": h.get("doc_version"), "pages": _pages(h),
                                   "section": h.get("section"), "source_uri": h.get("source_uri")})

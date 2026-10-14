@@ -178,9 +178,9 @@ def test_a_judge_that_needs_guidelines_is_skipped_on_a_question_without_any(kept
               "expectations": evals.dataset_record({"kind": "out_of_scope", "eval_id": "e2",
                                                     "question": "Is my claim covered?"})["expectations"]}
     assert scorer.run(**refuse) == "yes"
-    assert kept.results["Is my claim covered?"]["expectations_guidelines"]["value"] == 1.0
+    assert kept.results["e2"]["expectations_guidelines"]["value"] == 1.0     # keyed by the question's eval_id
     job = (ROOT / "jobs" / "run_evals.py").read_text()
-    assert 'NEEDS = {"expectations_guidelines": "guidelines"}' in job
+    assert 'NEEDS = {"expectations_guidelines": ("guidelines",), "correctness": ("expected_response", "expected_facts")}' in job
 
 
 def test_a_judge_that_raises_still_raises_and_its_reason_is_kept(kept):
@@ -215,13 +215,14 @@ def test_a_judge_that_never_comes_back_is_reported_as_unfinished(kept):
 def test_the_check_decides_from_what_the_scorers_returned_not_from_a_read_back():
     job = (ROOT / "jobs" / "run_evals.py").read_text()
     decide = job[job.index("mlflow.genai.evaluate(data=records"):job.index("gate = evals.gate(")]
-    assert 'scored = {c["question"]: evals.scores_from(RESULTS.get(c["question"])) for c in cases}' in decide
+    assert 'scored = {c["eval_id"]: evals.scores_from(RESULTS.get(c["eval_id"])) for c in cases}' in decide
     outside_diagnostic = decide[:decide.index("if DIAGNOSE:\n            print(f\"DIAG: 9.")]
     assert "read_scores(" not in outside_diagnostic and "search_traces" not in outside_diagnostic
     assert "evals.close_unfinished(RESULTS, STATUS)" in outside_diagnostic
     assert "return [kept(n, j.run) for n, j in judges.items()] + [kept(\"checks\", checks)]" in job   # every scorer
-    assert "for store in (OUTCOMES, TRACE_IDS, BLOCKS, RESULTS, STATUS):\n        store.clear()" in job   # per chatbot
-    assert '"scorer_errors": scorer_errors' in job and '"errors": scored[c["question"]][2]' in job
+    assert ("for store in (OUTCOMES, AGENT_TRACES, BLOCKS, TRACE_OF, RESULTS, STATUS):\n        store.clear()"
+            in job)                                                                         # per chatbot
+    assert '"scorer_errors": scorer_errors' in job and '"errors": scored[c["eval_id"]][2]' in job
 
 
 def test_the_diagnostic_reads_back_the_endpoints_own_trace_and_each_questions_results():

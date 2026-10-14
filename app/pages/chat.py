@@ -73,7 +73,8 @@ for i, m in enumerate(conv["messages"]):
                 for c in m["citations"]:
                     where = f"page(s) {c['pages']}" + (f", section \"{c['section']}\"" if c.get("section") else "")
                     st.markdown(f"**[{c['n']}] {c['doc_name']}** (v{c.get('doc_version')}), {where}")
-                    st.markdown(f"> {md_text(c['excerpt'])}")  # Markdown quote, rendered safely
+                    more = " …" if c.get("truncated") else ""   # the excerpt itself stays verbatim
+                    st.markdown(f"> {md_text(c['excerpt'])}{more}")  # Markdown quote, rendered safely
         if m["role"] == "assistant" and m.get("request_id"):
             c1, c2, _ = st.columns([1, 1, 10])
             if c1.button("", icon=":material/thumb_up:", key=f"up_{i}", help="Helpful"):

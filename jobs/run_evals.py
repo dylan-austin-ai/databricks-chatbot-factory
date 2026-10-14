@@ -111,15 +111,24 @@ def chatbot_fault(custom: dict) -> str:
     return evals.chatbot_fault(custom, RUNS_AS, is_platform_caller(RUNS_AS, settings))
 
 
-# What happened to each question of this run, kept as it happens:
-OUTCOMES: dict[str, str] = {}                # what the chatbot did with it, so a fault isn't judged as an answer
-TRACE_IDS: dict[str, tuple[str, str]] = {}   # (this check's trace, the chatbot's own trace on the serving endpoint)
-BLOCKS: dict[str, dict] = {}                 # which guardrail blocked it, when one did
-RESULTS: dict[str, dict[str, dict]] = {}     # what every scorer said about it: the gate decides from these
-STATUS: dict[str, dict[str, str]] = {}       # how each scorer went: running, done, failed or skipped
-# A judge that can't work without something in the question's expectations: it is skipped on a
-# question that lacks it. Only "should refuse" questions carry guidelines of their own.
-NEEDS = {"expectations_guidelines": "guidelines"}
+# What happened to each test question of this run, kept as it happens. Never keyed by the question's
+# text: the same question can be in a test set twice. The asking side knows its trace; the scoring
+# side knows the eval_id and the trace, which joins the two (TRACE_OF).
+OUTCOMES: dict[str, str] = {}                # trace -> what the chatbot did, so a fault isn't judged as an answer
+AGENT_TRACES: dict[str, str] = {}            # trace -> the chatbot's own trace on the serving endpoint
+BLOCKS: dict[str, dict] = {}                 # trace -> which guardrail blocked it, when one did
+TRACE_OF: dict[str, str] = {}                # eval_id -> its trace
+RESULTS: dict[str, dict[str, dict]] = {}     # eval_id -> what every scorer said: the gate decides from these
+STATUS: dict[str, dict[str, str]] = {}       # eval_id -> how each scorer went: running, done, failed or skipped
+# A judge that can't work without a ground truth in the question's expectations, any one of these:
+# it is skipped on a question that has none. Only "should refuse" questions carry guidelines of
+# their own; they carry no expected answer, and are judged by refusal_accuracy instead.
+NEEDS = {"expectations_guidelines": ("guidelines",), "correctness": ("expected_response", "expected_facts")}
+
+
+def outcome_of(case: dict) -> str:
+    """What the chatbot did with one test question of this run ("" if it was never asked)."""
+    return OUTCOMES.get(TRACE_OF.get(case["eval_id"], ""), "")
 
 
 def build_scorers(cfg, allowed: set[str], chunks: dict[str, str]) -> list:
@@ -136,7 +145,8 @@ def build_scorers(cfg, allowed: set[str], chunks: dict[str, str]) -> list:
         return [Feedback(name=k, value=v) for k, v in scores.items()]
 
     def kept(name, work):
-        return evals.recording_scorer(name, work, RESULTS, STATUS, assessment_value, NEEDS.get(name, ""), safe_text)
+        return evals.recording_scorer(name, work, RESULTS, STATUS, assessment_value, NEEDS.get(name, ()), safe_text,
+                                      TRACE_OF)
 
     return [kept(n, j.run) for n, j in judges.items()] + [kept("checks", checks)]
 
@@ -151,10 +161,10 @@ def make_predict(cfg, channel: str, p: BotPaths, chunks: dict[str, str]):
             response, custom = evals.call_agent(client, agent_ep, cfg.bot_id, question, channel)
         except Exception as e:  # noqa: BLE001
             response, custom = f"ERROR: {e}", {"outcome": "error"}
-        OUTCOMES[question] = custom.get("outcome") or ""
+        mine = mlflow.get_active_trace_id() or ""
+        OUTCOMES[mine], AGENT_TRACES[mine] = custom.get("outcome") or "", str(custom.get("trace_id") or "")
         if custom.get("blocked_by"):
-            BLOCKS[question] = custom["blocked_by"]
-        TRACE_IDS[question] = (mlflow.get_active_trace_id() or "", str(custom.get("trace_id") or ""))
+            BLOCKS[mine] = custom["blocked_by"]
         hits = custom.get("retrieval") or []
         need = [h["chunk_id"] for h in hits if h.get("chunk_id") and h["chunk_id"] not in chunks]
         if need:
@@ -293,7 +303,7 @@ for bot in bots:
             print(f"{cfg.bot_id}: version link skipped: {e}")
 
     chunks: dict[str, str] = {}
-    for store in (OUTCOMES, TRACE_IDS, BLOCKS, RESULTS, STATUS):
+    for store in (OUTCOMES, AGENT_TRACES, BLOCKS, TRACE_OF, RESULTS, STATUS):
         store.clear()
     if cases and not DIAGNOSE:
         # One question first. If the chatbot itself is failing, or refuses the check's own
@@ -385,30 +395,30 @@ for bot in bots:
         if DIAGNOSE:
             print(f"DIAG: 8. asking and scoring finished in {time.time() - started_at:.1f}s", flush=True)
         evals.close_unfinished(RESULTS, STATUS)
-        scored = {c["question"]: evals.scores_from(RESULTS.get(c["question"])) for c in cases}
-        rows = [scored[c["question"]][0] for c in cases]
-        faults = sum(1 for c in cases if OUTCOMES.get(c["question"]) in evals.CANT_BE_SCORED)
-        scorer_errors = evals.scorer_problems([scored[c["question"]][2] for c in cases])
+        scored = {c["eval_id"]: evals.scores_from(RESULTS.get(c["eval_id"])) for c in cases}
+        rows = [scored[c["eval_id"]][0] for c in cases]
+        faults = sum(1 for c in cases if outcome_of(c) in evals.CANT_BE_SCORED)
+        scorer_errors = evals.scorer_problems([scored[c["eval_id"]][2] for c in cases])
         if scorer_errors:
             print(f"{cfg.bot_id}: scorers that gave no score: {scorer_errors}", flush=True)
         if DIAGNOSE:
             print(f"DIAG: 9. what each question got, as the scorers returned it (not read back from storage): "
                   f"{sum(1 for r in rows if r)} of {len(rows)} question(s) have scores. What the chatbot did: "
-                  + evals.outcome_counts([OUTCOMES.get(c["question"], "") for c in cases]), flush=True)
+                  + evals.outcome_counts([outcome_of(c) for c in cases]), flush=True)
             for i, c in enumerate(cases, 1):
-                q = c["question"]
-                scores, _, errors = scored[q]
-                ran = STATUS.get(q, {})
-                print(f"DIAG:   question {i} ({q[:60]!r}): the chatbot's outcome was "
-                      f"{OUTCOMES.get(q) or 'not recorded (it was never asked)'}. Scorers: "
+                q, eid = c["question"], c["eval_id"]
+                scores, _, errors = scored[eid]
+                ran, mine = STATUS.get(eid, {}), TRACE_OF.get(eid, "")
+                print(f"DIAG:   question {i} ({q[:60]!r}, {eid}): the chatbot's outcome was "
+                      f"{outcome_of(c) or 'not recorded (it was never asked)'}. Scorers: "
                       + (", ".join(f"{n} {state}" for n, state in sorted(ran.items())) or "none ran"), flush=True)
-                if BLOCKS.get(q):
-                    print(f"DIAG:   question {i}: {evals.block_sentence(BLOCKS[q])}", flush=True)
+                if BLOCKS.get(mine):
+                    print(f"DIAG:   question {i}: {evals.block_sentence(BLOCKS[mine])}", flush=True)
                 print(f"DIAG:   question {i} scores: "
                       + (", ".join(f"{n}={v:g}" for n, v in sorted(scores.items())) or "none"), flush=True)
                 for name, why in sorted(errors.items()):
                     print(f"DIAG:   question {i} NO SCORE from {name}: {why}", flush=True)
-                mine, endpoint = TRACE_IDS.get(q, ("", ""))
+                endpoint = AGENT_TRACES.get(mine, "")
                 ok, held = evals.timed(f"  question {i}: this check's trace is read back by its id",
                                        lambda t=mine: stored_results(t), 60)
                 if ok:
@@ -452,9 +462,9 @@ for bot in bots:
                           "scorer_errors": scorer_errors,
                           "per_case": [
                               {"eval_id": c["eval_id"], "question": c["question"],
-                               "outcome": OUTCOMES.get(c["question"], ""),
-                               "scores": scored[c["question"]][0], "rationales": scored[c["question"]][1],
-                               "errors": scored[c["question"]][2]} for c in cases]}),
+                               "outcome": outcome_of(c),
+                               "scores": scored[c["eval_id"]][0], "rationales": scored[c["eval_id"]][1],
+                               "errors": scored[c["eval_id"]][2]} for c in cases]}),
          "p": gate.passed, "nr": gate.needs_safety_review})
     if channel == "candidate" and not a.limit:
         sql.execute(f"""UPDATE {settings.fq('releases')} SET eval_run_id = :e, eval_passed = CAST(:p AS BOOLEAN),

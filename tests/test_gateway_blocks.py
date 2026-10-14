@@ -44,7 +44,7 @@ def test_the_diagnostic_counts_every_outcome_instead_of_calling_blocks_answers()
     assert evals.outcome_counts(["something_new"]) == "something_new 1"
     job = (ROOT / "jobs" / "run_evals.py").read_text()
     assert "the chatbot gave \"\n                  f\"{faults} of them no answer" not in job
-    assert 'evals.outcome_counts([OUTCOMES.get(c["question"], "") for c in cases])' in job
+    assert "evals.outcome_counts([outcome_of(c) for c in cases])" in job
 
 
 def test_a_blocked_question_names_the_guardrail_and_the_mismatch():

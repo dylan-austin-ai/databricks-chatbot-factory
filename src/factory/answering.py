@@ -1,6 +1,8 @@
 """Pure answer-path helpers shared by the agent and unit tests (CNV-1, RET-2, DCL-1, ANS-1/2)."""
 from __future__ import annotations
 
+import re
+
 # Versioned in the MLflow Prompt Registry at each deploy (OBS-11).
 SYSTEM_PROMPT = """You are the "<<NAME>>" assistant. Purpose: <<PURPOSE>>
 
@@ -14,16 +16,19 @@ PLATFORM RULES (always apply; you may still say what the documents state and who
 <<RULES>>
 {"status": "no_source"}
     when the SOURCES do not establish an answer. Never guess.
-{"status": "answered", "answer": "...", "citations": [{"source": 2, "excerpt": "..."}],
+{"status": "answered", "answer": "...", "citations": [{"source": 2, "lines": [4]}],
  "conflicts": [{"sources": [1, 3], "note": "..."}]}
 
 Rules for answered:
-1. Cite every claim with [n]. Every [n] you use needs a citations entry whose excerpt is one or
-   two sentences copied EXACTLY, character for character, from SOURCE [n].
+1. Cite every claim with [n]. Each SOURCE's text is split into numbered lines (L1, L2, ...). For
+   every [n] you use, add a citations entry naming the line or lines of SOURCE [n] that support
+   the claim: one line, or up to four consecutive lines, for example {"source": 2, "lines": [4, 5]}.
+   The excerpt is copied from those lines for you; don't write it.
 2. Use the sources' own words as much as you can. Give each fact (amounts, limits, who
    qualifies, steps, deadlines) as a direct quote in quotation marks, and add only the few words
    needed to join the quotes into a clear answer. Anything inside quotation marks must be an
-   exact copy of the source.
+   exact copy of the source, taken from a single line: never join words from different lines or
+   table rows inside one pair of quotation marks, and leave out the "L4:" line labels.
 3. If the sources state the same fact in more than one way (for example a total and how it is
    split up), quote each way rather than picking one.
 4. Name the document and the page or section in the answer.
@@ -67,7 +72,8 @@ def render(answer: str, citations: list[dict], conflicts: list[dict]) -> str:
     lines = [answer, "", "Sources:"]
     for c in citations:
         where = f"page(s) {c['pages']}" + (f", section \"{c['section']}\"" if c.get("section") else "")
-        lines.append(f"[{c['n']}] {c['doc_name']} (v{c.get('doc_version')}), {where}: “{c['excerpt']}”")
+        more = " …" if c.get("truncated") else ""   # shown, never stored: the excerpt stays verbatim
+        lines.append(f"[{c['n']}] {c['doc_name']} (v{c.get('doc_version')}), {where}: “{c['excerpt']}{more}”")
     for cf in conflicts:
         refs = " and ".join(f"[{n}]" for n in cf.get("sources", []))
         lines.append(f"⚠️ Sources disagree ({refs}): {cf.get('note', '')}")
@@ -85,5 +91,85 @@ def fill_system(template: str, cfg, rules: list[str]) -> str:
 def format_sources(hits: list[dict], texts: list[str], pages) -> str:
     return "\n\n".join(
         f"<<<SOURCE [{i}] document: {h['doc_name']} (version {h.get('doc_version')}) | "
-        f"page(s): {pages(h)} | section: {h.get('section') or 'n/a'}\n{text}\n>>>"
+        f"page(s): {pages(h)} | section: {h.get('section') or 'n/a'}\n{numbered(text)}\n>>>"
         for i, (h, text) in enumerate(zip(hits, texts), 1))
+
+
+# Evidence lines: what a citation points at --------------------------------------------------------
+# The model names the lines that support a claim and the excerpt is cut out of the source from
+# them, instead of the model copying it out. Copying is where verbatim excerpts failed: sentences
+# put back together, table rows merged, an ellipsis added.
+MAX_CITED_LINES = 4
+_SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=\S)")
+
+
+def evidence_units(text: str) -> list[tuple[int, int]]:
+    """(start, end) of each numbered line of one source: every line of the text, with prose split
+    into sentences, a markdown table row kept whole and an HTML table split after each row. Each
+    is an exact span of the text, so a run of them is too."""
+    units = []
+    for line in re.finditer(r"[^\n]+", text or ""):
+        body, start = line.group(0), line.start()
+        if "</tr>" in body.lower():
+            cuts = [m.end() for m in re.finditer(r"</tr>", body, re.I)]
+        elif body.lstrip().startswith("|"):
+            cuts = []
+        else:
+            cuts = [m.start() for m in _SENTENCE_END.finditer(body)]
+        for a, b in zip([0, *cuts], [*cuts, len(body)]):
+            piece = body[a:b]
+            if piece.strip():
+                lead, trail = len(piece) - len(piece.lstrip()), len(piece) - len(piece.rstrip())
+                units.append((start + a + lead, start + b - trail))
+    return units
+
+
+def numbered(text: str) -> str:
+    """A source's text as the model sees it: one numbered line per evidence unit."""
+    return "\n".join(f"L{k}: {text[a:b]}" for k, (a, b) in enumerate(evidence_units(text), 1))
+
+
+def _line_number(value) -> int | None:
+    text = str(value).strip()
+    if isinstance(value, bool) or not re.fullmatch(r"[Ll]?\d+", text):
+        return None
+    return int(text.lstrip("Ll"))
+
+
+def resolve_citations(citations, texts: list[str]) -> tuple[list[dict], list[str]]:
+    """Each citation as {"source", "lines", "excerpt"}, the excerpt cut out of the source from the
+    lines it names, so it is verbatim by construction (ANS-1); and what is wrong with any that
+    can't be. A citation that gives an excerpt and no lines (a prompt from before lines) is kept
+    as written, to be checked word for word like before."""
+    out, problems = [], []
+    for c in citations or []:
+        n = c.get("source") if isinstance(c, dict) else None
+        if isinstance(n, bool) or not isinstance(n, int) or not 1 <= n <= len(texts):
+            problems.append(f"citation to source [{n}] which does not exist")
+            continue
+        if c.get("lines") is None:
+            out.append({"source": n, "excerpt": str(c.get("excerpt") or "")})
+            continue
+        units = evidence_units(texts[n - 1])
+        raw = c["lines"] if isinstance(c["lines"], list) else [c["lines"]]
+        ks = sorted({k for k in map(_line_number, raw) if k is not None})
+        if not ks or len(ks) != len(raw):
+            problems.append(f"the citation for [{n}] must name its lines as numbers, for example [4]")
+        elif ks[0] < 1 or ks[-1] > len(units):
+            problems.append(f"SOURCE [{n}] has lines L1 to L{len(units)}; it has no line {ks[-1] if ks[-1] > 1 else ks[0]}")
+        elif ks != list(range(ks[0], ks[-1] + 1)) or len(ks) > MAX_CITED_LINES:
+            problems.append(f"the citation for [{n}] must name one line or up to {MAX_CITED_LINES} consecutive lines")
+        else:
+            a, b = units[ks[0] - 1][0], units[ks[-1] - 1][1]
+            out.append({"source": n, "lines": ks, "excerpt": texts[n - 1][a:b]})
+    return out, problems
+
+
+def bounded_excerpt(excerpt: str, max_words: int | None) -> tuple[str, bool]:
+    """At most `max_words` words of an excerpt, cut at a word boundary, so it is still an exact
+    piece of the source; and whether it was shortened. The "…" that shows a cut is added only
+    when the excerpt is displayed (render, the chat page), never stored in it."""
+    words = list(re.finditer(r"\S+", excerpt or ""))
+    if not max_words or len(words) <= max_words:
+        return excerpt or "", False
+    return excerpt[: words[max_words - 1].end()], True

@@ -41,7 +41,10 @@ unity_gateway:                         # formerly AI Gateway (GW-1..6)
     - {policy: system.ai.block_unsafe_content, phases: [input, output], mode: enforce, why: harmful content}
     - {policy: system.ai.block_jailbreak, phases: [input], mode: enforce, why: jailbreak and prompt injection}
     - {policy: system.ai.block_hallucination, phases: [output], mode: log, why: "grounding check; start in Log mode, enforce once false positives are known"}
-    - {policy: system.ai.detect_sensitive_data, phases: [input, output], mode: enforce, why: "redact SSNs, cards, IBANs and other IDs"}
+    # Security's decision (2026-10-14): signed-in people may see business contacts (names, work
+    # email addresses, phone numbers) and corporate account identifiers, so only restricted
+    # categories are selected. The agent's own redaction already masks only those three.
+    - {policy: system.ai.detect_sensitive_data, phases: [input, output], mode: enforce, why: "block or redact SSNs, payment cards and bank account numbers only; business contacts and corporate account identifiers are allowed"}
   evaluator:                           # judge for Log-mode policies, so their verdicts land in our inference table (GW-7)
     service: guardrail_evaluator
     model: system.ai.databricks-claude-haiku-4-5

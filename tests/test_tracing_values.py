@@ -122,7 +122,7 @@ def test_a_chatbot_error_fails_the_check_as_a_fault_not_as_a_bad_answer(settings
 
     source = (ROOT / "jobs" / "run_evals.py").read_text()
     assert "nothing to score for" in source and source.index("nothing to score for") < source.index("mlflow.genai.evaluate(data=records")
-    assert 'faults = sum(1 for c in cases if OUTCOMES.get(c["question"]) in evals.CANT_BE_SCORED)' in source
+    assert "faults = sum(1 for c in cases if outcome_of(c) in evals.CANT_BE_SCORED)" in source
     assert "agent_errors=faults" in source and evals.CANT_BE_SCORED == ("error", "denied", "unavailable")
 
 

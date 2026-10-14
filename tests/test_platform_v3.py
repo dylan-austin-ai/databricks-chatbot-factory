@@ -94,7 +94,7 @@ def test_answers_quote_the_documents_own_words_and_every_wording_of_a_fact():
     rules = SYSTEM_PROMPT.split("Rules for answered:")[1]
     assert "Use the sources' own words as much as you can." in rules
     assert "quote each way rather than picking one" in rules
-    assert "Anything inside quotation marks must be an\n   exact copy of the source." in rules
+    assert "Anything inside quotation marks must be an\n   exact copy of the source, taken from a single line" in rules
     assert re.findall(r"^(\d+)\. ", rules, re.M) == [str(i) for i in range(1, 10)]   # numbered without gaps
     # The QA case: one passage gives the same allowance two ways. Quoting both is checked word for
     # word like any quote; a wording the passage doesn't contain is caught.

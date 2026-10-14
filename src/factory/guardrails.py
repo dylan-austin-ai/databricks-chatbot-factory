@@ -67,14 +67,21 @@ def strip_injection(text: str) -> tuple[str, list[str]]:
 
 
 # Output checks --------------------------------------------------------------
+def excerpt_found(excerpt: str, source: str) -> bool:
+    """Whether an excerpt is an exact piece of a source (case, spacing and curly quotes aside).
+    The agent and the quality check both use this, so they can't disagree about an excerpt."""
+    found = norm(excerpt).rstrip(".,;:")
+    return bool(found) and found in norm(source)
+
+
 def verify_excerpts(citations: list[dict], sources: list[str]) -> list[str]:
     """ANS-1: each citation's excerpt must appear verbatim in the source it cites."""
     bad = []
     for c in citations:
-        n, excerpt = c.get("source"), norm(c.get("excerpt", "")).rstrip(".,;:")
+        n = c.get("source")
         if not isinstance(n, int) or not 1 <= n <= len(sources):
             bad.append(f"citation to source [{n}] which does not exist")
-        elif not excerpt or excerpt not in norm(sources[n - 1]):
+        elif not excerpt_found(c.get("excerpt", ""), sources[n - 1]):
             bad.append(f"the excerpt for [{n}] is not an exact copy of that source")
     return bad
 
@@ -162,7 +169,7 @@ def check_answer(answer: str, sources: list[str], system_prompt: str,
         cited = {c.get("source") for c in citations}
         missing = sorted({int(n) for n in CITE_RE.findall(answer)} - cited)
         if missing:
-            bad_ex.append(f"sources {missing} are cited in the answer but have no excerpt")
+            bad_ex.append(f"sources {missing} are cited in the answer but have no citations entry naming their lines")
         if bad_ex:
             r.ok = False
             r.fired.append("citation_mapping")

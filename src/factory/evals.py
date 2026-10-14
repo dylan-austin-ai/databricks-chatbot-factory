@@ -75,7 +75,7 @@ def citation_check(answer: str, custom: dict, chunk_texts: dict[str, str]) -> tu
         if c.get("chunk_id") not in retrieved:
             problems.append(f"citation [{c.get('n')}] is not a retrieved chunk")
         text = chunk_texts.get(c.get("chunk_id"), "")
-        if text and g.norm(c.get("excerpt", "")).rstrip(".,;:") not in g.norm(text):
+        if text and not g.excerpt_found(c.get("excerpt", ""), text):   # the same check the agent makes
             problems.append(f"excerpt for [{c.get('n')}] is not verbatim")
     bad_quotes = g.verify_quotes(answer, [chunk_texts.get(c.get("chunk_id"), "") for c in cites])
     if bad_quotes:
@@ -428,26 +428,34 @@ def close_unfinished(results: dict[str, dict], status: dict[str, dict]) -> None:
                 results.setdefault(question, {})[name] = {"value": None, "rationale": "", "error": UNFINISHED}
 
 
-def recording_scorer(name: str, work, results: dict, status: dict, normalise, needs: str = "", tidy=str):
-    """An MLflow scorer that runs `work` and keeps what it said about each question in `results`
-    ({question: feedback_results}) and how it went in `status` ({question: {name: "running" |
-    "done" | "failed" | "skipped"}}).
+def recording_scorer(name: str, work, results: dict, status: dict, normalise, needs=(), tidy=str,
+                     traces: dict | None = None):
+    """An MLflow scorer that runs `work` and keeps what it said about each test question in
+    `results` ({eval_id: feedback_results}) and how it went in `status` ({eval_id: {name:
+    "running" | "done" | "failed" | "skipped"}}); `traces` gets {eval_id: the trace it scored}.
+    Keyed by the question's eval_id, not its text: the same question can be in a test set twice.
 
     A quality check decides from `results`, in the process that did the judging, so it does not
     depend on reading the assessments back from trace storage. What `work` returns, and anything
-    it raises, passes through untouched for MLflow to attach to the trace as before. `needs`: an
-    expectation `work` can't do without; a question that lacks it is skipped, not failed."""
+    it raises, passes through untouched for MLflow to attach to the trace as before. `needs`: the
+    expectations `work` can use as its ground truth, any one of which will do; a question with
+    none of them is skipped, not failed."""
     from mlflow.genai.scorers import scorer
+
+    alternatives = tuple(k for k in ((needs,) if isinstance(needs, str) else needs) if k)
 
     @scorer(name=name)
     def keep(inputs, outputs, expectations, trace):
         question = (inputs or {}).get("question") if isinstance(inputs, dict) else str(inputs or "")
-        state = status.setdefault(question or "", {})
-        if needs and not (expectations or {}).get(needs):
+        key = str((expectations or {}).get("eval_id") or question or "")
+        if traces is not None and getattr(getattr(trace, "info", None), "trace_id", None):
+            traces[key] = trace.info.trace_id
+        state = status.setdefault(key, {})
+        if alternatives and not any((expectations or {}).get(k) for k in alternatives):
             state[name] = "skipped"
             return None
         state[name] = "running"
-        kept = results.setdefault(question or "", {})
+        kept = results.setdefault(key, {})
         try:
             result = work(inputs=inputs, outputs=outputs, expectations=expectations, trace=trace)
         except Exception as e:  # kept, then raised again for MLflow to record on the trace
