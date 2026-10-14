@@ -143,6 +143,9 @@ _CHECK_ADVICE: list[tuple[str, str]] = [
     (r"^relevance is", "Some answers don't address what was asked. Check the wording of the questions on **Test "
      "questions**: vague questions get vague answers. Then run the check again."),
     (r"^citation accuracy is", "Some answers cite a page that doesn't back them up. " + _FIND),
+    (r"^rule compliance is", "An answer to a question near a platform rule went too far: it made a decision or "
+     "gave advice the rules forbid, instead of sharing what the documents say and who decides. This needs MLOps, "
+     "not a change to your documents: send them this line."),
     (r"^refusal accuracy is", "The chatbot answered questions it should have declined, or declined ones it "
      "should have answered. On **Test questions**, check which questions are marked **Should refuse**. To add "
      "topics it must refuse, ask MLOps."),

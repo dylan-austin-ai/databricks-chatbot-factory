@@ -30,6 +30,7 @@ from mlflow.genai.scorers import (Correctness, ExpectationsGuidelines, Guideline
 from _bootstrap import args, context
 
 from factory import PLATFORM_VERSION, evals, llm
+from factory.guardrails import platform_rules
 from factory.identity import is_platform_caller
 from factory.ingestion import BotPaths
 from factory.problems import safe_text
@@ -124,7 +125,8 @@ STATUS: dict[str, dict[str, str]] = {}       # eval_id -> how each scorer went: 
 # A judge that can't work without a ground truth in the question's expectations, any one of these:
 # it is skipped on a question that has none. Only "should refuse" questions carry guidelines of
 # their own; they carry no expected answer, and are judged by refusal_accuracy instead.
-NEEDS = {"expectations_guidelines": ("guidelines",), "correctness": ("expected_response", "expected_facts")}
+NEEDS = {"expectations_guidelines": ("guidelines",), "correctness": ("expected_response", "expected_facts"),
+         "rule_compliance": ("rule_guidelines",)}
 
 
 def outcome_of(case: dict) -> str:
@@ -145,11 +147,20 @@ def build_scorers(cfg, allowed: set[str], chunks: dict[str, str]) -> list:
                                             {"response": outputs, "custom": custom}, expectations, chunks, allowed)
         return [Feedback(name=k, value=v) for k, v in scores.items()]
 
+    # "Share documents, don't decide" questions: did the answer stay on the right side of the rules?
+    # The same judge as expectations_guidelines, given the question's rule guideline.
+    rule_judge = judge(ExpectationsGuidelines, "rule_compliance")
+
+    def rule_compliance(inputs, outputs, expectations, trace):
+        return rule_judge.run(inputs=inputs, outputs=outputs, trace=trace,
+                              expectations={**expectations, "guidelines": expectations["rule_guidelines"]})
+
     def kept(name, work):
         return evals.recording_scorer(name, work, RESULTS, STATUS, assessment_value, NEEDS.get(name, ()), safe_text,
                                       TRACE_OF)
 
-    return [kept(n, j.run) for n, j in judges.items()] + [kept("checks", checks)]
+    return [kept(n, j.run) for n, j in judges.items()] + [kept("rule_compliance", rule_compliance),
+                                                          kept("checks", checks)]
 
 
 def make_predict(cfg, channel: str, p: BotPaths, chunks: dict[str, str]):
@@ -263,7 +274,7 @@ for bot in bots:
         f"""SELECT chunk_id FROM {index_table(settings, cfg)} WHERE bot_id = :b AND {flag}
             AND effective_ts <= :n AND expires_ts > :n""", {"b": cfg.bot_id, "n": now})}
     cases = sql.query(f"SELECT * FROM {p.t('golden_set')} WHERE approved AND active "
-                      "AND kind IN ('in_scope', 'out_of_scope', 'feedback') ORDER BY difficulty, eval_id")
+                      "AND kind IN ('in_scope', 'out_of_scope', 'rule_bound', 'feedback') ORDER BY difficulty, eval_id")
     n_approved = len(cases)
     approved_in_scope = sum(1 for c in cases if c["kind"] == "in_scope")   # what the "enough questions" rule counts
     if a.limit:
@@ -279,7 +290,8 @@ for bot in bots:
         cap = int(settings.get("quality.check.max_questions", 50) or 0)
         cases = evals.sample_cases(cases, max(cap, min_cases) if cap > 0 else 0)
         print(f"{cfg.bot_id}: checking {len(cases)} of {n_approved} approved test question(s)")
-    records = [evals.dataset_record(c) for c in cases]
+    records = [evals.dataset_record(c, platform_rules(settings.get('guardrails.platform_rules', {}),
+                                                  cfg.disabled_rules)) for c in cases]
 
     try:  # golden set mirrored as a native UC evaluation dataset (browse/compare in MLflow)
         import mlflow.genai.datasets as datasets
@@ -451,6 +463,7 @@ for bot in bots:
             (["correctness"] if cfg.judge_on("correctness") and any(c.get("expected_answer") for c in in_scope) else []) + \
             (["citation_accuracy"] if in_scope else []) + \
             (["refusal_accuracy"] if any(c["kind"] == "out_of_scope" for c in cases) else []) + \
+            (["rule_compliance"] if any(c["kind"] == "rule_bound" for c in cases) else []) + \
             (["hit_at_1", "hit_at_3", "hit_at_5", "mrr"] if any(c.get("source_doc_id") for c in in_scope) else [])
         # "Enough questions" is about how many are approved, not how many of them this check sampled.
         gate = evals.gate(metrics, thresholds, zero, zero_checks, n_in_scope if a.limit else approved_in_scope,

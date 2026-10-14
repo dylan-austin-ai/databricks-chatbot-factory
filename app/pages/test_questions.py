@@ -71,7 +71,10 @@ edited = st.data_editor(
         "kind": st.column_config.SelectboxColumn(
             "Type", options=list(golden.KIND_LABEL.values()), required=True, default="Should answer",
             help="\"Should answer\": the answer is in the documents. \"Should refuse\": the chatbot must "
-                 "politely decline (for example a request for legal advice)."),
+                 "politely decline (a question outside its purpose, or on a topic you asked it to decline). "
+                 "\"Share documents, don't decide\": a question near a platform rule, such as whether an injury is "
+                 "covered: the chatbot may say what the documents state and who decides, or decline, but must "
+                 "never make the decision or give the advice itself."),
         "question": st.column_config.TextColumn("Question", width="large", required=True),
         "expected_answer": st.column_config.TextColumn("Expected answer", width="large",
                                                        help="Leave empty for questions the chatbot should refuse."),

@@ -180,7 +180,8 @@ def test_a_judge_that_needs_guidelines_is_skipped_on_a_question_without_any(kept
     assert scorer.run(**refuse) == "yes"
     assert kept.results["e2"]["expectations_guidelines"]["value"] == 1.0     # keyed by the question's eval_id
     job = (ROOT / "jobs" / "run_evals.py").read_text()
-    assert 'NEEDS = {"expectations_guidelines": ("guidelines",), "correctness": ("expected_response", "expected_facts")}' in job
+    assert ('NEEDS = {"expectations_guidelines": ("guidelines",), "correctness": ("expected_response", "expected_facts"),\n'
+            '         "rule_compliance": ("rule_guidelines",)}') in job
 
 
 def test_a_judge_that_raises_still_raises_and_its_reason_is_kept(kept):
@@ -219,7 +220,8 @@ def test_the_check_decides_from_what_the_scorers_returned_not_from_a_read_back()
     outside_diagnostic = decide[:decide.index("if DIAGNOSE:\n            print(f\"DIAG: 9.")]
     assert "read_scores(" not in outside_diagnostic and "search_traces" not in outside_diagnostic
     assert "evals.close_unfinished(RESULTS, STATUS)" in outside_diagnostic
-    assert "return [kept(n, j.run) for n, j in judges.items()] + [kept(\"checks\", checks)]" in job   # every scorer
+    assert ('return [kept(n, j.run) for n, j in judges.items()] + [kept("rule_compliance", rule_compliance),\n'
+            '                                                          kept("checks", checks)]') in job   # every scorer
     assert ("for store in (OUTCOMES, AGENT_TRACES, BLOCKS, WITHHELD, TRACE_OF, RESULTS, STATUS):\n        store.clear()"
             in job)                                                                         # per chatbot
     assert '"scorer_errors": scorer_errors' in job and '"errors": scored[c["eval_id"]][2]' in job

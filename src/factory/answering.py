@@ -12,7 +12,8 @@ Answer ONLY from the numbered SOURCES. Reply with JSON only, in exactly one of t
     or answering would break a PLATFORM RULE below.
     Greetings, thanks and follow-up questions about earlier answers are in scope.
 
-PLATFORM RULES (always apply; you may still say what the documents state and who to contact):
+PLATFORM RULES (always apply. You may still say what the documents state and who to contact or who
+decides; never make that decision, decide the person's own case or give the advice yourself):
 <<RULES>>
 {"status": "no_source"}
     when the SOURCES do not establish an answer. Never guess.

@@ -12,7 +12,8 @@ import uuid
 from .ingestion import BotPaths
 from .sql import in_list, json_rows
 
-KIND_LABEL = {"in_scope": "Should answer", "out_of_scope": "Should refuse", "feedback": "From user feedback"}
+KIND_LABEL = {"in_scope": "Should answer", "out_of_scope": "Should refuse",
+              "rule_bound": "Share documents, don't decide", "feedback": "From user feedback"}
 _KIND = {label: kind for kind, label in KIND_LABEL.items()}
 FIELDS = ("question", "expected_answer", "kind", "approved")
 

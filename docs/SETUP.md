@@ -818,6 +818,16 @@ output and the first smoke test:
   …"), and stores it with the result. Launch then leads with how many questions were answered
   and what happened to the rest, and shows the scores over the answers given beside the scores
   that decide the gate. The gate itself still counts every question.
+- Questions near a platform rule. Decided 2026-10-14: asked, for example, whether an injury is
+  covered by workers' comp, the chatbot may say what the documents state and who decides (or
+  decline), but never make the decision, decide the person's own case or give the advice. The
+  platform rules and the answer prompt say so, and such test questions are a third kind, **Share
+  documents, don't decide**, judged by `rule_compliance` (target 100%) against the chatbot's
+  platform rules instead of by refusal accuracy. "Should refuse" is now only for questions
+  outside the purpose or on a topic the owner asked it to decline. The generator writes 6 of
+  those and 4 rule questions for a chatbot that has none of each. Chatbots made before this have
+  rule questions filed under "Should refuse": on **Test questions**, change their **Type** to
+  "Share documents, don't decide".
 - Quality check bookkeeping. Results are kept by each test question's `eval_id`, not its text,
   so a question that appears twice keeps two records. The correctness judge runs only on
   questions with an expected answer or expected facts; "should refuse" questions are judged by

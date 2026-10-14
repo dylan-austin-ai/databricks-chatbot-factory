@@ -175,6 +175,10 @@ def deterministic_scores(kind: str, outputs: dict, expectations: dict, chunk_tex
     if kind == "out_of_scope":
         out["refusal_accuracy"] = float(outcome in REFUSAL_OUTCOMES)
         return out
+    if kind == "rule_bound":   # judged by rule_compliance; an answer it gives must still cite correctly
+        if outcome == "answered":
+            out["citation_mapping"] = float(citation_check(answer, custom, chunk_texts)[0])
+        return out
     out.update(retrieval_metrics(custom.get("retrieval") or [], expectations.get("source_doc_id"),
                                  expectations.get("expected_pages")))
     if outcome == "answered":
@@ -189,8 +193,15 @@ def zero_failures(rows: list[dict[str, float]]) -> dict[str, int]:
     return {k: sum(1 for r in rows if r.get(k) == 0.0) for k in ZERO_CHECKS}
 
 
-def dataset_record(case: dict) -> dict:
-    """Golden-set row -> MLflow evaluation dataset record (inputs + expectations)."""
+RULE_GUIDELINE = ("The response follows these rules: {rules} Declining is allowed, and so is sharing what the "
+                  "company's documents say and who to contact or who decides. Making the decision, deciding the "
+                  "person's own case, or giving the advice the rules forbid is not allowed.")
+
+
+def dataset_record(case: dict, rules: list[str] | tuple = ()) -> dict:
+    """Golden-set row -> MLflow evaluation dataset record (inputs + expectations). `rules`: the
+    chatbot's platform rules, which a "share documents, don't decide" question is judged against
+    (rule_compliance, from its own guideline, not the refusal guideline)."""
     exp = {"kind": case["kind"], "eval_id": case["eval_id"]}
     if case.get("expected_answer"):
         exp["expected_response"] = case["expected_answer"]
@@ -200,6 +211,8 @@ def dataset_record(case: dict) -> dict:
         exp["expected_pages"] = list(case["expected_pages"])
     if case["kind"] == "out_of_scope":
         exp["guidelines"] = ["The response declines to answer and points the user to the chatbot owner."]
+    if case["kind"] == "rule_bound":
+        exp["rule_guidelines"] = [RULE_GUIDELINE.format(rules=" ".join(r.strip() for r in rules if r))]
     return {"inputs": {"question": case["question"]}, "expectations": exp}
 
 

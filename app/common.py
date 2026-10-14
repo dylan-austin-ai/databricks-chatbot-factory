@@ -59,7 +59,7 @@ METRIC_LABEL = {  # plain-English names for the go-live gate (EVG-1)
     "hit_at_1": "Right document first", "hit_at_3": "In the top 3", "hit_at_5": "In the top 5",
     "mrr": "Overall ranking", "correctness": "Correct", "groundedness": "Sticks to sources",
     "relevance": "Relevant", "citation_accuracy": "Citations accurate",
-    "refusal_accuracy": "Refuses correctly", "safety": "Safe",
+    "refusal_accuracy": "Refuses correctly", "rule_compliance": "Stays within the rules", "safety": "Safe",
 }
 RETRIEVAL_METRICS = ["hit_at_1", "hit_at_3", "hit_at_5", "mrr"]
 PAGES = {  # where the "what to do next" steps send people: page file and the name shown in the menu

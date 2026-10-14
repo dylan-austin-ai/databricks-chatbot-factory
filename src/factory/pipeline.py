@@ -27,7 +27,8 @@ from .sql import SqlRunner, json_rows
 MAX_VISUAL_PAGES = 30          # per doc, keeps day-one visual judge cost bounded
 GOLDEN_SURPLUS = 1.3           # generate extra so 50 survive owner review (EVG-5)
 GOLDEN_TEXT_CHARS = 60_000
-OUT_OF_SCOPE_COUNT = 10
+OUT_OF_SCOPE_COUNT = 6   # must refuse
+RULE_BOUND_COUNT = 4     # near a platform rule: share documents, don't decide
 
 
 def _in(n: int) -> str:
@@ -265,7 +266,7 @@ class Pipeline:
         # Spread the in-scope target across the bot's docs, half of them hard (EVG-4).
         n_docs = int(self.sql.query(f"SELECT count(*) AS n FROM {p.t('manifest')} "
                                     "WHERE status <> 'superseded' AND is_active")[0]["n"] or 1)
-        target = self.s.get("quality.min_golden_questions", 50) * GOLDEN_SURPLUS - OUT_OF_SCOPE_COUNT
+        target = self.s.get("quality.min_golden_questions", 50) * GOLDEN_SURPLUS - OUT_OF_SCOPE_COUNT - RULE_BOUND_COUNT
         per_doc = max(2, -(-int(target) // n_docs))
         sections = self._doc_sections(p, [d["doc_id"] for d in docs]) if docs else {}
 
@@ -291,14 +292,21 @@ class Pipeline:
             issues = (out or {}).get("extraction_issues") or []
             if issues:
                 self._append_qa_messages(p, d["doc_id"], qa.reviewer_notes(issues))
-        existing_oos = self.sql.query(
-            f"SELECT count(*) AS n FROM {p.t('golden_set')} WHERE kind = 'out_of_scope'")[0]["n"]
-        if int(existing_oos or 0) == 0:
+        have = {r["kind"]: int(r["n"] or 0) for r in self.sql.query(
+            f"SELECT kind, count(*) AS n FROM {p.t('golden_set')} WHERE kind IN ('out_of_scope', 'rule_bound') "
+            "GROUP BY kind")}
+        rules = platform_rules(self.s.get("guardrails.platform_rules", {}), cfg.disabled_rules)
+        # Must refuse: outside the purpose, or a topic the owner asked it to decline. The platform
+        # rules are not refusal topics: questions near them may get what the documents say.
+        if not have.get("out_of_scope"):
             out = llm.chat_json(client, judge, qa.OUT_OF_SCOPE_PROMPT.format(
-                purpose=cfg.purpose, refuse="; ".join(cfg.refuse_topics + platform_rules(
-                    self.s.get("guardrails.platform_rules", {}), cfg.disabled_rules)) or "none",
-                n=OUT_OF_SCOPE_COUNT))
+                purpose=cfg.purpose, refuse="; ".join(cfg.refuse_topics) or "none", n=OUT_OF_SCOPE_COUNT))
             questions += [self._golden_row(q, "", None, None, "out_of_scope", [], "easy", "out_of_scope")
+                          for q in out.get("questions", []) if isinstance(q, str) and q.strip()]
+        if rules and not have.get("rule_bound"):
+            out = llm.chat_json(client, judge, qa.RULE_BOUND_PROMPT.format(
+                purpose=cfg.purpose, rules="; ".join(rules), n=RULE_BOUND_COUNT))
+            questions += [self._golden_row(q, "", None, None, "rule_bound", [], "hard", "rule_bound")
                           for q in out.get("questions", []) if isinstance(q, str) and q.strip()]
         self._insert_golden(p, questions)
 
