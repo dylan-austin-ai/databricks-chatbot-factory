@@ -55,6 +55,15 @@ def test_when_a_document_changes_the_questions_relying_on_it_lose_their_approval
     assert audit == [("questions_need_review", "", {"doc_ids": ["doc1"], "eval_ids": ["e1", "e2"], "reason": why})]
 
 
+def test_re_reading_the_same_pages_leaves_the_questions_alone(settings):
+    d, sql, cp = docs(settings)
+    sql.answers.insert(0, (r"SELECT page_range FROM", [{"page_range": "1-3"}]))
+    d.set_page_range("claims_chatbot", "doc1", "1 - 3".replace(" ", ""), "ana@corp.com")
+    assert review_updates(sql) == []
+    d.set_page_range("claims_chatbot", "doc1", "1-4", "ana@corp.com")
+    assert len(review_updates(sql)) == 1
+
+
 def test_a_new_version_flags_the_questions_on_the_old_one(settings):
     d, sql, cp = docs(settings)
     d._write_manifest(BotPaths(settings, "claims_chatbot"), [], ["0123456789abcdef_v2"], "ana@corp.com")

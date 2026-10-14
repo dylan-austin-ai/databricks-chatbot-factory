@@ -865,6 +865,28 @@ output and the first smoke test:
   points at a document that is missing or not in use, and lists them. Generated questions name
   the system or program they are about (myCigna, Workday) and ask about current policy, not a
   worked example, a screenshot's sample value or a past deadline.
+- What the search index matches on (`factory/search_text.py`). When a document is chunked, a
+  section that starts in the middle of a table gets that table's header lines from the section
+  before it (the document's own words, so quotes stay verbatim; that section's pages are added
+  to its pages), so amounts keep the coverage level they belong to. The searchable text
+  (`chunk_to_embed`) also starts with the document's title (from its file name, so name files
+  after the system or program they cover, for example `myCigna_spouse_registration.png`) and
+  keeps each repeated line once, which takes out runs of identical icon descriptions. The
+  evidence text the chatbot quotes is otherwise unchanged. Existing documents get this when
+  they are next read: start with the ones the audit found (Documents › the document › **Fix a
+  problem** › **Re-read document** with its pages unchanged, which doesn't send its questions
+  for review), or for several at once:
+
+  ```bash
+  databricks bundle run ingest_bot -t qa --params "bot_id=<bot_id>,doc_ids=<id1>;<id2>,rechunk_only=true,generate_golden=false"
+  ```
+
+  Then run the check on the questions that missed (`eval_ids`, above) and compare. Not done
+  yet, because each needs a change to the shared index or new access for the agent: fetching
+  the neighbouring section at answer time (the index has no section-position column, and
+  reading the chunk table would need warehouse access for the agent principal), and
+  metadata-aware search or query splitting as further strategies. The strategy comparison
+  applies only what measures better on the approved questions.
 - Quality check bookkeeping. Results are kept by each test question's `eval_id`, not its text,
   so a question that appears twice keeps two records. The correctness judge runs only on
   questions with an expected answer or expected facts; "should refuse" questions are judged by

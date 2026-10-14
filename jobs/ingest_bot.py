@@ -1,5 +1,7 @@
 """Incremental ingestion for one bot (DOC-12): new uploads, re-parses (QA-11),
 and re-publishing after approvals or archives (DOC-8)."""
+import re
+
 from _bootstrap import args, context, vector_client
 
 from factory.pipeline import Pipeline
@@ -20,7 +22,7 @@ elif a.golden_only == "true":
     if ids:
         pipe.generate_golden(cfg, p, ids)
 else:
-    doc_ids = [d for d in a.doc_ids.split(",") if d] or None
+    doc_ids = [d for d in re.split(r"[\s,;]+", a.doc_ids or "") if d] or None   # ; works in bundle --params
     gen = {"true": True, "false": False}.get(a.generate_golden)
     print(pipe.run(cfg, doc_ids=doc_ids, reparse=a.reparse == "true" or a.rechunk_only == "true",
                    generate_golden=gen, rechunk_only=a.rechunk_only == "true"))

@@ -513,12 +513,15 @@ class Documents:
         if page_range and not re.fullmatch(r"\d+(-\d+)?(,\d+(-\d+)?)*", page_range.replace(" ", "")):
             raise ValueError("Use page numbers like 1-3,5,7-40.")
         p = BotPaths(self.s, bot_id)
+        wanted = page_range.replace(" ", "") if page_range else None
+        before = self.sql.query(f"SELECT page_range FROM {p.t('manifest')} WHERE doc_id = :d "
+                                "AND status <> 'superseded'", {"d": doc_id})
         self.sql.execute(
             f"UPDATE {p.t('manifest')} SET page_range = :r, updated_at = current_timestamp() "
-            "WHERE doc_id = :d AND status <> 'superseded'",
-            {"r": page_range.replace(" ", "") if page_range else None, "d": doc_id})
+            "WHERE doc_id = :d AND status <> 'superseded'", {"r": wanted, "d": doc_id})
         self.cp.audit(actor, bot_id, "doc_page_range_set", doc_id, {"page_range": page_range})
-        self._questions_need_review(p, [doc_id], "edited", actor)
+        if not before or (before[0].get("page_range") or None) != wanted:   # re-reading the same pages changes nothing
+            self._questions_need_review(p, [doc_id], "edited", actor)
 
     def save_override(self, bot_id, doc_id, text, actor):
         """Manual text correction (QA-11); takes priority over parser output."""

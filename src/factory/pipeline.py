@@ -14,7 +14,7 @@ import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from . import guardrails, llm, qa, sensitive
+from . import guardrails, llm, qa, search_text, sensitive
 from .config import BotConfig, PlatformSettings
 from .controlplane import ControlPlane
 from .guardrails import platform_rules
@@ -86,6 +86,7 @@ class Pipeline:
                     self.sql.execute(parse_text_sql(p, len(ids)), params)
             for stmt in chunk_sql(p, self.s, len(ids)):
                 self.sql.execute(stmt, params if ":d0" in stmt else None)
+            self.refine_search_text(p, ids)
             chunks = self._current_chunks(p, ids)   # read once for the injection and data scans
             injected = self.injection_scan(p, ids, chunks)
             self.extraction_qa(cfg, p, targets, injected, chunks)
@@ -114,6 +115,26 @@ class Pipeline:
             if error is not None:
                 raise error
         return [value for value, _ in results]
+
+    def refine_search_text(self, p: BotPaths, doc_ids: list[str]) -> int:
+        """Table headers carried into the sections that continue a table, and the document's title
+        in what the index searches (search_text). One statement for all changed chunks."""
+        rows = self.sql.query(f"""
+            SELECT c.chunk_id, c.doc_id, c.doc_version, c.chunk_position, c.doc_name, c.page_ids,
+                   c.chunk_to_retrieve, c.chunk_to_embed FROM {p.t('chunked')} c
+            JOIN {p.t('manifest')} m ON m.doc_id = c.doc_id AND m.doc_version = c.doc_version
+            WHERE c.doc_id IN ({_in(len(doc_ids))}) AND m.status <> 'superseded'""", doc_params(doc_ids))
+        changes = []
+        for key in dict.fromkeys((r["doc_id"], str(r["doc_version"])) for r in rows):
+            changes += search_text.refine([r for r in rows if (r["doc_id"], str(r["doc_version"])) == key])
+        if changes:
+            source, params = json_rows(changes, {"chunk_id": "STRING", "chunk_to_retrieve": "STRING",
+                                                 "chunk_to_embed": "STRING", "page_ids": "ARRAY<INT>"})
+            self.sql.execute(
+                f"""MERGE INTO {p.t('chunked')} t USING {source} s ON t.chunk_id = s.chunk_id
+                    WHEN MATCHED THEN UPDATE SET chunk_to_retrieve = s.chunk_to_retrieve,
+                      chunk_to_embed = s.chunk_to_embed, page_ids = s.page_ids""", params)
+        return len(changes)
 
     def _current_chunks(self, p: BotPaths, doc_ids: list[str]) -> list[dict]:
         return self.sql.query(f"""
