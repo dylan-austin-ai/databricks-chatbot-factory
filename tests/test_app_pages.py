@@ -252,8 +252,11 @@ def test_a_job_is_not_queued_twice(workspace, monkeypatch):
     assert common.run_job("ingest", bot_id="hr_bot", publish_only="true") == 8 and len(started) == 2
 
 
-FAILED = {"metrics": {"hit_at_1": 0.62, "groundedness": 0.8}, "per_case": [],
-          "failures": ["hit at 1 is 62%, needs 80%.", "groundedness is 80%, needs 90%."]}
+FAILED = {"metrics": {"hit_at_1": 0.62, "groundedness": 0.8}, "per_case": [], "n_cases": 50,
+          "failures": ["hit at 1 is 62%, needs 80%.", "groundedness is 80%, needs 90%."],
+          "outcomes": {"answered": 20, "unverified": 20, "refused": 6, "blocked": 3, "no_source": 1},
+          "answered_view": {"answered": 20, "asked": 50, "metrics": {"correctness": 0.85, "groundedness": 1.0}},
+          "withheld": "a quote not word for word 9, cited nothing 2"}
 
 
 @pytest.mark.parametrize("bot, releases, checks, expect", [
@@ -281,6 +284,10 @@ def test_launch_offers_the_right_next_action_at_each_stage(workspace, bot, relea
     if expect == "Run the quality check again":   # each failed result comes with what to do about it
         fixes = [m.value for m in at.markdown if m.value.startswith("- **")]
         assert len(fixes) == 2 and all("What to do:" in f for f in fixes)
+        text = page_text(at)                       # and how many got an answer comes before the scores
+        assert "Answered 20 of 50 test questions. The others: withheld as unverified 20" in text
+        assert "Among the 20 answers given: correct 85%, sticks to sources 100%." in text
+        assert "Answers were withheld because of: a quote not word for word 9, cited nothing 2." in text
 
 
 # --- alerts: calm, plain, and gone when they stop being true -----------------------------------

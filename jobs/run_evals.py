@@ -117,6 +117,7 @@ def chatbot_fault(custom: dict) -> str:
 OUTCOMES: dict[str, str] = {}                # trace -> what the chatbot did, so a fault isn't judged as an answer
 AGENT_TRACES: dict[str, str] = {}            # trace -> the chatbot's own trace on the serving endpoint
 BLOCKS: dict[str, dict] = {}                 # trace -> which guardrail blocked it, when one did
+WITHHELD: dict[str, dict] = {}               # trace -> why the answer was withheld as unverified
 TRACE_OF: dict[str, str] = {}                # eval_id -> its trace
 RESULTS: dict[str, dict[str, dict]] = {}     # eval_id -> what every scorer said: the gate decides from these
 STATUS: dict[str, dict[str, str]] = {}       # eval_id -> how each scorer went: running, done, failed or skipped
@@ -165,6 +166,8 @@ def make_predict(cfg, channel: str, p: BotPaths, chunks: dict[str, str]):
         OUTCOMES[mine], AGENT_TRACES[mine] = custom.get("outcome") or "", str(custom.get("trace_id") or "")
         if custom.get("blocked_by"):
             BLOCKS[mine] = custom["blocked_by"]
+        if custom.get("unverified"):
+            WITHHELD[mine] = custom["unverified"]
         hits = custom.get("retrieval") or []
         need = [h["chunk_id"] for h in hits if h.get("chunk_id") and h["chunk_id"] not in chunks]
         if need:
@@ -303,7 +306,7 @@ for bot in bots:
             print(f"{cfg.bot_id}: version link skipped: {e}")
 
     chunks: dict[str, str] = {}
-    for store in (OUTCOMES, AGENT_TRACES, BLOCKS, TRACE_OF, RESULTS, STATUS):
+    for store in (OUTCOMES, AGENT_TRACES, BLOCKS, WITHHELD, TRACE_OF, RESULTS, STATUS):
         store.clear()
     if cases and not DIAGNOSE:
         # One question first. If the chatbot itself is failing, or refuses the check's own
@@ -401,6 +404,12 @@ for bot in bots:
         scorer_errors = evals.scorer_problems([scored[c["eval_id"]][2] for c in cases])
         if scorer_errors:
             print(f"{cfg.bot_id}: scorers that gave no score: {scorer_errors}", flush=True)
+        outcomes = [outcome_of(c) for c in cases]
+        withheld = [WITHHELD.get(TRACE_OF.get(c["eval_id"], ""), {}).get("kinds") or [] for c in cases
+                    if outcome_of(c) == "unverified"]
+        answered = evals.answered_view(rows, outcomes)
+        print(f"{cfg.bot_id}: {evals.outcome_counts(outcomes)}"
+              + (f". Withheld because of: {evals.withheld_summary(withheld)}" if withheld else ""), flush=True)
         if DIAGNOSE:
             print(f"DIAG: 9. what each question got, as the scorers returned it (not read back from storage): "
                   f"{sum(1 for r in rows if r)} of {len(rows)} question(s) have scores. What the chatbot did: "
@@ -414,6 +423,8 @@ for bot in bots:
                       + (", ".join(f"{n} {state}" for n, state in sorted(ran.items())) or "none ran"), flush=True)
                 if BLOCKS.get(mine):
                     print(f"DIAG:   question {i}: {evals.block_sentence(BLOCKS[mine])}", flush=True)
+                for problem in (WITHHELD.get(mine) or {}).get("problems", []):
+                    print(f"DIAG:   question {i} WITHHELD: {problem}", flush=True)
                 print(f"DIAG:   question {i} scores: "
                       + (", ".join(f"{n}={v:g}" for n, v in sorted(scores.items())) or "none"), flush=True)
                 for name, why in sorted(errors.items()):
@@ -460,9 +471,13 @@ for bot in bots:
          "m": json.dumps({"metrics": metrics, "zero_failures": zero, "failures": gate.failures,
                           "n_cases": len(cases), "n_approved": n_approved, "mlflow_run_id": run.info.run_id,
                           "scorer_errors": scorer_errors,
+                          "outcomes": {o or "not_asked": outcomes.count(o) for o in set(outcomes)},
+                          "answered_view": answered,
+                          "withheld": evals.withheld_summary(withheld) if withheld else "",
                           "per_case": [
                               {"eval_id": c["eval_id"], "question": c["question"],
                                "outcome": outcome_of(c),
+                               "withheld": WITHHELD.get(TRACE_OF.get(c["eval_id"], ""), {}).get("kinds"),
                                "scores": scored[c["eval_id"]][0], "rationales": scored[c["eval_id"]][1],
                                "errors": scored[c["eval_id"]][2]} for c in cases]}),
          "p": gate.passed, "nr": gate.needs_safety_review})

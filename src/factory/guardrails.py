@@ -103,6 +103,37 @@ def parse_structured(text: str) -> dict | None:
     return obj if isinstance(obj, dict) and obj.get("status") else None
 
 
+def json_problem(text: str) -> str:
+    """For the second try: what is wrong with a reply that isn't one of the JSON forms."""
+    import json
+    t = (text or "").strip()
+    m = re.search(r"```(?:json)?\s*(.*?)```", t, re.S)
+    if m:
+        t = m.group(1)
+    start = t.find("{")
+    if start < 0:
+        return "Your reply had no JSON object. Reply with JSON only, in one of the three forms."
+    try:
+        obj = json.JSONDecoder().raw_decode(t[start:])[0]
+    except ValueError as e:
+        return (f"Your reply was not valid JSON ({str(e).split(':')[0]}). Inside JSON strings put quotes in curly "
+                "quotation marks “ ”, never straight ones, and escape nothing else by hand.")
+    if not isinstance(obj, dict) or not obj.get("status"):
+        return 'Your JSON has no "status". Use one of the three forms exactly.'
+    return ""
+
+
+# A sensitive-data policy that redacts puts a label like [UK_NHS] or [EMAIL_ADDRESS] in place of what
+# it found. Such a label in the model's reply that no source contains came from the gateway.
+PLACEHOLDER_RE = re.compile(r"\[[A-Z]{2,}(?:_[A-Z0-9]+)*\]")
+
+
+def gateway_placeholders(text: str, sources: list[str]) -> list[str]:
+    """Redaction labels in `text` that aren't in any source: the gateway changed the text."""
+    corpus = " ".join(sources)
+    return sorted({t for t in PLACEHOLDER_RE.findall(text or "") if t not in corpus})
+
+
 def verify_quotes(answer: str, sources: list[str]) -> list[str]:
     """GRD-10 / CON-3: every direct quote must appear verbatim in a source.
     Returns the quotes that could not be found."""

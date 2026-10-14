@@ -343,7 +343,7 @@ def chatbot_fault(custom: dict | None, runs_as: str = "", recognised: bool = Fal
 
 
 OUTCOME_WORDS = {"answered": "answered", "blocked": "blocked by a guardrail", "refused": "declined as out of scope",
-                 "no_source": "said its documents don't cover it", "unverified": "couldn't verify its answer",
+                 "no_source": "said its documents don't cover it", "unverified": "withheld as unverified",
                  "error": "failed with an error", "denied": "refused access", "unavailable": "was unavailable",
                  "": "not asked"}
 
@@ -358,6 +358,49 @@ def outcome_counts(outcomes: list[str]) -> str:
     order = list(OUTCOME_WORDS)
     return ", ".join(f"{OUTCOME_WORDS.get(o, o)} {n}" for o, n in
                      sorted(counts.items(), key=lambda kv: order.index(kv[0]) if kv[0] in order else len(order)))
+
+
+WITHHELD_WORDS = {
+    "citation_lines": "named source lines that don't exist, or too many",
+    "citation_mapping": "cited a source without saying where in it",
+    "no_citation": "cited nothing",
+    "quote_check": "a quote not word for word",
+    "invalid_json": "a reply that wasn't valid JSON",
+    "citation_range": "a citation number with no source",
+    "no_invented_links": "a link not in the documents",
+    "prompt_leak": "repeated its instructions",
+    "gateway_redaction": "the gateway had replaced text with a placeholder",
+}
+
+
+def withheld_summary(kinds: list[list[str]]) -> str:
+    """Why answers were withheld as unverified, across a check: each cause with how many answers
+    it applied to (one answer can have several), most common first."""
+    counts: dict[str, int] = {}
+    for found in kinds:
+        for k in set(found or ["unknown"]):
+            counts[k] = counts.get(k, 0) + 1
+    return ", ".join(f"{WITHHELD_WORDS.get(k, k.replace('_', ' '))} {n}"
+                     for k, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
+
+
+def answered_view(rows: list[dict[str, float]], outcomes: list[str]) -> dict:
+    """The check's results seen from the answers actually given: how many questions were answered,
+    and each score over those alone. A diagnostic beside the gate, which counts every question:
+    a fallback message can still be marked grounded, so a score over all questions says nothing
+    about how many got a useful answer."""
+    given = [r for r, o in zip(rows, outcomes) if o == "answered"]
+    return {"answered": len(given), "asked": len(rows), "metrics": aggregate(given)}
+
+
+def answer_headline(outcomes: dict[str, int], asked: int) -> str:
+    """The first thing a quality-check result says: how many questions got an answer, and what
+    happened to the rest."""
+    answered = int(outcomes.get("answered", 0))
+    rest = {k: n for k, n in outcomes.items() if k != "answered" and n}
+    return (f"Answered {answered} of {asked} test questions."
+            + (" The others: " + ", ".join(f"{OUTCOME_WORDS.get(k, k)} {n}" for k, n in
+                                           sorted(rest.items(), key=lambda kv: -kv[1])) + "." if rest else ""))
 
 
 def block_sentence(blocked_by: dict) -> str:

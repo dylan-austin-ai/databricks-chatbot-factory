@@ -383,7 +383,7 @@ The exact values are also on **Admin** › **Setup checklist** in the app.
 | **Unsafe Content** (`system.ai.block_unsafe_content`) | Input and Output | **Enforce** | default | Harmful content |
 | **Jailbreak** (`system.ai.block_jailbreak`) | Input | **Enforce** | default | Jailbreak and prompt injection |
 | **Hallucination** (`system.ai.block_hallucination`) | Output | **Log** (not the default: change it) | `qa_chatbot_factory._platform.guardrail_evaluator` (not the default: change it) | Grounding check. Keep it in Log; see D4 before ever enforcing it |
-| **Sensitive data** (`system.ai.detect_sensitive_data`) | Input and Output | **Enforce** (block or redact) | n/a | Select only the restricted categories: Social Security numbers, payment cards, bank account numbers. Leave names, email addresses, phone numbers and account identifiers unselected: Security decided (2026-10-14) that signed-in people may see business contacts and corporate account identifiers |
+| **Sensitive data** (`system.ai.detect_sensitive_data`) | Input and Output | **Enforce** (block or redact) | n/a | Select only the restricted categories: Social Security numbers, payment cards, bank account numbers. Leave every other category unselected: names, email addresses, phone numbers, account identifiers, and national health numbers such as UK NHS (which matched ordinary numbers in the documents and replaced them with `[UK_NHS]`). Security decided (2026-10-14) that signed-in people may see business contacts and corporate account identifiers. The input phase also changes the documents the model is given, so a category selected there rewrites the sources before the model reads them |
 
 For each policy:
 
@@ -799,15 +799,25 @@ output and the first smoke test:
   service principal may use the AI Search endpoint. If a chatbot then reports a permission error
   while searching, give that principal **Can Use** on the endpoint's **Permissions** in the UI.
 - Citations and their excerpts. Each source is shown to the model as numbered lines (a sentence,
-  or one table row); the model names the line or lines behind each claim (up to four in a row)
-  and the agent cuts the excerpt out of the source from them, so an excerpt can't be misquoted,
-  stitched together or two table rows merged. Quotes in the answer itself must still come word
-  for word from a single line, and both are still checked exactly. A shortened excerpt is stored
+  or one table row); the model names the lines behind what it said, and the agent cuts the
+  excerpts out of the source from them, so an excerpt can't be misquoted, stitched together or
+  two table rows merged. The lines need not be next to each other: each run of consecutive lines
+  becomes its own excerpt (at most four places of at most four lines per citation). The first
+  version required one run, and withheld correct answers that cited, say, lines 16, 29 and 30.
+  Quotes in the answer itself use curly quotation marks (straight ones broke the JSON) and must
+  still come word for word from a single line; both are still checked exactly. A shortened excerpt is stored
   as the exact words kept, with `truncated` set; the "…" is added only where it is shown. The
   agent and the quality check use the same excerpt check (`guardrails.excerpt_found`), so they
-  can't disagree again. When the model's reply fails a check, what to fix is added to the
-  system message for the second try; as a user message it once tripped the gateway's jailbreak
-  guardrail.
+  can't disagree again. When the model's reply fails a check, what to fix and the reply itself
+  are added to the system message for the second try (as a user message it once tripped the
+  gateway's jailbreak guardrail), with specific help: the JSON error, the line a misquote was
+  probably meant to come from, or a gateway placeholder such as `[UK_NHS]` to leave out.
+- Why answers were withheld. When an answer still fails its checks, the platform's own callers
+  are told why (the kinds of problem and the problem text). The quality check prints each
+  question's reasons in the diagnostic, a count by cause in every run ("Withheld because of:
+  …"), and stores it with the result. Launch then leads with how many questions were answered
+  and what happened to the rest, and shows the scores over the answers given beside the scores
+  that decide the gate. The gate itself still counts every question.
 - Quality check bookkeeping. Results are kept by each test question's `eval_id`, not its text,
   so a question that appears twice keeps two records. The correctness judge runs only on
   questions with an expected answer or expected facts; "should refuse" questions are judged by

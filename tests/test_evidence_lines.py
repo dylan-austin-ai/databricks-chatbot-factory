@@ -5,8 +5,8 @@ import pytest
 
 from factory import evals
 from factory import guardrails as g
-from factory.answering import (MAX_CITED_LINES, bounded_excerpt, evidence_units, format_sources, numbered, render,
-                               resolve_citations)
+from factory.answering import (MAX_CITED_LINES, MAX_SPANS, bounded_excerpt, evidence_units, format_sources, numbered,
+                               quote_hints, render, resolve_citations)
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROSE = ("Working Parent Career Coaching. You can use up to 4 hours of confidential, action-oriented 1:1 coaching. "
@@ -59,8 +59,7 @@ def test_a_citation_names_lines_and_its_excerpt_is_cut_from_them():
 
 @pytest.mark.parametrize("citation, problem", [
     ({"source": 1, "lines": [9]}, "SOURCE [1] has lines L1 to L6; it has no line 9"),
-    ({"source": 1, "lines": [2, 4]}, "must name one line or up to 4 consecutive lines"),
-    ({"source": 1, "lines": [1, 2, 3, 4, 5]}, "must name one line or up to 4 consecutive lines"),
+    ({"source": 1, "lines": [1, 2, 3, 4, 5]}, "names too much: at most 4 places in the source, each at most 4"),
     ({"source": 1, "lines": ["two"]}, "must name its lines as numbers"),
     ({"source": 1, "lines": []}, "must name its lines as numbers"),
     ({"source": 3, "lines": [1]}, "citation to source [3] which does not exist"),
@@ -69,7 +68,7 @@ def test_a_citation_names_lines_and_its_excerpt_is_cut_from_them():
 def test_a_citation_that_cannot_be_cut_is_sent_back(citation, problem):
     cited, problems = resolve_citations([citation], [PROSE])
     assert cited == [] and len(problems) == 1 and problem in problems[0]
-    assert MAX_CITED_LINES == 4
+    assert MAX_CITED_LINES == 4 and MAX_SPANS == 4
 
 
 def test_a_citation_from_an_older_prompt_keeps_its_excerpt_and_is_checked_word_for_word():
@@ -131,3 +130,82 @@ def test_correctness_is_skipped_without_a_ground_truth_and_duplicate_questions_s
     job = (ROOT / "jobs" / "run_evals.py").read_text()
     assert "OUTCOMES[mine], AGENT_TRACES[mine] = " in job and "OUTCOMES[question]" not in job
     assert "return OUTCOMES.get(TRACE_OF.get(case[\"eval_id\"], \"\"), \"\")" in job
+
+
+# The QA coaching answer: it quoted "up to 4 hours" and cited lines 16, 29 and 30. Consecutive lines
+# only, it was withheld, and the second try named the same lines. (A 30-line source shaped like the
+# one in that trace; the policy text itself isn't in the repo.)
+COACHING = "\n".join(
+    [f"Line {k} of the benefits guide." for k in range(1, 16)]
+    + ["Working Parent Career Coaching: you can use up to 4 hours of confidential, action-oriented 1:1 coaching."]
+    + [f"Line {k} of the benefits guide." for k in range(17, 29)]
+    + ["You can use up to 4 one-hour coaching sessions.",
+       "This includes coaching for you and/or your significant other."])
+
+
+def test_the_coaching_answer_cites_lines_that_are_apart_and_each_place_is_cut_exactly():
+    assert len(evidence_units(COACHING)) == 30
+    cited, problems = resolve_citations([{"source": 1, "lines": [16, 29, 30]}], [COACHING])
+    assert problems == []
+    assert [(c["lines"], c["excerpt"]) for c in cited] == [
+        ([16], "Working Parent Career Coaching: you can use up to 4 hours of confidential, action-oriented 1:1 coaching."),
+        ([29, 30], "You can use up to 4 one-hour coaching sessions.\nThis includes coaching for you and/or your "
+                   "significant other.")]
+    answer = ("You can use “up to 4 hours of confidential, action-oriented 1:1 coaching”, that is “up to 4 one-hour "
+              "coaching sessions” [1]. “This includes coaching for you and/or your significant other” [1].")
+    check = g.check_answer(answer, [COACHING], "system prompt", False, 60, citations=cited)
+    assert check.ok and check.problems == []
+    stored = {"retrieved_chunk_ids": ["c1"], "citations": [{"n": 1, "chunk_id": "c1", **c} for c in cited]}
+    assert evals.citation_check(answer, stored, {"c1": COACHING}) == (True, [])   # and the quality check agrees
+
+
+def test_a_citation_may_not_ask_for_more_than_four_places():
+    many = resolve_citations([{"source": 1, "lines": [1, 3, 5, 7, 9]}], [COACHING])
+    assert many[0] == [] and "at most 4 places" in many[1][0]
+    four = resolve_citations([{"source": 1, "lines": [1, 3, 5, 7]}], [COACHING])
+    assert four[1] == [] and len(four[0]) == 4
+
+
+@pytest.mark.parametrize("reply, says", [
+    ("Here is my answer: the coaching is 4 hours.", "no JSON object"),
+    ('{"status": "answered", "answer": "You can use "up to 4 hours" [1].", "citations": []}', "not valid JSON"),
+    ('{"status": "answered", "answer": "cut off', "not valid JSON"),
+    ('{"answer": "x"}', 'no "status"'),
+])
+def test_a_reply_that_is_not_one_of_the_json_forms_gets_a_specific_reason(reply, says):
+    assert g.parse_structured(reply) is None
+    assert says in g.json_problem(reply)
+
+
+def test_curly_quotes_keep_the_json_valid_and_are_still_checked_word_for_word():
+    reply = '{"status": "answered", "answer": "You can use “up to 4 one-hour coaching sessions” [1].", "citations": []}'
+    assert g.parse_structured(reply)["answer"].startswith("You can use “up to")
+    assert g.json_problem(reply) == ""
+    assert g.verify_quotes("You can use “up to 4 two-hour coaching sessions” [1].", [COACHING]) == [
+        "up to 4 two-hour coaching sessions"]
+
+
+def test_the_second_try_is_told_which_line_a_quote_was_probably_from():
+    hints = quote_hints(["you can use up to 4 one hour coaching session"], [PROSE, COACHING])
+    assert len(hints) == 1 and "the closest line is SOURCE [" in hints[0]
+    assert "You can use up to 4 one-hour coaching sessions." in hints[0]
+    assert quote_hints(["nothing at all like any line here, zebra quantum"], [PROSE]) == []   # no guess when none is close
+
+
+def test_a_gateway_placeholder_in_a_quote_is_named_as_the_gateways_doing():
+    source = "Call the benefits line on 943 476 5919 and quote your plan number."
+    assert g.gateway_placeholders("on [UK_NHS] and quote", [source]) == ["[UK_NHS]"]
+    assert g.gateway_placeholders("see [NOTE]", ["[NOTE] is in the source"]) == []          # a source's own label
+    hints = quote_hints(["Call the benefits line on [UK_NHS]"], [source])
+    assert hints == ["“Call the benefits line on [UK_NHS]” contains [UK_NHS]: text the gateway's sensitive-data policy "
+                     "put in place of something in the source. Leave that part out of the quote."]
+
+
+def test_the_agent_repairs_with_the_previous_reply_and_reports_why_an_answer_was_withheld():
+    agent = (ROOT / "agent" / "agent.py").read_text()
+    assert '+ " ".join(problems) + "\\n\\nYour previous reply was:\\n" + raw[:4000]}] + first[1:]' in agent
+    assert "g.json_problem(raw)" in agent and "quote_hints(g.verify_quotes(" in agent
+    assert 'log["debug"]["unverified"] = {"kinds": sorted(set(kinds)),' in agent
+    assert ('"unverified": (log["debug"].get("unverified") if log["outcome"] == "unverified"\n'
+            '                               and log.get("synthetic") else None),') in agent   # platform callers only
+    assert '_event(log, "gateway_redaction", "flag",' in agent

@@ -9,7 +9,7 @@ import streamlit as st
 from common import (METRIC_LABEL, PAGES, RETRIEVAL_METRICS, STATE_LABEL, cp, current_user, fresh_sql, is_admin,
                     job_statuses, pick_bot, read_many, run_job, settings, soft, sql, update_in_progress,
                     user_groups, watch_job)
-from factory import jobruns, journey
+from factory import evals, jobruns, journey
 from factory.config import MAX_TESTERS
 from factory.explain import help_text
 from factory.ingestion import BotPaths
@@ -157,6 +157,15 @@ if cand:
             "**The quality check passed.** Every result below meets its target." if passed else
             "**The quality check didn't pass.** The results marked **Below** need work; what to do about each is "
             "listed underneath.")
+        if data.get("outcomes"):   # how many got an answer comes first: the scores below count every question
+            st.markdown(evals.answer_headline(data["outcomes"], int(data.get("n_cases") or 0)))
+            view = data.get("answered_view") or {}
+            if view.get("answered"):
+                shown = ", ".join(f"{METRIC_LABEL[k].lower()} {v:.0%}" for k, v in (view.get("metrics") or {}).items()
+                                  if k in METRIC_LABEL and k not in RETRIEVAL_METRICS)
+                st.caption(f"Among the {view['answered']} answers given: {shown}. The results below count every "
+                           "question, answered or not, and are what decides whether the check passes."
+                           + (f" Answers were withheld because of: {data['withheld']}." if data.get("withheld") else ""))
         for title, keys, why in [("Finding the right document", RETRIEVAL_METRICS, "search"),
                                  ("Answer quality", [k for k in METRIC_LABEL if k not in RETRIEVAL_METRICS], "judges")]:
             st.markdown(f"**{title}**", help=help_text(why))

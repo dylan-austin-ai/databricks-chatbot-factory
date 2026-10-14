@@ -21,12 +21,14 @@ PLATFORM RULES (always apply; you may still say what the documents state and who
 
 Rules for answered:
 1. Cite every claim with [n]. Each SOURCE's text is split into numbered lines (L1, L2, ...). For
-   every [n] you use, add a citations entry naming the line or lines of SOURCE [n] that support
-   the claim: one line, or up to four consecutive lines, for example {"source": 2, "lines": [4, 5]}.
-   The excerpt is copied from those lines for you; don't write it.
+   every [n] you use, add a citations entry naming the lines of SOURCE [n] that support what you
+   said, for example {"source": 2, "lines": [4]} or {"source": 2, "lines": [16, 29, 30]}. The
+   lines need not be next to each other. The excerpts are copied from those lines for you; don't
+   write them.
 2. Use the sources' own words as much as you can. Give each fact (amounts, limits, who
    qualifies, steps, deadlines) as a direct quote in quotation marks, and add only the few words
-   needed to join the quotes into a clear answer. Anything inside quotation marks must be an
+   needed to join the quotes into a clear answer. Put each quote in curly quotation marks
+   “like this” (never straight ones, so the JSON stays valid). Anything inside them must be an
    exact copy of the source, taken from a single line: never join words from different lines or
    table rows inside one pair of quotation marks, and leave out the "L4:" line labels.
 3. If the sources state the same fact in more than one way (for example a total and how it is
@@ -99,7 +101,8 @@ def format_sources(hits: list[dict], texts: list[str], pages) -> str:
 # The model names the lines that support a claim and the excerpt is cut out of the source from
 # them, instead of the model copying it out. Copying is where verbatim excerpts failed: sentences
 # put back together, table rows merged, an ellipsis added.
-MAX_CITED_LINES = 4
+MAX_CITED_LINES = 4   # consecutive lines in one excerpt
+MAX_SPANS = 4         # excerpts one citations entry may ask for
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+(?=\S)")
 
 
@@ -137,10 +140,12 @@ def _line_number(value) -> int | None:
 
 
 def resolve_citations(citations, texts: list[str]) -> tuple[list[dict], list[str]]:
-    """Each citation as {"source", "lines", "excerpt"}, the excerpt cut out of the source from the
-    lines it names, so it is verbatim by construction (ANS-1); and what is wrong with any that
-    can't be. A citation that gives an excerpt and no lines (a prompt from before lines) is kept
-    as written, to be checked word for word like before."""
+    """Each citation as one or more {"source", "lines", "excerpt"}: every run of consecutive lines
+    it names becomes an excerpt of its own, cut out of the source, so each is verbatim by
+    construction (ANS-1). Lines 16, 29 and 30 give two excerpts: L16, and L29 to L30. Bounded: at
+    most MAX_SPANS runs of at most MAX_CITED_LINES lines each. Also returns what is wrong with any
+    that can't be cut. A citation that gives an excerpt and no lines (a prompt from before lines)
+    is kept as written, to be checked word for word like before."""
     out, problems = [], []
     for c in citations or []:
         n = c.get("source") if isinstance(c, dict) else None
@@ -157,12 +162,45 @@ def resolve_citations(citations, texts: list[str]) -> tuple[list[dict], list[str
             problems.append(f"the citation for [{n}] must name its lines as numbers, for example [4]")
         elif ks[0] < 1 or ks[-1] > len(units):
             problems.append(f"SOURCE [{n}] has lines L1 to L{len(units)}; it has no line {ks[-1] if ks[-1] > 1 else ks[0]}")
-        elif ks != list(range(ks[0], ks[-1] + 1)) or len(ks) > MAX_CITED_LINES:
-            problems.append(f"the citation for [{n}] must name one line or up to {MAX_CITED_LINES} consecutive lines")
         else:
-            a, b = units[ks[0] - 1][0], units[ks[-1] - 1][1]
-            out.append({"source": n, "lines": ks, "excerpt": texts[n - 1][a:b]})
+            runs = [[ks[0]]]
+            for k in ks[1:]:
+                if k == runs[-1][-1] + 1:
+                    runs[-1].append(k)
+                else:
+                    runs.append([k])
+            if len(runs) > MAX_SPANS or any(len(r) > MAX_CITED_LINES for r in runs):
+                problems.append(f"the citation for [{n}] names too much: at most {MAX_SPANS} places in the source, "
+                                f"each at most {MAX_CITED_LINES} consecutive lines")
+                continue
+            for run in runs:
+                a, b = units[run[0] - 1][0], units[run[-1] - 1][1]
+                out.append({"source": n, "lines": run, "excerpt": texts[n - 1][a:b]})
     return out, problems
+
+
+def quote_hints(bad_quotes: list[str], texts: list[str]) -> list[str]:
+    """For the second try: for each quote that isn't word for word, the line it was probably meant
+    to come from, or the gateway placeholder in it that the model can't quote around. Guidance
+    only; the quote is still checked exactly."""
+    import difflib
+
+    from .guardrails import gateway_placeholders
+
+    lines = [(n, k, text[a:b]) for n, text in enumerate(texts, 1)
+             for k, (a, b) in enumerate(evidence_units(text), 1)]
+    hints = []
+    for q in bad_quotes:
+        tokens = gateway_placeholders(q, texts)
+        if tokens:
+            hints.append(f"“{q}” contains {', '.join(tokens)}: text the gateway's sensitive-data policy put in "
+                         "place of something in the source. Leave that part out of the quote.")
+            continue
+        best = max(lines, key=lambda x: difflib.SequenceMatcher(None, q.lower(), x[2].lower()).ratio(), default=None)
+        if best and difflib.SequenceMatcher(None, q.lower(), best[2].lower()).ratio() >= 0.6:
+            hints.append(f"“{q}” is not word for word; the closest line is SOURCE [{best[0]}] L{best[1]}: "
+                         f"{best[2][:300]}. Quote that line's exact words, or don't quote.")
+    return hints
 
 
 def bounded_excerpt(excerpt: str, max_words: int | None) -> tuple[str, bool]:
