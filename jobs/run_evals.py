@@ -114,6 +114,7 @@ def chatbot_fault(custom: dict) -> str:
 # What happened to each question of this run, kept as it happens:
 OUTCOMES: dict[str, str] = {}                # what the chatbot did with it, so a fault isn't judged as an answer
 TRACE_IDS: dict[str, tuple[str, str]] = {}   # (this check's trace, the chatbot's own trace on the serving endpoint)
+BLOCKS: dict[str, dict] = {}                 # which guardrail blocked it, when one did
 RESULTS: dict[str, dict[str, dict]] = {}     # what every scorer said about it: the gate decides from these
 STATUS: dict[str, dict[str, str]] = {}       # how each scorer went: running, done, failed or skipped
 # A judge that can't work without something in the question's expectations: it is skipped on a
@@ -151,6 +152,8 @@ def make_predict(cfg, channel: str, p: BotPaths, chunks: dict[str, str]):
         except Exception as e:  # noqa: BLE001
             response, custom = f"ERROR: {e}", {"outcome": "error"}
         OUTCOMES[question] = custom.get("outcome") or ""
+        if custom.get("blocked_by"):
+            BLOCKS[question] = custom["blocked_by"]
         TRACE_IDS[question] = (mlflow.get_active_trace_id() or "", str(custom.get("trace_id") or ""))
         hits = custom.get("retrieval") or []
         need = [h["chunk_id"] for h in hits if h.get("chunk_id") and h["chunk_id"] not in chunks]
@@ -290,7 +293,7 @@ for bot in bots:
             print(f"{cfg.bot_id}: version link skipped: {e}")
 
     chunks: dict[str, str] = {}
-    for store in (OUTCOMES, TRACE_IDS, RESULTS, STATUS):
+    for store in (OUTCOMES, TRACE_IDS, BLOCKS, RESULTS, STATUS):
         store.clear()
     if cases and not DIAGNOSE:
         # One question first. If the chatbot itself is failing, or refuses the check's own
@@ -321,7 +324,8 @@ for bot in bots:
             said = answered[1] or {}
             print(f"DIAG: 1b. what it did with that question: {said.get('outcome')} "
                   f"(request {said.get('request_id') or 'not given'})"
-                  + (f". THE CHATBOT GAVE NO ANSWER: {chatbot_fault(said)}" if chatbot_fault(said) else ""),
+                  + (f". THE CHATBOT GAVE NO ANSWER: {chatbot_fault(said)}" if chatbot_fault(said) else "")
+                  + (f". {evals.block_sentence(said['blocked_by'])}" if said.get("blocked_by") else ""),
                   flush=True)
             # The traces in steps 2 to 6 are written by this job. This one was written by the serving
             # endpoint, under its own identity, a moment ago and in the background: so it is given
@@ -389,8 +393,8 @@ for bot in bots:
             print(f"{cfg.bot_id}: scorers that gave no score: {scorer_errors}", flush=True)
         if DIAGNOSE:
             print(f"DIAG: 9. what each question got, as the scorers returned it (not read back from storage): "
-                  f"{sum(1 for r in rows if r)} of {len(rows)} question(s) have scores; the chatbot gave "
-                  f"{faults} of them no answer", flush=True)
+                  f"{sum(1 for r in rows if r)} of {len(rows)} question(s) have scores. What the chatbot did: "
+                  + evals.outcome_counts([OUTCOMES.get(c["question"], "") for c in cases]), flush=True)
             for i, c in enumerate(cases, 1):
                 q = c["question"]
                 scores, _, errors = scored[q]
@@ -398,6 +402,8 @@ for bot in bots:
                 print(f"DIAG:   question {i} ({q[:60]!r}): the chatbot's outcome was "
                       f"{OUTCOMES.get(q) or 'not recorded (it was never asked)'}. Scorers: "
                       + (", ".join(f"{n} {state}" for n, state in sorted(ran.items())) or "none ran"), flush=True)
+                if BLOCKS.get(q):
+                    print(f"DIAG:   question {i}: {evals.block_sentence(BLOCKS[q])}", flush=True)
                 print(f"DIAG:   question {i} scores: "
                       + (", ".join(f"{n}={v:g}" for n, v in sorted(scores.items())) or "none"), flush=True)
                 for name, why in sorted(errors.items()):

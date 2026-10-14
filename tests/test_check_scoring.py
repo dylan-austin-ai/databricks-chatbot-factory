@@ -220,7 +220,7 @@ def test_the_check_decides_from_what_the_scorers_returned_not_from_a_read_back()
     assert "read_scores(" not in outside_diagnostic and "search_traces" not in outside_diagnostic
     assert "evals.close_unfinished(RESULTS, STATUS)" in outside_diagnostic
     assert "return [kept(n, j.run) for n, j in judges.items()] + [kept(\"checks\", checks)]" in job   # every scorer
-    assert "for store in (OUTCOMES, TRACE_IDS, RESULTS, STATUS):\n        store.clear()" in job       # per chatbot
+    assert "for store in (OUTCOMES, TRACE_IDS, BLOCKS, RESULTS, STATUS):\n        store.clear()" in job   # per chatbot
     assert '"scorer_errors": scorer_errors' in job and '"errors": scored[c["question"]][2]' in job
 
 

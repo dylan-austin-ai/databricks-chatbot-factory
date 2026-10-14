@@ -304,9 +304,9 @@ class ChatbotAgent(ResponsesAgent):
                     model=endpoint, messages=messages, stream=True,
                     stream_options={"include_usage": True}, **kw)
                 for chunk in stream:
-                    reason = gw.blocked_reason(chunk)
-                    if reason:
-                        raise _GatewayBlocked(reason)
+                    block = gw.block_details(chunk)
+                    if block:
+                        raise _GatewayBlocked(block)
                     delta = chunk.choices[0].delta.content if chunk.choices else None
                     if delta:
                         ttft = ttft if ttft is not None else int((time.time() - started) * 1000)
@@ -323,9 +323,9 @@ class ChatbotAgent(ResponsesAgent):
                         self._stream_ok = False  # this endpoint can't stream: stop trying
                 parts, ttft = [], None  # retry once without streaming (transient errors too)
                 resp = self.llm.chat.completions.create(model=endpoint, messages=messages, **kw)
-                reason = gw.blocked_reason(resp)
-                if reason:
-                    raise _GatewayBlocked(reason)
+                block = gw.block_details(resp)
+                if block:
+                    raise _GatewayBlocked(block)
                 text, usage = resp.choices[0].message.content or "", resp.usage
             tin, tout = getattr(usage, "prompt_tokens", 0) or 0, getattr(usage, "completion_tokens", 0) or 0
             cost = tr.llm_cost(tin, tout, s.get("pricing", {}))
@@ -413,6 +413,10 @@ class ChatbotAgent(ResponsesAgent):
                 "answer": result.get("answer", result["text"]), "citations": result["citations"],
                 "conflicts": result["conflicts"], "retrieval": result["retrieval"],
                 "retrieved_chunk_ids": [r["chunk_id"] for r in result["retrieval"]],
+                # Which guardrail blocked it, for the platform's own callers only: telling everyone would
+                # tell someone probing the guardrails which one caught them.
+                "blocked_by": (self._block_note(log) if log["outcome"] == "blocked" and log.get("synthetic")
+                               else None),
                 "release_id": log["release_id"], "config_version": log["config_version"],
                 "config_hash": log["config_hash"], "manifest_hash": log["manifest_hash"],
                 "model": log["model"], "platform_version": PLATFORM_VERSION,
@@ -423,6 +427,12 @@ class ChatbotAgent(ResponsesAgent):
                           "cost_usd": log["cost_usd"], "ttft_ms": log["ttft_ms"],
                           "latency_ms": log["latency_ms"]},
             })
+
+    @staticmethod
+    def _block_note(log: dict) -> dict:
+        blocked = log["debug"].get("blocked_by") or {}
+        drift = next((e["reason"] for e in log["events"] if e["rule"] == "gateway_policy_mode"), "")
+        return {"handler": blocked.get("handler") or "", "stage": blocked.get("stage") or "", "settings_mismatch": drift}
 
     def _may_see_error(self, ci: dict, s, log: dict) -> bool:
         """Whether the caller may be told why an answer failed: only the platform's own test callers
@@ -577,10 +587,18 @@ class ChatbotAgent(ResponsesAgent):
                                  max_tokens=int(s.get("agent.max_output_tokens", 1200)))
             except Exception as e:  # noqa: BLE001
                 if _blocked(e):
+                    block = getattr(e, "details", None) or {"reason": str(e), "handler": "", "stage": ""}
+                    drift = gw.blocked_against_settings(block["handler"], s)
                     with mlflow.start_span(name="guardrail.gateway", span_type="GUARDRAIL") as span:
-                        span.set_outputs({"blocked": True, "reason": str(e)[:500]})
+                        span.set_outputs({"blocked": True, "reason": str(e)[:500], "handler": block["handler"],
+                                          "stage": block["stage"], "settings_mismatch": drift})
                     log["outcome"] = "blocked"
-                    _event(log, "gateway_guardrail", "block", str(e)[:500], question)
+                    log["debug"]["blocked_by"] = {k: block.get(k) for k in ("handler", "stage", "dry_run")}
+                    _event(log, "gateway_guardrail", "block",
+                           f"{block['handler'] or 'a service policy'} ({block['stage'] or 'stage not given'}): "
+                           f"{str(e)[:450]}", question)
+                    if drift:
+                        _event(log, "gateway_policy_mode", "flag", drift)
                     return {"text": MSG["blocked"], **empty, "retrieval": retrieval}
                 raise
             log["debug"].setdefault("model_outputs", []).append(raw)
@@ -698,7 +716,12 @@ class _NoStream(Exception):
 
 
 class _GatewayBlocked(Exception):
-    """Unity Gateway service policy DENY (returned as HTTP 200 with databricks_service_policy)."""
+    """Unity Gateway service policy DENY (returned as HTTP 200 with databricks_service_policy).
+    `details` is gateway.block_details: the reason, and which guardrail at which stage."""
+
+    def __init__(self, details: dict):
+        super().__init__(details.get("reason") or "blocked by a service policy")
+        self.details = details
 
 
 def _blocked(e: Exception) -> bool:

@@ -342,6 +342,32 @@ def chatbot_fault(custom: dict | None, runs_as: str = "", recognised: bool = Fal
     return ""
 
 
+OUTCOME_WORDS = {"answered": "answered", "blocked": "blocked by a guardrail", "refused": "declined as out of scope",
+                 "no_source": "said its documents don't cover it", "unverified": "couldn't verify its answer",
+                 "error": "failed with an error", "denied": "refused access", "unavailable": "was unavailable",
+                 "": "not asked"}
+
+
+def outcome_counts(outcomes: list[str]) -> str:
+    """What the chatbot did with a check's questions, every outcome counted, for example
+    "answered 1, blocked by a guardrail 2". Only "answered" is a real answer; a block, a refusal
+    or a no-source reply is not "no fault", so none of them is folded into another count."""
+    counts: dict[str, int] = {}
+    for o in outcomes:
+        counts[o or ""] = counts.get(o or "", 0) + 1
+    order = list(OUTCOME_WORDS)
+    return ", ".join(f"{OUTCOME_WORDS.get(o, o)} {n}" for o, n in
+                     sorted(counts.items(), key=lambda kv: order.index(kv[0]) if kv[0] in order else len(order)))
+
+
+def block_sentence(blocked_by: dict) -> str:
+    """One line on which guardrail blocked an answer, and whether the settings say it may."""
+    who = blocked_by.get("handler") or "a Unity Gateway service policy (the gateway didn't say which)"
+    where = f" at the {blocked_by['stage']} stage" if blocked_by.get("stage") else ""
+    return f"BLOCKED by {who}{where}." + (f" SETTINGS MISMATCH: {blocked_by['settings_mismatch']}"
+                                          if blocked_by.get("settings_mismatch") else "")
+
+
 def feedback_results(name: str, result, normalise, tidy=str) -> dict[str, dict]:
     """What one scorer returned for one question, as {assessment name: {"value", "rationale",
     "error"}}. A scorer returns a plain value, one Feedback or a list of them; `normalise` turns a

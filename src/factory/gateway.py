@@ -162,15 +162,40 @@ def request_tags(log: dict) -> dict[str, str]:
     return {"Databricks-Ai-Gateway-Request-Tags": json.dumps({k: str(v) for k, v in tags.items() if v})}
 
 
-def blocked_reason(obj) -> str | None:
-    """A service-policy DENY comes back as HTTP 200 with a top-level databricks_service_policy."""
+def block_details(obj) -> dict | None:
+    """A service-policy DENY comes back as HTTP 200 with a top-level databricks_service_policy.
+    Returns None when nothing was blocked, otherwise {"reason", "handler", "stage", "dry_run"}:
+    why, which guardrail (for example system.ai.block_hallucination) and where (for example
+    post_call). Fields the gateway didn't send are empty."""
     extra = getattr(obj, "model_extra", None) or (obj if isinstance(obj, dict) else {}) or {}
     policy = extra.get("databricks_service_policy")
     if not policy:
         return None
-    if isinstance(policy, dict):
-        decision = str(policy.get("result") or policy.get("decision") or "DENY").upper()
-        if decision not in {"DENY", "BLOCK"}:
-            return None
-        return str(policy.get("reason") or policy.get("policy") or "blocked by a service policy")
-    return str(policy)
+    if not isinstance(policy, dict):
+        return {"reason": str(policy), "handler": "", "stage": "", "dry_run": None}
+    decision = str(policy.get("result") or policy.get("decision") or "DENY").upper()
+    if decision not in {"DENY", "BLOCK"}:
+        return None
+    handler = str(policy.get("handler") or policy.get("function") or "")
+    if not handler:   # whichever field carries it, a built-in guardrail is named system.ai.<name>
+        handler = next((str(v) for v in policy.values() if isinstance(v, str) and v.startswith("system.ai.")), "")
+    return {"reason": str(policy.get("reason") or policy.get("policy") or "blocked by a service policy"),
+            "handler": handler, "stage": str(policy.get("stage") or policy.get("phase") or ""),
+            "dry_run": policy.get("dry_run")}
+
+
+def blocked_reason(obj) -> str | None:
+    """Why a service policy blocked the call, or None when it didn't."""
+    return (block_details(obj) or {}).get("reason")
+
+
+def blocked_against_settings(handler: str, settings) -> str:
+    """When a guardrail that the settings put in Log mode blocks a call, what to do about it; ""
+    otherwise. A policy in Log mode never blocks, so a block from one means the live policy in the
+    Unity Gateway UI is set to Enforce: the two have drifted apart."""
+    for p in (settings.get("unity_gateway.policies") or []):
+        if handler and p.get("policy") == handler and str(p.get("mode", "")).lower() == "log":
+            return (f"{handler} blocked this, but the settings say it should only log (Log mode). Its live policy in "
+                    "the Unity Gateway UI is set to Enforce: open the answer model service's Policies tab and set "
+                    "its Mode to Log (SETUP C2).")
+    return ""

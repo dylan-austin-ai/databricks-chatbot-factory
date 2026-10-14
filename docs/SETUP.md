@@ -382,7 +382,7 @@ The exact values are also on **Admin** › **Setup checklist** in the app.
 |---|---|---|---|---|
 | **Unsafe Content** (`system.ai.block_unsafe_content`) | Input and Output | **Enforce** | default | Harmful content |
 | **Jailbreak** (`system.ai.block_jailbreak`) | Input | **Enforce** | default | Jailbreak and prompt injection |
-| **Hallucination** (`system.ai.block_hallucination`) | Output | **Log** | `qa_chatbot_factory._platform.guardrail_evaluator` | Grounding check. Watch it for two weeks, then switch to Enforce |
+| **Hallucination** (`system.ai.block_hallucination`) | Output | **Log** (not the default: change it) | `qa_chatbot_factory._platform.guardrail_evaluator` (not the default: change it) | Grounding check. Keep it in Log; see D4 before ever enforcing it |
 | **Sensitive data** (`system.ai.detect_sensitive_data`) | Input and Output | **Enforce** (block or redact) | n/a | SSNs, cards, IBANs and other IDs |
 
 For each policy:
@@ -573,11 +573,21 @@ Application ID in **Admin** › **Platform** under `access.trusted_callers`, the
 | `SELECT * FROM system.ai_gateway.usage WHERE request_tags['bot_id'] = '<bot_id>'` | Tokens per request, tagged with the chatbot |
 | **Monitoring** (next day) | Speed, cost, quality and drift charts filling in |
 
-### D4. Turn the hallucination policy to Enforce (after about two weeks)
+### D4. Decide whether to enforce the hallucination policy (after about two weeks)
 
-Compare `v_guardrail_verdicts` (flagged = true) with the judges' groundedness scores and with
-thumbs-down feedback. If its flags are mostly right, edit the policy in C2 and change **Mode** to
-**Enforce**. From then on, its blocks are recorded like the others.
+Keep it in **Log** unless its record shows it almost never flags good answers. The gateway's
+hallucination judge sees only the chatbot's reply, never the documents the answer was built from
+(on the output phase Databricks' evaluator judges only that one item). So it can only compare
+the answer with the short excerpts quoted in the reply: a claim taken from the rest of the cited
+passage, or a citation it can't look up, looks unsupported to it. In QA it blocked two correct,
+cited answers that way. The factory checks grounding itself, against the passages actually
+retrieved: quotes are verified word for word before an answer is shown, and the groundedness
+judges score answers in the quality check and in production.
+
+Compare `v_guardrail_verdicts` (flagged = true) with those groundedness scores and with
+thumbs-down feedback. Only if its flags are nearly always right, edit the policy in C2 and change
+**Mode** to **Enforce**, and add the change to Admin › Platform (`unity_gateway.policies`, mode
+`enforce`) so the two agree. From then on, its blocks are recorded like the others.
 
 ---
 
@@ -788,6 +798,15 @@ output and the first smoke test:
   grants" with what succeeded and what failed (and stops if any failed), then whether the agent
   service principal may use the AI Search endpoint. If a chatbot then reports a permission error
   while searching, give that principal **Can Use** on the endpoint's **Permissions** in the UI.
+- Answers blocked by a gateway guardrail. The diagnostic names the guardrail and the stage on
+  line 1b and for each blocked question on line 9 (only the platform's own callers are told
+  which guardrail it was), and line 9 counts every outcome ("answered 1, blocked by a guardrail
+  2") instead of only the ones that were faults. A block from a policy that the settings put in
+  Log mode is marked SETTINGS MISMATCH and recorded as a `gateway_policy_mode` event: a policy
+  in Log mode never blocks, so its live mode in the Unity Gateway UI is Enforce. That is what the
+  QA run hit: the hallucination policy had been created with the UI's defaults (Enforce, default
+  evaluator) instead of C2's Log with `guardrail_evaluator`. Fix it on the answer service's
+  **Policies** tab; see D4 for why it should stay in Log.
 - Trace requests read back from storage. A trace's request can come back as JSON text of JSON
   text (encoded twice). Everything that reads span or trace values goes through one decoder
   (`tracing.as_dict`), which decodes again while the value is still text, four layers at most,
