@@ -24,12 +24,17 @@ def test_a_fresh_platform_says_what_is_to_do_and_what_only_a_person_can_confirm(
     for key in ("inference_table", "evaluator_inference_table", "trace_table"):     # which catalog, by name
         assert "catalog `chatbots_test`, schema `_platform`" in steps[key].detail, key
     assert "Save settings" in steps["inference_table"].detail and steps["inference_table"].guide == "C2 and C5"
-    for key in ("usage_policy", "user_authorisation", "review_queues", "embed_dashboards", "account_budget",
-                "app_scaling"):
+    for key in ("usage_policy", "user_authorisation", "production_monitoring", "prompt_registry", "review_queues",
+                "embed_dashboards", "account_budget", "app_scaling"):
         assert steps[key].state == CONFIRM and steps[key].by_hand, key
     assert steps["app_scaling"].optional and not steps["review_queues"].optional
     assert all(s.why and s.guide and s.detail for s in steps.values())
-    assert summary(list(steps.values())) == "0 of 10 done, 5 still to do, 5 for you to confirm."   # optional left out
+    assert summary(list(steps.values())) == "0 of 12 done, 5 still to do, 7 for you to confirm."   # optional left out
+    for key in ("production_monitoring", "prompt_registry"):     # previews the app depends on, ticked by a person
+        assert "**Previews**" in steps[key].detail and steps[key].guide == "A2" and not steps[key].optional, key
+    assert "live answers aren't judged" in steps["production_monitoring"].why
+    assert "observability task again" in steps["production_monitoring"].detail
+    assert "can't store the prompt" in steps["prompt_registry"].why
     asking = steps["user_authorisation"]                       # the one preview the chatbot can't answer without
     assert "Agent Framework: On-Behalf-Of-User Authorization" in asking.detail and "deploy_agent" in asking.detail
     assert "answers nobody" in asking.why and asking.guide == "A2"
@@ -63,11 +68,11 @@ def test_a_tick_records_who_confirmed_and_only_counts_for_steps_done_by_hand():
     assert steps["review_queues"].state == DONE and "ana@corp.com on 2026-10-12" in steps["review_queues"].detail
     assert steps["inference_table"].state == TODO          # the app checks this one itself; a tick can't override it
     assert steps["embed_dashboards"].state == CONFIRM
-    everything = {k: {"by": "a", "on": "d"} for k in ("user_authorisation", "review_queues", "embed_dashboards",
-                                                      "account_budget")}
+    everything = {k: {"by": "a", "on": "d"} for k in ("user_authorisation", "production_monitoring", "prompt_registry",
+                                                      "review_queues", "embed_dashboards", "account_budget")}
     s = _settings(inference_table=f"{HOME}.a", evaluator_inference_table=f"{HOME}.b", trace_table=f"{HOME}.c")
     s._data["observability"]["genie_space_id"] = "g1"
     s._data["access"]["serving_identity"] = "1234-abcd"
     done = setup_steps(s, existing={f"{HOME}.a", f"{HOME}.b", f"{HOME}.c"}, usage_policy=True, confirmed=everything)
-    assert summary(done) == "10 of 10 done." and _by_key(done)["app_scaling"].state == CONFIRM   # optional stays open
+    assert summary(done) == "12 of 12 done." and _by_key(done)["app_scaling"].state == CONFIRM   # optional stays open
     assert "1234-abcd" in _by_key(done)["serving_identity"].detail

@@ -23,7 +23,7 @@ EXPLAIN: dict[str, tuple[str, str, str]] = {
                   "it for search. Uploading a new file starts this automatically.",
                   "ai_parse_document, AI Search and file arrival triggers",
                   f"{DOCS}/sql/language-manual/functions/ai_parse_document"),
-    "search": ("We try five ways of searching your documents with your test questions and keep the one that "
+    "search": ("We try several ways of searching your documents with your test questions and keep the one that "
                "finds the right section most often, including a reranker that double-checks the top results.",
                "Databricks AI Search", f"{DOCS}/vector-search/vector-search"),
     "rules": ("These rules apply to every chatbot and only MLOps can change them. They stop the chatbot from "

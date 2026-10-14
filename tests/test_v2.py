@@ -1,4 +1,5 @@
 """v2: identity, answer path, strategies, monitoring, releases."""
+import pathlib
 from datetime import date, datetime, timezone
 
 import pytest
@@ -9,6 +10,8 @@ from factory import monitoring as mon
 from factory import sensitive, strategies
 from factory.answering import bounded_history, search_filters, search_query
 from factory.releases import content_hash
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
 def test_untrusted_caller_cannot_assert_user():
@@ -70,6 +73,27 @@ def test_strategy_tie_prefers_simpler():
     better = {"mrr": 1.0, "hit_at_1": 1.0, "hit_at_5": 1.0}
     assert strategies.choose([(fancy, better), (simple, m)])[0] is fancy
     assert "worked best" in strategies.explain(fancy, better, [(fancy, better), (simple, m)])
+
+
+def test_keyword_only_search_is_one_of_the_options_compared(settings):
+    options = settings.get("ai_search.strategies")
+    keyword = [o for o in options if o["name"] == "Keyword search"]
+    assert keyword == [{"name": "Keyword search", "query_type": "FULL_TEXT", "rerank": False, "num_results": 8}]
+    assert len(options) == 6 and len({o["name"] for o in options}) == 6
+    assert strategies.complexity(keyword[0]) == 0                  # as simple as meaning-based search
+    meaning = next(o for o in options if o["query_type"] == "ann" and not o["rerank"])
+    m = {"mrr": 0.7, "hit_at_1": 0.6, "hit_at_5": 0.9}
+    assert strategies.choose([(meaning, m), (keyword[0], m)])[0] is meaning   # a tie keeps the listed order
+    better = {"mrr": 0.9, "hit_at_1": 0.85, "hit_at_5": 0.95}
+    chosen, metrics = strategies.choose([(meaning, m), (keyword[0], better)])
+    assert chosen is keyword[0]
+    said = strategies.explain(chosen, metrics, [(meaning, m), (keyword[0], better)])
+    assert said.startswith('We tested 2 ways of searching your documents. "Keyword search" worked best')
+    assert "25% better than the simplest option" in said
+    # the comparison skips an option whose search fails (the preview is off) and carries on with the rest
+    job = (ROOT / "jobs" / "compare_strategies.py").read_text()
+    assert 'print(f"Skipped {strat[\'name\']}: {e}")' in job
+    assert 'query_type=strategy.get("query_type", "hybrid")' in job          # passed to AI Search unchanged
 
 
 def test_monitoring_rules(settings):

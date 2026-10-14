@@ -110,6 +110,16 @@ def setup_steps(settings, existing: set[str] | None = None, usage_policy: bool |
                   "Authorization**, switched on by a workspace admin. Then run the `deploy_agent` job once more.",
                   "Without it the chatbot can't tell who is asking and answers nobody: people see \"I can't confirm "
                   "who is asking\" and quality checks stop with \"nothing to score\".", "A2", by_hand=True),
+        SetupStep("production_monitoring", "The Production monitoring for MLflow preview is on", CONFIRM,
+                  "Your user name › **Settings** › **Previews**, by a workspace admin. Then run the observability "
+                  "task again (SETUP C5, step 3).",
+                  "The observability task uses it to start the judges that score live answers (20% of them, every "
+                  "one for critical chatbots). Without it live answers aren't judged.", "A2", by_hand=True),
+        SetupStep("prompt_registry", "The Managed MLflow Prompt Registry preview is on", CONFIRM,
+                  "Your user name › **Settings** › **Previews**, by a workspace admin.",
+                  "The deploy_agent job stores the answer prompt there and the chatbot reads it from there; prompt "
+                  "tuning saves its suggestions there too. Without it the deploy can't store the prompt.", "A2",
+                  by_hand=True),
         SetupStep("review_queues", "The MLflow Review Queues preview is on", CONFIRM,
                   "Your user name › **Settings** › **Previews**, by a workspace admin.",
                   "Without it failed and thumbs-down answers aren't queued for a person to review.", "A2", by_hand=True),

@@ -40,8 +40,10 @@ the three tasks as steps of one update and locks the manual check while an updat
 ## Quality (EVL-*, EVG-*)
 
 Golden sets mix easy questions and hard extraction questions (tables, footnotes, multi-page)
-with expected pages. `compare_strategies` scores 5 retrieval strategies on Hit@k/MRR without
-LLM calls and picks the best (ties → simpler). `run_evals` applies the combined gate.
+with expected pages. `compare_strategies` scores 6 retrieval strategies (meaning-based, meaning +
+keyword, with and without reranking, a wider one, and keyword-only `FULL_TEXT`, which needs the
+AI Search full-text preview and is skipped while it is off) on Hit@k/MRR without LLM calls and
+picks the best (ties → simpler). `run_evals` applies the combined gate.
 Production judging samples 20% (100% for critical bots).
 
 ## Monitoring (OBS-*, CST-*, DCL-*)

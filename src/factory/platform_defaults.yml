@@ -65,6 +65,10 @@ ai_search:
     - {name: "Meaning + keyword search", query_type: hybrid, rerank: false, num_results: 8}
     - {name: "Meaning + keyword search + reranking", query_type: hybrid, rerank: true, num_results: 8}
     - {name: "Meaning + keyword search + reranking (wider)", query_type: hybrid, rerank: true, num_results: 15}
+    # Exact words only (BM25), no meaning-based matching: can win for documents full of codes and
+    # form numbers. Needs the "AI Search: Full-Text Search" preview (Beta); while that is off the
+    # comparison skips this one and says so. No reranking: AI Search documents none for it.
+    - {name: "Keyword search", query_type: FULL_TEXT, rerank: false, num_results: 8}
   # GRD-9: below this top score the bot abstains without calling the model. Hybrid scores
   # use rank fusion (a different scale from ANN similarity), so calibrate this on dev golden
   # sets before raising it. 0 = rely on retrieval returning nothing + the prompt's abstain rule.

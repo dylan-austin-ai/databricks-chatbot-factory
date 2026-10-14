@@ -52,7 +52,10 @@ previews**). Search for each of these and switch it **On**:
 | Preview | Used for |
 |---|---|
 | **Agent Framework: On-Behalf-Of-User Authorization** (required) | How the agent learns who is asking: Model Serving hands it the asking user's credentials for each question. Without it the chatbot answers nobody |
+| **Production monitoring for MLflow** (required) | The observability task (C5) starts the judges that score live answers with it: 20% of them, every one for critical chatbots |
+| **Managed MLflow Prompt Registry** (required) | `deploy_agent` stores the answer prompt there and the chatbot reads it from there; `optimize_prompt` saves its suggestions there |
 | **MLflow Review Queues** | Failed production answers go to a review queue for each chatbot |
+| **AI Search: Full-Text Search** (optional) | Lets the search comparison also try keyword-only search ("Keyword search"). While it is off, that one option is skipped and the run's output says so |
 | `ai_parse_document` / AI Functions document parsing (v2) | Document parsing during ingestion |
 | `ai_prep_search` | Chunking and metadata extraction |
 | **Data Classification** (if listed; it's GA in most regions) | Automatic personal-data tagging of the catalog |
