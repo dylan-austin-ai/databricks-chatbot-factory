@@ -294,20 +294,20 @@ class ChatbotAgent(ResponsesAgent):
     # child span carries MLflow's native token usage, this span adds TTFT, cost and attempt.
     def _chat(self, name: str, endpoint: str, messages: list[dict], log: dict, s: PlatformSettings,
               out: dict | None = None, **kw) -> str:
-        """One model call through Unity Gateway. With `response_format` (the answer contract) it is
-        a single non-streaming request: Claude models take structured output only without
-        streaming, and a failed request is not sent again here. `out` gets the finish reason."""
+        """One model call through Unity Gateway. Held to the answer contract (`response_format`, or
+        `tools` with the schema as the function to call) it is a single non-streaming request:
+        Claude models take structured output only without streaming, and a failed request is not
+        sent again here. `out` gets the finish reason."""
         with mlflow.start_span(name=name, span_type="CHAIN") as span:
             span.set_inputs({"model": endpoint, "messages": messages, **kw})
             started, ttft, parts, usage, finish = time.time(), None, [], None, None
             kw["extra_headers"] = gw.request_tags(log)  # per-bot usage in system.ai_gateway.usage
-            if "response_format" in kw:   # the answer contract: a denial, then the finish reason, then parsing
+            if "response_format" in kw or "tools" in kw:   # the contract: a denial, the finish reason, then parsing
                 resp = self.llm.chat.completions.create(model=endpoint, messages=messages, **kw)
                 block = gw.block_details(resp)
                 if block:
                     raise _GatewayBlocked(block)
-                text, usage = resp.choices[0].message.content or "", resp.usage
-                finish = getattr(resp.choices[0], "finish_reason", None)
+                (text, finish), usage = contract.reply_of(resp), resp.usage
             else:
                 try:
                     if not self._stream_ok:
@@ -606,15 +606,19 @@ class ChatbotAgent(ResponsesAgent):
             raw = self._chat("answer.attempt_1" if attempt == 1 else f"answer.retake_{attempt}", endpoint, msgs, log,
                              s, out=done, temperature=s.get("agent.temperature", 0.0),
                              max_tokens=int(s.get("agent.max_output_tokens", 1200)),
-                             response_format=contract.response_format())
+                             **contract.request_options(mode))
             log["debug"].setdefault("model_outputs", []).append(raw)
             return raw, done.get("finish_reason")
 
         max_words = int(s.get("agent.max_quote_words", 60))
+        # How this answer model is held to the schema (structured_output on its answer service).
+        mode = ((s.get("models.answer_services") or {}).get(cfg.answer_model) or {}).get("structured_output",
+                                                                                         "response_format")
         try:
             with mlflow.start_span(name="guardrail.output_check", span_type="GUARDRAIL") as span:
                 checked, failures = contract.answer_with_checks(ask, messages, sources_text, system,
-                                                                limit_quotes=limit_quotes, max_quote_words=max_words)
+                                                                limit_quotes=limit_quotes, max_quote_words=max_words,
+                                                                contacts=s.get("guardrails.corporate_contacts"))
                 span.set_outputs({"passed": checked.ok, "status": checked.status, "category": checked.category,
                                   "kinds": checked.kinds, "attempts": len(failures) + 1,
                                   "problems": checked.problems[:10]})

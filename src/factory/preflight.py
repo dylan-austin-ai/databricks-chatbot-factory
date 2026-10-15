@@ -41,6 +41,8 @@ def deploy_problems(w, settings: PlatformSettings, warehouse_id: str, identity_s
     need_secrets(identity_scope,
                  [settings.get("access.identity_hash_key"), settings.get("access.identity_encryption_key")],
                  "store the identity keys and give the deploy identity READ (A7)")
+    from .answer_contract import output_mode_problems
+    problems += output_mode_problems(settings.get("models.answer_services"))
     return problems
 
 

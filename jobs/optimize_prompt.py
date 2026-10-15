@@ -84,10 +84,12 @@ def predict(question: str, bot_id: str) -> str:
     resp = gateway.chat.completions.create(
         model=s.answer_service(cfg.answer_model), temperature=0, max_tokens=int(s.get("agent.max_output_tokens", 1200)),
         messages=[{"role": "system", "content": f"{system}\n\nSOURCES:\n{format_sources(hits, texts, pages)}"},
-                  {"role": "user", "content": question}], response_format=contract.response_format())
+                  {"role": "user", "content": question}],
+        **contract.request_options(((s.get("models.answer_services") or {}).get(cfg.answer_model) or {})
+                                   .get("structured_output", "response_format")))
     # Scored like the agent would show it: a reply that fails the contract is not an answer.
-    obj, failed = contract.decode(resp.choices[0].message.content or "", resp.choices[0].finish_reason)
-    checked = failed or contract.check(obj, texts, system)
+    obj, failed = contract.decode(*contract.reply_of(resp))
+    checked = failed or contract.check(obj, texts, system, contacts=s.get("guardrails.corporate_contacts"))
     return checked.answer if checked.ok and checked.status == "answered" else (checked.status or checked.category)
 
 

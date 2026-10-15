@@ -16,6 +16,10 @@ models:
       service: answer_haiku
       model: system.ai.databricks-claude-haiku-4-5
       fallbacks: [system.ai.databricks-claude-sonnet-4-5]   # GW-3: tried in order on failure
+      # How the answer is held to its JSON schema: response_format, or tool (a function the model
+      # must call). Databricks doesn't take response_format for the 5.5 Claude models or Fable 5.1:
+      # a service routed to one of them needs tool. The deploy stops if this doesn't fit the routes.
+      structured_output: response_format
   default_answer_model: haiku
   judge_endpoint: databricks-claude-haiku-4-5          # MLflow judges (JDG-1)
   generation_endpoint: databricks-claude-sonnet-4-5    # test questions, visual page check
@@ -41,10 +45,11 @@ unity_gateway:                         # formerly AI Gateway (GW-1..6)
     - {policy: system.ai.block_unsafe_content, phases: [input, output], mode: enforce, why: harmful content}
     - {policy: system.ai.block_jailbreak, phases: [input], mode: enforce, why: jailbreak and prompt injection}
     - {policy: system.ai.block_hallucination, phases: [output], mode: log, why: "grounding check; start in Log mode, enforce once false positives are known"}
-    # Security's decision (2026-10-14): signed-in people may see business contacts (names, work
-    # email addresses, phone numbers) and corporate account identifiers, so only restricted
-    # categories are selected. The agent's own redaction already masks only those three.
-    - {policy: system.ai.detect_sensitive_data, phases: [input, output], mode: enforce, why: "block or redact SSNs, payment cards and bank account numbers only; business contacts and corporate account identifiers are allowed"}
+    # Contact details (decided 2026-10-15): names, email addresses and phone numbers may appear when
+    # they are in the documents the answer cites, and the company's own always. The gateway's judge
+    # sees only the reply, never the documents, so it can't tell these apart: the gateway selects
+    # only restricted categories and the agent enforces the rule (guardrails.corporate_contacts).
+    - {policy: system.ai.detect_sensitive_data, phases: [input, output], mode: enforce, why: "block or redact SSNs, payment cards and bank account numbers only; the agent decides on names, emails and phone numbers"}
   evaluator:                           # judge for Log-mode policies, so their verdicts land in our inference table (GW-7)
     service: guardrail_evaluator
     model: system.ai.databricks-claude-haiku-4-5
@@ -125,6 +130,12 @@ wizard:
   business_functions: [Claims, Customer Service, Finance, HR, IT, Legal, Operations, Sales, Other]
 
 guardrails:
+  # Contact details in answers (decided 2026-10-15): a person's name, email address or phone number
+  # only when it is in the documents the answer cites; the company's own always. Emails and phone
+  # numbers are checked by the agent; names by the rule that they are quoted from a cited line.
+  corporate_contacts:
+    email_domains: []                  # e.g. [corp.com]: any address at these domains
+    phone_numbers: []                  # e.g. ["+1 800 555 0100"]: compared by their digits
   # Platform rules: on for every chatbot. Only admins can turn one off, per bot
   # (Admin > Chatbots) or for everyone (delete it here). Owners can only add topics.
   platform_rules:

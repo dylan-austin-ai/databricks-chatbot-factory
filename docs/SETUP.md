@@ -383,7 +383,7 @@ The exact values are also on **Admin** › **Setup checklist** in the app.
 | **Unsafe Content** (`system.ai.block_unsafe_content`) | Input and Output | **Enforce** | default | Harmful content |
 | **Jailbreak** (`system.ai.block_jailbreak`) | Input | **Enforce** | default | Jailbreak and prompt injection |
 | **Hallucination** (`system.ai.block_hallucination`) | Output | **Log** (not the default: change it) | `qa_chatbot_factory._platform.guardrail_evaluator` (not the default: change it) | Grounding check. Keep it in Log; see D4 before ever enforcing it |
-| **Sensitive data** (`system.ai.detect_sensitive_data`) | Input and Output | **Enforce** (block or redact) | n/a | Select only the restricted categories: Social Security numbers, payment cards, bank account numbers. Leave every other category unselected: names, email addresses, phone numbers, account identifiers, and national health numbers such as UK NHS (which matched ordinary numbers in the documents and replaced them with `[UK_NHS]`). Security decided (2026-10-14) that signed-in people may see business contacts and corporate account identifiers. The input phase also changes the documents the model is given, so a category selected there rewrites the sources before the model reads them |
+| **Sensitive data** (`system.ai.detect_sensitive_data`) | Input and Output | **Enforce** (block or redact) | n/a | Select only the restricted categories: Social Security numbers, payment cards, bank account numbers. Leave every other category unselected: names, email addresses, phone numbers, account identifiers, and national health numbers such as UK NHS (which matched ordinary numbers in the documents and replaced them with `[UK_NHS]`). Decided 2026-10-15: a name, email address or phone number may appear in an answer when it is in the documents the answer cites, and the company's own always. The gateway's judge sees only the reply, never the documents, so it can't apply that rule; the agent does (see "Contact details" under *Things to verify*). The input phase also changes the documents the model is given, so a category selected there rewrites the sources before the model reads them |
 
 For each policy:
 
@@ -801,9 +801,15 @@ output and the first smoke test:
 - The answer contract (`factory/answer_contract.py`). The answer model is held to a strict JSON
   schema: the request carries `response_format` (`json_schema`, strict) and is sent without
   streaming, because Claude models on Databricks take structured output only without streaming.
-  So every route of the answer model service must be a model that supports structured output
-  (Databricks lists Claude Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.1 as not supporting
-  it): check the fallback route too before relying on it. Answers are not streamed, so `ttft_ms`
+  Databricks lists Claude Opus 5.5, Sonnet 5.5, Haiku 5.5 and Fable 5.1 as not supporting
+  `response_format`. For an answer service routed to one of them (primary or fallback), set
+  `structured_output: tool` on it in Admin › Platform (`models.answer_services.<label>`): the
+  schema is then sent as a function the model must call (`submit_answer`), and its arguments
+  are checked against the schema in code exactly as before; a model that answers in prose
+  instead fails the checks. The deploy stops if a service set to `response_format` routes to
+  one of those models. Function calling isn't strictly schema-enforced the way
+  `response_format` is, so after switching, run the diagnostic and a targeted check before
+  relying on it. Answers are not streamed, so `ttft_ms`
   stays empty for them. The reply is checked in this order: a gateway denial, the finish reason
   (cut off at the length limit is a truncation), valid JSON, the schema (statuses, field types,
   evidence structure, what each status requires), then the evidence. The model answers in
@@ -835,6 +841,24 @@ output and the first smoke test:
   those and 4 rule questions for a chatbot that has none of each. Chatbots made before this have
   rule questions filed under "Should refuse": on **Test questions**, change their **Type** to
   "Share documents, don't decide".
+- Contact details. A person's name, email address or phone number may appear in an answer when
+  it is in the lines that part of the answer cites, and the company's own email addresses and
+  phone numbers always (decided 2026-10-15). The agent checks every email address and phone
+  number (phone numbers compared by their digits) and sends back, then withholds, an answer
+  with one that isn't cited or the company's. Names can't be recognised reliably by code: the
+  answer prompt requires them to be quoted from a cited line, and quotes are checked word for
+  word. Set the company's own in Admin › Platform:
+
+  ```yaml
+  guardrails:
+    corporate_contacts:
+      email_domains: [corp.com]
+      phone_numbers: ["+1 800 555 0100"]
+  ```
+
+  Until they are set, the company's addresses and numbers are allowed only when they are in the
+  cited documents. The gateway should block none of these (Sensitive data in C2): it can't see
+  the documents.
 - What each question is scored on. Answer-quality judges (correctness, groundedness, relevance,
   the retrieval judges) run only on answerable questions; an expected refusal is scored on
   refusal accuracy and safety, a rule question on its rule rubric (`rule_compliance`) and

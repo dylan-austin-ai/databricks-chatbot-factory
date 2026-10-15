@@ -221,11 +221,12 @@ def test_a_gateway_denial_or_failed_request_is_not_sent_again():
 # The agent and the quality check use it -----------------------------------------------------------------
 def test_the_agent_asks_with_the_schema_without_streaming_and_records_why_it_withheld():
     agent = (ROOT / "agent" / "agent.py").read_text()
-    assert "response_format=contract.response_format())" in agent
+    assert "**contract.request_options(mode))" in agent
+    assert 'contacts=s.get("guardrails.corporate_contacts"))' in agent
     chat = agent[agent.index("    def _chat("):agent.index("    def _prompt(")]
-    structured = chat[chat.index('if "response_format" in kw:'):chat.index("            else:")]
+    structured = chat[chat.index('if "response_format" in kw or "tools" in kw:'):chat.index("            else:")]
     assert "stream=True" not in structured and "raise _GatewayBlocked(block)" in structured
-    assert structured.index("block_details(resp)") < structured.index('finish = getattr(resp.choices[0], "finish_reason"')
+    assert structured.index("block_details(resp)") < structured.index("contract.reply_of(resp)")
     assert "contract.answer_with_checks(ask, messages, sources_text, system," in agent
     assert "Your previous reply was" not in agent and "raw[:4000]" not in agent
     assert 'log["debug"]["unverified"] = {"category": category, "kinds": sorted(set(kinds)),' in agent
@@ -243,5 +244,82 @@ def test_production_judging_pairs_short_quotes_too():
 
 def test_prompt_tuning_scores_only_replies_that_pass_the_contract():
     job = (ROOT / "jobs" / "optimize_prompt.py").read_text()
-    assert "response_format=contract.response_format())" in job
-    assert "checked = failed or contract.check(obj, texts, system)" in job
+    assert "**contract.request_options(" in job and "contract.decode(*contract.reply_of(resp))" in job
+    assert 'contract.check(obj, texts, system, contacts=s.get("guardrails.corporate_contacts"))' in job
+
+
+# Models without response_format (Haiku 5.5 on Databricks) -------------------------------------------------
+class Msg:
+    def __init__(self, content=None, args=None):
+        self.content = content
+        self.tool_calls = [type("C", (), {"function": type("F", (), {"arguments": args})()})()] if args else None
+
+
+def completion(finish, content=None, args=None):
+    choice = type("Ch", (), {"message": Msg(content, args), "finish_reason": finish})()
+    return type("R", (), {"choices": [choice]})()
+
+
+def test_a_service_routes_the_schema_as_response_format_or_as_a_function_it_must_call():
+    assert contract.request_options("response_format") == {"response_format": contract.response_format()}
+    tool = contract.request_options("tool")
+    assert tool["tools"][0]["function"]["parameters"] is contract.SCHEMA
+    assert tool["tool_choice"] == {"type": "function", "function": {"name": "submit_answer"}}
+    assert contract.reply_of(completion("tool_calls", args=GOOD)) == (GOOD, "tool_calls")
+    assert contract.reply_of(completion("stop", content=GOOD)) == (GOOD, "stop")
+    # a model that answers in prose instead of calling the function fails the checks; nothing is guessed
+    text, finish = contract.reply_of(completion("stop", content="You can use up to 4 hours."))
+    assert contract.decode(text, finish)[1].category == contract.INVALID_JSON
+    # and a tool reply is checked exactly like a response_format reply
+    obj, failed = contract.decode(*contract.reply_of(completion("tool_calls", args=GOOD)))
+    assert failed is None and contract.check(obj, [DEPOSIT], SYSTEM).ok
+
+
+def test_the_deploy_refuses_response_format_for_a_route_that_does_not_take_it(settings):
+    haiku_55 = {"haiku": {"service": "answer_haiku", "model": "system.ai.databricks-claude-haiku-5-5", "fallbacks": []}}
+    assert contract.output_mode_problems(haiku_55) == [
+        "answer service 'haiku' routes to system.ai.databricks-claude-haiku-5-5, which Databricks doesn't support "
+        "response_format for: set its structured_output to tool (Admin › Platform)"]
+    assert contract.output_mode_problems({"haiku": {**haiku_55["haiku"], "structured_output": "tool"}}) == []
+    fallback = {"x": {"model": "system.ai.databricks-claude-haiku-4-5", "fallbacks": ["system.ai.databricks-claude-sonnet-5-5"]}}
+    assert "databricks-claude-sonnet-5-5" in contract.output_mode_problems(fallback)[0]   # fallbacks count too
+    assert "must be one of" in contract.output_mode_problems({"x": {"model": "m", "structured_output": "json"}})[0]
+    assert contract.output_mode_problems(settings.get("models.answer_services")) == []   # the defaults are fine
+    preflight = (ROOT / "src" / "factory" / "preflight.py").read_text()
+    assert 'problems += output_mode_problems(settings.get("models.answer_services"))' in preflight
+
+
+# Contact details (decided 2026-10-15) ---------------------------------------------------------------------
+HR = "Benefits help. Contact Jane Doe at jane.doe@benefitsco.com or (555) 201-7788. Forms are online."
+OTHER = "Payroll questions go to Sam Lee at sam.lee@payrollco.com."
+CORPORATE = {"email_domains": ["corp.com"], "phone_numbers": ["+1 800 555 0100"]}
+
+
+@pytest.mark.parametrize("text, lines, kinds", [
+    ('Contact "Jane Doe" at "jane.doe@benefitsco.com" or 555.201.7788.', [2], []),        # in the cited lines
+    ("Email hr@corp.com or call 1-800-555-0100.", [1], []),                               # the company's own
+    ("Email sam.lee@payrollco.com for help.", [2], ["contact_not_in_evidence"]),           # in another source only
+    ("Email jane.smith@gmail.com or call 555-999-1234.", [2], ["contact_not_in_evidence"]),   # in no document
+])
+def test_emails_and_phone_numbers_must_come_from_the_cited_lines_or_be_the_companys(text, lines, kinds):
+    r = contract.check(json.loads(reply((text, [{"source": 1, "lines": lines}]))), [HR, OTHER], SYSTEM,
+                       contacts=CORPORATE)
+    assert r.kinds == kinds
+    if kinds and "payrollco" in text:
+        assert "it is in SOURCE [2]: cite that line, or leave it out." in r.problems[0]
+    if kinds and "gmail" in text:
+        assert len(r.problems) == 2 and "or anywhere in the documents: leave it out." in r.problems[0]
+
+
+def test_without_a_company_list_only_document_contacts_are_allowed():
+    r = contract.check(json.loads(reply(("Email hr@corp.com.", [{"source": 1, "lines": [1]}]))), [HR], SYSTEM)
+    assert r.kinds == ["contact_not_in_evidence"]                          # fail closed until it is configured
+
+
+def test_names_are_held_to_the_quotation_rule():
+    from factory.answering import SYSTEM_PROMPT
+
+    assert ("Give a\n   person's name, email address or phone number only as a quote from a line the same block "
+            "cites.") in SYSTEM_PROMPT
+    invented = reply(('Contact "John Smith" in Benefits.', [{"source": 1, "lines": [2]}]))
+    assert checked(invented, [HR]).kinds == ["quote_not_in_evidence"]

@@ -20,6 +20,7 @@ import re
 from dataclasses import dataclass, field
 
 from . import guardrails as g
+from . import sensitive
 from .answering import MAX_CITED_LINES, evidence_units
 
 STATUSES = ("answered", "out_of_scope", "no_source")
@@ -48,6 +49,50 @@ SCHEMA = {
 def response_format() -> dict:
     """What the answer request sends, so the model can only return this shape."""
     return {"type": "json_schema", "json_schema": {"name": "chatbot_answer", "schema": SCHEMA, "strict": True}}
+
+
+# Models Databricks lists as not taking response_format. A service routed to one of them sends the
+# schema as a function the model must call instead (structured_output: tool); the reply is then
+# checked against the schema in code, exactly like a response_format reply.
+NO_RESPONSE_FORMAT = ("databricks-claude-opus-5-5", "databricks-claude-sonnet-5-5", "databricks-claude-haiku-5-5",
+                      "databricks-claude-fable-5-1")
+TOOL_NAME = "submit_answer"
+MODES = ("response_format", "tool")
+
+
+def request_options(mode: str) -> dict:
+    """The request arguments that hold the model to the schema, for a service's structured_output."""
+    if mode == "tool":
+        return {"tools": [{"type": "function", "function": {
+                    "name": TOOL_NAME, "description": "Submit the reply in the required form.", "parameters": SCHEMA}}],
+                "tool_choice": {"type": "function", "function": {"name": TOOL_NAME}}}
+    return {"response_format": response_format()}
+
+
+def reply_of(resp) -> tuple[str, str | None]:
+    """The reply text and finish reason of a chat completion: the submit_answer call's arguments
+    when the model called it, otherwise its message (which then fails the checks, as it should)."""
+    choice = resp.choices[0]
+    calls = getattr(choice.message, "tool_calls", None) or []
+    text = calls[0].function.arguments if calls else (choice.message.content or "")
+    return text or "", getattr(choice, "finish_reason", None)
+
+
+def output_mode_problems(services: dict) -> list[str]:
+    """Answer services set to response_format but routed (primary or fallback) to a model that
+    doesn't take it, or set to something that isn't a mode."""
+    problems = []
+    for label, spec in (services or {}).items():
+        mode = spec.get("structured_output", "response_format")
+        routed = [spec.get("model", "")] + list(spec.get("fallbacks") or [])
+        if mode not in MODES:
+            problems.append(f"answer service '{label}': structured_output must be one of {', '.join(MODES)}")
+        elif mode == "response_format":
+            bad = [m for m in routed if any(str(m).endswith(x) for x in NO_RESPONSE_FORMAT)]
+            if bad:
+                problems.append(f"answer service '{label}' routes to {', '.join(bad)}, which Databricks doesn't "
+                                "support response_format for: set its structured_output to tool (Admin › Platform)")
+    return problems
 
 
 @dataclass
@@ -208,12 +253,38 @@ def _fragment(quote: str) -> str:
     return "“" + " ".join(words[:6]) + ("…" if len(words) > 6 else "") + "”"
 
 
+def _digits(phone: str) -> str:
+    d = "".join(ch for ch in phone if ch.isdigit())
+    return d[1:] if len(d) == 11 and d.startswith("1") else d
+
+
+def contact_problems(text: str, excerpts: list[str], contacts: dict | None) -> list[tuple[str, str]]:
+    """Email addresses and phone numbers in a block that it may not show, with what each is. Decided
+    2026-10-15: one may appear when it is in the lines the block cites (so it comes from the
+    documents), and the company's own (contacts: email_domains, phone_numbers) always may."""
+    contacts = contacts or {}
+    domains = {str(d).lower().lstrip("@") for d in contacts.get("email_domains") or []}
+    phones = {_digits(str(p)) for p in contacts.get("phone_numbers") or []}
+    cited = " ".join(excerpts)
+    cited_emails = {e.lower() for e in sensitive.EMAIL.findall(cited)}
+    cited_phones = {_digits(p) for p in sensitive.PHONE.findall(cited)}
+    out = []
+    for e in sensitive.EMAIL.findall(text):
+        if e.lower().split("@")[-1] not in domains and e.lower() not in cited_emails:
+            out.append((e, "email address"))
+    for p in sensitive.PHONE.findall(text):
+        if _digits(p) not in phones and _digits(p) not in cited_phones:
+            out.append((p.strip(), "phone number"))
+    return out
+
+
 def check(obj: dict, texts: list[str], system_prompt: str, *, limit_quotes: bool = False,
-          max_quote_words: int = 60) -> Checked:
+          max_quote_words: int = 60, contacts: dict | None = None) -> Checked:
     """Every check a decoded reply must pass. For an answer: each block's evidence resolves within
-    the budget, every quotation in a block is exact words from the lines that block cites, the
-    quotation marks pair up, no invented links, no prompt leak, no gateway placeholder, and (for
-    chatbots that limit quoting) no quotation longer than max_quote_words."""
+    the budget, every quotation in a block is exact words from the lines that block cites, every
+    email address and phone number is in those lines or is the company's own, the quotation marks
+    pair up, no invented links, no prompt leak, no gateway placeholder, and (for chatbots that
+    limit quoting) no quotation longer than max_quote_words."""
     status = obj["status"]
     if status != "answered":
         return Checked(True, status=status)
@@ -245,6 +316,12 @@ def check(obj: dict, texts: list[str], system_prompt: str, *, limit_quotes: bool
                 kinds.append("quote_too_long")
                 problems.append(f"Block {i}: a quotation is {len(q.split())} words; keep each under "
                                 f"{max_quote_words}.")
+        for value, what in contact_problems(text, [s["excerpt"] for s in spans], contacts):
+            kinds.append("contact_not_in_evidence")
+            where = next((f"SOURCE [{n}]" for n, t in enumerate(texts, 1) if value.lower() in t.lower()), "")
+            problems.append(f"Block {i} shows the {what} {value}, which is not in the lines it cites"
+                            + (f"; it is in {where}: cite that line, or leave it out." if where
+                               else " or anywhere in the documents: leave it out."))
         index = []
         for s in spans:
             key = (s["source"], tuple(s["lines"]))
@@ -320,7 +397,8 @@ def repair_note(failed: Checked) -> str:
 
 
 def answer_with_checks(call, messages: list[dict], texts: list[str], system_prompt: str, *, attempts: int = 2,
-                       limit_quotes: bool = False, max_quote_words: int = 60) -> tuple[Checked, list[Checked]]:
+                       limit_quotes: bool = False, max_quote_words: int = 60,
+                       contacts: dict | None = None) -> tuple[Checked, list[Checked]]:
     """Ask, check, and ask once more with what is wrong; returns the last result and every failed
     attempt before it. `call(messages, attempt)` returns (reply text, finish_reason) and raises for a
     gateway denial or a failed request: those are not retried here."""
@@ -331,7 +409,8 @@ def answer_with_checks(call, messages: list[dict], texts: list[str], system_prom
         raw, finish = call(msgs, attempt)
         obj, result = decode(raw, finish)
         if obj is not None:
-            result = check(obj, texts, system_prompt, limit_quotes=limit_quotes, max_quote_words=max_quote_words)
+            result = check(obj, texts, system_prompt, limit_quotes=limit_quotes, max_quote_words=max_quote_words,
+                           contacts=contacts)
         if result.ok:
             return result, failures
         failures.append(result)
