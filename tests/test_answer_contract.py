@@ -54,20 +54,28 @@ def test_the_request_holds_the_model_to_a_strict_schema_databricks_supports():
     ('{"status": "answered", "answer": "you can use "up to four hours" through the program"}', "stop",
      contract.INVALID_JSON, "not valid JSON"),
     ('{"status": "answered", "blocks": [{"text": "cut off', "length", contract.TRUNCATION, "cut off"),
-    ('{"status": "answered", "answer": "x", "citations": []}', "stop", contract.SCHEMA, '"answer" is not part of the form'),
-    ('{"status": "maybe", "blocks": [], "conflicts": []}', "stop", contract.SCHEMA, '"status" must be one of'),
-    ('{"status": "answered", "blocks": [], "conflicts": []}', "stop", contract.SCHEMA, "needs at least one block"),
-    ('{"status": "answered", "blocks": [{"text": "Yes.", "evidence": []}], "conflicts": []}', "stop", contract.SCHEMA,
+    ('{"status": "answered", "answer": "x", "citations": []}', "stop", contract.SCHEMA_VALIDATION, '"answer" is not part of the form'),
+    ('{"status": "maybe", "blocks": [], "conflicts": []}', "stop", contract.SCHEMA_VALIDATION, '"status" must be one of'),
+    ('{"status": "answered", "blocks": [], "conflicts": []}', "stop", contract.SCHEMA_VALIDATION, "needs at least one block"),
+    ('{"status": "answered", "blocks": [{"text": "Yes.", "evidence": []}], "conflicts": []}', "stop", contract.SCHEMA_VALIDATION,
      "Block 1 has no evidence"),
     ('{"status": "answered", "blocks": [{"text": "Yes.", "evidence": [{"source": "1", "lines": [2]}]}], '
-     '"conflicts": []}', "stop", contract.SCHEMA, "each evidence entry is"),
-    ('{"status": "no_source", "blocks": [{"text": "x", "evidence": []}], "conflicts": []}', "stop", contract.SCHEMA,
+     '"conflicts": []}', "stop", contract.SCHEMA_VALIDATION, "each evidence entry is"),
+    ('{"status": "no_source", "blocks": [{"text": "x", "evidence": []}], "conflicts": []}', "stop", contract.SCHEMA_VALIDATION,
      'reply has empty "blocks"'),
-    ('[1, 2]', "stop", contract.SCHEMA, "one JSON object"),
+    ('[1, 2]', "stop", contract.SCHEMA_VALIDATION, "one JSON object"),
 ])
 def test_every_malformed_reply_is_classified_and_none_is_guessed_at(raw, finish, category, says):
     obj, failed = contract.decode(raw, finish)
     assert obj is None and failed.category == category and says in " ".join(failed.problems)
+    assert failed.category in ("invalid_json", "schema_validation", "truncation")   # a category name, nothing else
+    assert contract.repair_note(failed).startswith("YOUR PREVIOUS REPLY FAILED")    # and it can be sent back
+
+
+def test_the_category_names_are_strings_and_the_schema_is_the_schema():
+    assert (contract.INVALID_JSON, contract.SCHEMA_VALIDATION, contract.TRUNCATION, contract.EVIDENCE) == (
+        "invalid_json", "schema_validation", "truncation", "evidence_failure")
+    assert isinstance(contract.SCHEMA, dict) and contract.SCHEMA["type"] == "object"
 
 
 def test_a_reply_cut_at_the_length_limit_is_a_truncation_even_if_it_parses():
@@ -183,6 +191,7 @@ GOOD = reply(('Click "Edit" to continue.', [{"source": 1, "lines": [2]}]))
 
 @pytest.mark.parametrize("first, kind", [
     (('{"status": "answered", "answer": "you can use "up to four hours""}', "stop"), "invalid_json"),   # syntax
+    (('{"status": "answered", "answer": "x", "citations": []}', "stop"), "schema"),                    # old form
     ((reply(('Click "Edit".', [{"source": 1, "lines": [9]}])), "stop"), "citation_lines"),              # lines
     ((reply(('Click "Edit now".', [{"source": 1, "lines": [2]}])), "stop"), "quote_not_in_evidence"),   # quote
 ])

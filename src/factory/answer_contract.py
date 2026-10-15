@@ -28,7 +28,8 @@ MAX_BLOCKS = 12
 MAX_BLOCK_LINES = 12     # evidence lines one block may cite
 MAX_ANSWER_LINES = 30    # evidence lines a whole answer may cite: the overall budget
 
-INVALID_JSON, SCHEMA, TRUNCATION, EVIDENCE = "invalid_json", "schema_validation", "truncation", "evidence_failure"
+INVALID_JSON, SCHEMA_VALIDATION, TRUNCATION, EVIDENCE = ("invalid_json", "schema_validation", "truncation",
+                                                         "evidence_failure")
 
 _EVIDENCE = {"type": "object", "additionalProperties": False, "required": ["source", "lines"],
              "properties": {"source": {"type": "integer"}, "lines": {"type": "array", "items": {"type": "integer"}}}}
@@ -129,7 +130,7 @@ def decode(raw: str, finish_reason: str | None) -> tuple[dict | None, Checked | 
                            "Reply with one JSON object in the required form.")
     problems = schema_problems(obj)
     if problems:
-        return None, _fail(SCHEMA, "schema", *problems)
+        return None, _fail(SCHEMA_VALIDATION, "schema", *problems)
     return obj, None
 
 
